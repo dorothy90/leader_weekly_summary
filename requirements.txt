@@ -1,0 +1,29 @@
+# Core
+python-dotenv==1.0.0
+pydantic==2.5.3
+pydantic-settings==2.1.0
+
+# LangChain
+langchain==0.3.14
+langchain-openai==0.2.14
+langchain-community==0.3.14
+langgraph==0.2.60
+
+# Mail (EWS)
+exchangelib==5.4.2
+
+# OpenSearch
+opensearch-py==2.4.2
+
+# API
+fastapi==0.115.6
+uvicorn==0.34.0
+
+# Template
+jinja2==3.1.4
+
+# Utilities
+httpx==0.28.1
+tenacity==9.0.0
+Pillow==11.0.0
+

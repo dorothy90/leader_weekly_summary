@@ -1,0 +1,162 @@
+{
+    "domains": [
+        {
+            "name": "COMMON",
+            "description": "도메인 공통 사항",
+            "techs": [
+                {
+                    "name": "공통",
+                    "keywords": [
+                        "공통",
+                        "전사",
+                        "일반",
+                        "기타"
+                    ],
+                    "description": "도메인 무관 공통 업무"
+                }
+            ]
+        },
+        {
+            "name": "DRAM",
+            "description": "DRAM 관련 업무",
+            "techs": [
+                {
+                    "name": "공통",
+                    "keywords": [
+                        "DRAM 공통",
+                        "DRAM 전반",
+                        "DRAM 일반"
+                    ],
+                    "description": "DRAM 공통 업무"
+                },
+                {
+                    "name": "1a",
+                    "keywords": [
+                        "1a",
+                        "1alpha",
+                        "1A"
+                    ],
+                    "description": "DRAM 1a 세대"
+                },
+                {
+                    "name": "1b",
+                    "keywords": [
+                        "1b",
+                        "1beta",
+                        "1B"
+                    ],
+                    "description": "DRAM 1b 세대"
+                },
+                {
+                    "name": "1c",
+                    "keywords": [
+                        "1c",
+                        "1gamma",
+                        "1C"
+                    ],
+                    "description": "DRAM 1c 세대"
+                },
+                {
+                    "name": "1d",
+                    "keywords": [
+                        "1d",
+                        "1delta",
+                        "1D"
+                    ],
+                    "description": "DRAM 1d 세대"
+                }
+            ]
+        },
+        {
+            "name": "NAND",
+            "description": "NAND 관련 업무",
+            "techs": [
+                {
+                    "name": "공통",
+                    "keywords": [
+                        "NAND 공통",
+                        "NAND 전반",
+                        "NAND 일반"
+                    ],
+                    "description": "NAND 공통 업무"
+                },
+                {
+                    "name": "256",
+                    "keywords": [
+                        "256",
+                        "256단",
+                        "V6"
+                    ],
+                    "description": "NAND 256단"
+                },
+                {
+                    "name": "312",
+                    "keywords": [
+                        "312",
+                        "312단",
+                        "V7"
+                    ],
+                    "description": "NAND 312단"
+                },
+                {
+                    "name": "400",
+                    "keywords": [
+                        "400",
+                        "400단",
+                        "V8"
+                    ],
+                    "description": "NAND 400단"
+                }
+            ]
+        }
+    ],
+    "teams": [
+        {
+            "name": "Yield",
+            "keywords": [
+                "Yield",
+                "수율",
+                "YLD"
+            ]
+        },
+        {
+            "name": "FA",
+            "keywords": [
+                "FA",
+                "분석",
+                "Failure Analysis"
+            ]
+        },
+        {
+            "name": "Met",
+            "keywords": [
+                "Met",
+                "계측",
+                "Metrology"
+            ]
+        },
+        {
+            "name": "Etch",
+            "keywords": [
+                "Etch",
+                "식각"
+            ]
+        },
+        {
+            "name": "Diff",
+            "keywords": [
+                "Diff",
+                "확산",
+                "Diffusion"
+            ]
+        },
+        {
+            "name": "Equip",
+            "keywords": [
+                "Equip",
+                "장비",
+                "Equipment"
+            ]
+        }
+    ]
+}
