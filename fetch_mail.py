@@ -9,6 +9,7 @@ import re
 import json
 from pathlib import Path
 from datetime import datetime, timedelta
+from urllib.parse import quote
 from exchangelib import (
     Account, Credentials, Configuration, DELEGATE,
     EWSDateTime, EWSTimeZone, FileAttachment
@@ -20,6 +21,26 @@ EMAIL = os.getenv("EWS_EMAIL", "your_email@skhynix.com")
 PASSWORD = os.getenv("EWS_PASSWORD", "your_password")
 TARGET_RECIPIENT = "2067627@skhynix.com"
 DATA_DIR = Path("data")  # 저장 폴더
+
+
+def generate_owa_url(item_id, ews_server=EWS_SERVER):
+    """EWS item_id로 OWA(Outlook Web Access) URL 생성
+
+    Args:
+        item_id: EWS 메일 고유 식별자
+        ews_server: EWS 서버 주소 (기본값: EWS_SERVER)
+
+    Returns:
+        OWA 웹메일 URL 문자열, item_id가 없으면 None
+    """
+    if not item_id:
+        return None
+
+    # OWA 서버 주소 (일반적으로 ews.도메인 → mail.도메인)
+    owa_base = ews_server.replace("ews.", "mail.")
+    encoded_id = quote(str(item_id), safe='')
+
+    return f"https://{owa_base}/owa/?ItemID={encoded_id}&exvsurl=1&viewmodel=ReadMessageItem"
 
 
 def connect_ews():
@@ -78,7 +99,7 @@ def save_mail(mail_data, week, team, mail_idx):
     body_path = mail_dir / "body.txt"
     body_path.write_text(mail_data["body_text"], encoding="utf-8")
 
-    # 2. 메타데이터 저장
+    # 2. 메타데이터 저장 (URL 참조용 필드 포함)
     meta = {
         "subject": mail_data["subject"],
         "sender": mail_data["sender"],
@@ -87,6 +108,12 @@ def save_mail(mail_data, week, team, mail_idx):
         "team": team,
         "inline_images": [],
         "attachments": [],
+        # URL 참조용 필드 (RAG 출처 제공용)
+        "item_id": mail_data.get("item_id"),
+        "message_id": mail_data.get("message_id"),
+        "conversation_id": mail_data.get("conversation_id"),
+        "owa_url": mail_data.get("owa_url"),
+        "local_path": str(mail_dir),  # fallback용 로컬 경로
     }
 
     # 3. 인라인 이미지 저장
@@ -137,7 +164,7 @@ def fetch_mails(account, days_back=7):
         if not any(TARGET_RECIPIENT in r for r in recipients):
             continue
 
-        # 메일 정보 추출
+        # 메일 정보 추출 (URL 참조용 식별자 포함)
         mail_data = {
             "subject": mail.subject,
             "sender": mail.sender.email_address if mail.sender else None,
@@ -145,6 +172,11 @@ def fetch_mails(account, days_back=7):
             "body_text": "",
             "inline_images": [],
             "attachments": [],
+            # URL 참조용 필드
+            "item_id": str(mail.id) if mail.id else None,
+            "message_id": mail.message_id,
+            "conversation_id": str(mail.conversation_id) if mail.conversation_id else None,
+            "owa_url": generate_owa_url(mail.id),
         }
 
         # 본문 텍스트

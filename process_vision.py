@@ -7,6 +7,7 @@
 import os
 import base64
 import json
+import time
 from pathlib import Path
 from openai import OpenAI
 
@@ -15,10 +16,15 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "your_api_key")
 VISION_MODEL = "gpt-oss-120b"
 DATA_DIR = Path("data")
 
-# OpenRouter 클라이언트
+# 타임아웃 & 재시도 설정
+VISION_TIMEOUT = 60  # 1분 타임아웃
+MAX_RETRIES = 3      # 최대 재시도 횟수
+
+# OpenRouter 클라이언트 (타임아웃 설정)
 client = OpenAI(
     api_key=OPENROUTER_API_KEY,
     base_url="https://openrouter.ai/api/v1",
+    timeout=VISION_TIMEOUT,
 )
 
 # Vision 프롬프트
@@ -55,35 +61,47 @@ def get_media_type(filename):
 
 
 def extract_text_from_image(image_path):
-    """Vision LLM으로 이미지에서 텍스트 추출"""
-    try:
-        base64_image = encode_image(image_path)
-        media_type = get_media_type(image_path.name)
+    """Vision LLM으로 이미지에서 텍스트 추출 (타임아웃 & 재시도 포함)"""
+    base64_image = encode_image(image_path)
+    media_type = get_media_type(image_path.name)
 
-        response = client.chat.completions.create(
-            model=VISION_MODEL,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": VISION_PROMPT},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:{media_type};base64,{base64_image}"
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            print(f"      🔄 시도 {attempt}/{MAX_RETRIES}...")
+
+            response = client.chat.completions.create(
+                model=VISION_MODEL,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": VISION_PROMPT},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:{media_type};base64,{base64_image}"
+                                },
                             },
-                        },
-                    ],
-                }
-            ],
-            max_tokens=4096,
-        )
+                        ],
+                    }
+                ],
+                max_tokens=4096,
+                timeout=VISION_TIMEOUT,
+            )
 
-        return response.choices[0].message.content
+            return response.choices[0].message.content
 
-    except Exception as e:
-        print(f"   ❌ Vision 실패 ({image_path.name}): {e}")
-        return f"[Vision 추출 실패: {e}]"
+        except Exception as e:
+            error_type = type(e).__name__
+            print(f"      ⚠️ 시도 {attempt} 실패 ({error_type}): {e}")
+
+            if attempt < MAX_RETRIES:
+                wait_time = attempt * 5  # 5초, 10초, 15초 대기
+                print(f"      ⏳ {wait_time}초 후 재시도...")
+                time.sleep(wait_time)
+            else:
+                print(f"   ❌ Vision 최종 실패 ({image_path.name}): {MAX_RETRIES}회 시도 모두 실패")
+                return f"[Vision 추출 실패: {MAX_RETRIES}회 시도 후 실패 - {e}]"
 
 
 def is_image_file(filename):

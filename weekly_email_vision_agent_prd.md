@@ -1,8 +1,8 @@
 # Weekly Tech × Team Vision Email Intelligence Agent PRD
 
 ## 1. Overview
-본 문서는 주간 팀장 보고 메일(본문 + 이미지)을 Vision 모델로 해석하여 자동 수집·분류·요약하고,  
-**Layer1 전수 집계표**, **Layer2 팀별 스토리 요약**, 그리고 **히스토리 기반 Q&A Chatbot**을 제공하는  
+본 문서는 주간 팀장 보고 메일(본문 + 이미지)을 Vision 모델로 해석하여 자동 수집·분류·요약하고,
+**Layer1 전수 집계표**, **Layer2 팀별 스토리 요약**, 그리고 **히스토리 기반 Q&A Chatbot**을 제공하는
 통합 Email Intelligence Agent의 요구사항을 정의한다.
 
 본 시스템의 목적은:
@@ -29,13 +29,13 @@
 
 ### 4.1 High-Level Flow
 
-Mail Ingest → Vision Parse Images → Merge Text → Preprocess → Tech Classify  
+Mail Ingest → Vision Parse Images → Merge Text → Preprocess → Tech Classify
 → Embed & Vector DB Upsert → Layer1 Generator → Retrieve History → Layer2 Summary → Render
 
 동시에, Vector DB는 Chatbot의 RAG 소스로 사용된다.
 
 ### 4.2 Components
-1. Mail Ingestor: 메일 본문 및 첨부 이미지 수집
+1. Mail Ingestor: 메일 본문 및 첨부 이미지 수집, **원본 메일 URL(OWA) 생성 및 저장**
 2. Vision Parser: Vision LLM으로 이미지 해석
 3. Preprocessor: 문장/불릿 단위 분리
 4. Tech Classifier: JSON + LLM 기반 Tech 분류
@@ -81,7 +81,7 @@ Mail Ingest → Vision Parse Images → Merge Text → Preprocess → Tech Class
 ## 6. Layer2 Specification
 
 ### 6.1 목적
-Layer1 전수 로그와 최근 3주 히스토리를 반영하여  
+Layer1 전수 로그와 최근 3주 히스토리를 반영하여
 팀별 **스토리형 요약 리포트** 제공
 
 ### 6.2 출력 포맷
@@ -149,10 +149,20 @@ Layer1 전수 로그와 최근 3주 히스토리를 반영하여
 - source (body/image)
 - mail_id
 - type (weekly_mail / summary)
+- **item_id** (EWS 고유 식별자)
+- **message_id** (이메일 Message-ID 헤더)
+- **owa_url** (Outlook Web Access 원본 메일 링크)
+- **local_path** (로컬 저장 경로, fallback용)
 
 ### 8.3 활용
 - Layer2 요약 시 최근 3주 히스토리 retrieve
 - Chatbot RAG 검색 소스
+
+### 8.4 원본 참조 URL
+- 메일 수집 시 EWS item_id를 저장하여 OWA URL 생성
+- OWA URL 형식: `https://mail.skhynix.com/owa/?ItemID={encoded_id}&exvsurl=1&viewmodel=ReadMessageItem`
+- OWA 접근 불가 시 local_path를 fallback으로 사용
+- RAG 응답 시 참조 출처로 URL 제공
 
 ---
 
@@ -176,6 +186,26 @@ User Query → Intent/Filter Parsing → Vector DB Retrieve → Context 기반 A
 - 제공된 context만 근거로 답변
 - 근거 없으면 "정보 없음" 명시
 - 추측/창작 금지
+- **답변에 사용된 출처의 원본 메일 URL을 References로 제공**
+- **URL 형식: 제목, 발신자, 날짜, OWA 링크**
+
+### 9.6 응답 포맷
+응답 시 참조 출처를 명시:
+
+```json
+{
+  "answer": "...",
+  "references": [
+    {
+      "title": "주간 보고서",
+      "sender": "user@skhynix.com",
+      "date": "2025-01-06",
+      "team": "YIELD",
+      "url": "https://mail.skhynix.com/owa/?ItemID=..."
+    }
+  ]
+}
+```
 
 ---
 
