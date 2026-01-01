@@ -26,6 +26,7 @@ client = OpenAI(
 
 # ========== 파일 유형별 추출 ==========
 
+
 def extract_from_excel(file_path: Path) -> str:
     """Excel 파일에서 텍스트 추출"""
     try:
@@ -124,7 +125,9 @@ def extract_from_image(file_path: Path) -> str:
                         },
                         {
                             "type": "image_url",
-                            "image_url": {"url": f"data:{media_type};base64,{base64_image}"},
+                            "image_url": {
+                                "url": f"data:{media_type};base64,{base64_image}"
+                            },
                         },
                     ],
                 }
@@ -171,6 +174,7 @@ def extract_text(file_path: Path) -> tuple[str, str]:
 
 
 # ========== 메인 처리 ==========
+
 
 def process_mail_folder(mail_dir: Path) -> dict:
     """단일 메일 폴더의 첨부파일 처리"""
@@ -223,8 +227,7 @@ def process_mail_folder(mail_dir: Path) -> dict:
     if results:
         json_path = mail_dir / "attachments.json"
         json_path.write_text(
-            json.dumps(results, ensure_ascii=False, indent=2),
-            encoding="utf-8"
+            json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8"
         )
         print(f"   💾 저장: attachments.json")
 
@@ -270,4 +273,5 @@ def process_all():
 
 if __name__ == "__main__":
     process_all()
+
 

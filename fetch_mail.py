@@ -7,22 +7,31 @@
 import os
 import re
 import json
+import base64
 from pathlib import Path
 from datetime import datetime, timedelta
 from urllib.parse import quote
 from exchangelib import (
-    Account, Credentials, Configuration, DELEGATE,
-    EWSDateTime, EWSTimeZone, FileAttachment
+    Account,
+    Credentials,
+    Configuration,
+    DELEGATE,
+    EWSDateTime,
+    EWSTimeZone,
+    FileAttachment,
 )
 
 # ========== 설정 ==========
-EWS_SERVER = "ews.skhynix.com"
-EMAIL = os.getenv("EWS_EMAIL", "your_email@skhynix.com")
-PASSWORD = os.getenv("EWS_PASSWORD", "your_password")
+EWS_SERVER = "outlook.office365.com"  # ✅ 호스트명만 입력
+EMAIL = "dorothy90@cau.ac.kr"
+PASSWORD = "rlaeorka1!"
+# EMAIL = os.getenv("EWS_EMAIL", "your_email@skhynix.com")
+# PASSWORD = os.getenv("EWS_PASSWORD", "your_password")
 TARGET_RECIPIENT = "2067627@skhynix.com"
 DATA_DIR = Path("data")  # 저장 폴더
 
 
+# %%
 def generate_owa_url(item_id, ews_server=EWS_SERVER):
     """EWS item_id로 OWA(Outlook Web Access) URL 생성
 
@@ -38,7 +47,7 @@ def generate_owa_url(item_id, ews_server=EWS_SERVER):
 
     # OWA 서버 주소 (일반적으로 ews.도메인 → mail.도메인)
     owa_base = ews_server.replace("ews.", "mail.")
-    encoded_id = quote(str(item_id), safe='')
+    encoded_id = quote(str(item_id), safe="")
 
     return f"https://{owa_base}/owa/?ItemID={encoded_id}&exvsurl=1&viewmodel=ReadMessageItem"
 
@@ -82,7 +91,7 @@ def detect_team(subject, sender):
             return team.upper()
 
     # [팀명] 패턴 추출
-    match = re.search(r'\[(\w+)\]', subject)
+    match = re.search(r"\[(\w+)\]", subject)
     if match:
         return match.group(1)
 
@@ -95,15 +104,51 @@ def save_mail(mail_data, week, team, mail_idx):
     mail_dir = DATA_DIR / week / team / f"mail_{mail_idx:03d}"
     mail_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. 본문 저장
+    # 1. 텍스트 본문 저장
     body_path = mail_dir / "body.txt"
     body_path.write_text(mail_data["body_text"], encoding="utf-8")
 
-    # 2. 메타데이터 저장 (URL 참조용 필드 포함)
+    # 2. HTML 본문 저장 (인라인 이미지 Base64 변환 포함)
+    if mail_data.get("body_html"):
+        html_content = mail_data["body_html"]
+
+        # 인라인 이미지 CID를 Base64 Data URI로 변환
+        for img in mail_data["inline_images"]:
+            content_id = img.get("content_id", "")
+            if content_id:
+                cid = content_id.strip("<>")
+                if img["content"] and cid:
+                    b64 = base64.b64encode(img["content"]).decode()
+                    content_type = img.get("content_type", "image/png")
+                    data_uri = f"data:{content_type};base64,{b64}"
+                    # cid:xxx 형식을 data URI로 교체
+                    html_content = html_content.replace(f"cid:{cid}", data_uri)
+
+        # charset을 UTF-8로 변경 (인코딩 깨짐 방지)
+        html_content = re.sub(
+            r"charset=(euc-kr|cp949|ks_c_5601-1987|iso-8859-1)",
+            "charset=utf-8",
+            html_content,
+            flags=re.IGNORECASE,
+        )
+
+        html_path = mail_dir / "body.html"
+        html_path.write_text(html_content, encoding="utf-8")
+    else:
+        # HTML이 없으면 텍스트를 HTML로 변환 (fallback)
+        fallback_html = f"""<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>{mail_data.get('subject', 'Email')}</title></head>
+<body><pre>{mail_data['body_text']}</pre></body></html>"""
+        html_path = mail_dir / "body.html"
+        html_path.write_text(fallback_html, encoding="utf-8")
+
+    # 3. 메타데이터 저장 (URL 참조용 필드 포함)
     meta = {
         "subject": mail_data["subject"],
         "sender": mail_data["sender"],
-        "received": mail_data["received"].isoformat() if mail_data["received"] else None,
+        "received": (
+            mail_data["received"].isoformat() if mail_data["received"] else None
+        ),
         "week": week,
         "team": team,
         "inline_images": [],
@@ -134,7 +179,9 @@ def save_mail(mail_data, week, team, mail_idx):
 
     # 5. 메타데이터 JSON 저장
     meta_path = mail_dir / "meta.json"
-    meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    meta_path.write_text(
+        json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
     print(f"   💾 저장: {mail_dir}")
     return mail_dir
@@ -157,9 +204,13 @@ def fetch_mails(account, days_back=7):
         # 받는 사람 중 TARGET_RECIPIENT 포함 여부 확인
         recipients = []
         if mail.to_recipients:
-            recipients = [r.email_address for r in mail.to_recipients if r.email_address]
+            recipients = [
+                r.email_address for r in mail.to_recipients if r.email_address
+            ]
         if mail.cc_recipients:
-            recipients += [r.email_address for r in mail.cc_recipients if r.email_address]
+            recipients += [
+                r.email_address for r in mail.cc_recipients if r.email_address
+            ]
 
         if not any(TARGET_RECIPIENT in r for r in recipients):
             continue
@@ -170,20 +221,27 @@ def fetch_mails(account, days_back=7):
             "sender": mail.sender.email_address if mail.sender else None,
             "received": mail.datetime_received,
             "body_text": "",
+            "body_html": "",  # HTML 본문 추가
             "inline_images": [],
             "attachments": [],
             # URL 참조용 필드
             "item_id": str(mail.id) if mail.id else None,
             "message_id": mail.message_id,
-            "conversation_id": str(mail.conversation_id) if mail.conversation_id else None,
+            "conversation_id": (
+                str(mail.conversation_id) if mail.conversation_id else None
+            ),
             "owa_url": generate_owa_url(mail.id),
         }
 
-        # 본문 텍스트
+        # 본문 텍스트 & HTML 추출
         if mail.text_body:
             mail_data["body_text"] = mail.text_body
-        elif mail.body:
-            mail_data["body_text"] = str(mail.body)
+        if mail.body:
+            body_content = str(mail.body)
+            mail_data["body_html"] = body_content
+            # text_body가 없으면 HTML에서 가져옴
+            if not mail_data["body_text"]:
+                mail_data["body_text"] = body_content
 
         # 첨부파일 & 인라인 이미지
         for attachment in mail.attachments or []:
@@ -194,6 +252,7 @@ def fetch_mails(account, days_back=7):
                     "size": len(attachment.content) if attachment.content else 0,
                     "is_inline": attachment.is_inline,
                     "content": attachment.content,  # 바이트 데이터
+                    "content_id": attachment.content_id,  # CID 참조용
                 }
 
                 if attachment.is_inline:
@@ -205,12 +264,16 @@ def fetch_mails(account, days_back=7):
         week = get_week_string(mail.datetime_received)
         team = detect_team(mail_data["subject"], mail_data["sender"] or "")
 
-        results.append({
-            "week": week,
-            "team": team,
-            "data": mail_data,
-        })
-        print(f"📧 [{week}/{team}] {mail_data['subject'][:40]}... (인라인: {len(mail_data['inline_images'])}, 첨부: {len(mail_data['attachments'])})")
+        results.append(
+            {
+                "week": week,
+                "team": team,
+                "data": mail_data,
+            }
+        )
+        print(
+            f"📧 [{week}/{team}] {mail_data['subject'][:40]}... (인라인: {len(mail_data['inline_images'])}, 첨부: {len(mail_data['attachments'])})"
+        )
 
     return results
 
@@ -256,4 +319,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

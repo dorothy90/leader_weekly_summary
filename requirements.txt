@@ -9,3 +9,6 @@ openpyxl==3.1.5
 pypdf==5.1.0
 python-docx==1.1.2
 
+# Vector DB
+opensearch-py==2.4.2
+

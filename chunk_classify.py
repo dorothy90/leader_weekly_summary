@@ -1,7 +1,8 @@
 """
 3단계: LLM으로 문장 분리 + Tech 분류
 - combined.txt → 업무 단위 청크 분리
-- 각 청크에 domain/tech 분류
+- 각 청크에 domain/tech 분류 (LLM)
+- 각 청크에 team/week/mail_id/html_path 메타데이터 추가 (meta.json에서)
 - chunks.json 저장
 """
 
@@ -22,20 +23,18 @@ DATA_DIR = Path("data")
 # ========== Pydantic 스키마 ==========
 class WorkChunk(BaseModel):
     """단일 업무 항목"""
+
     text: str = Field(description="업무 내용 (한 문장 또는 불릿)")
     domain: Literal["COMMON", "DRAM", "NAND"] = Field(
         description="도메인: COMMON(공통), DRAM, NAND"
     )
-    tech: str = Field(
-        description="세부 Tech: 공통, 1a, 1b, 1c, 1d, 256, 312, 400 등"
-    )
+    tech: str = Field(description="세부 Tech: 공통, 1a, 1b, 1c, 1d, 256, 312, 400 등")
 
 
 class ChunkList(BaseModel):
     """분리된 업무 청크 리스트"""
-    chunks: list[WorkChunk] = Field(
-        description="분리된 업무 항목들"
-    )
+
+    chunks: list[WorkChunk] = Field(description="분리된 업무 항목들")
 
 
 # ========== LLM 설정 ==========
@@ -101,7 +100,20 @@ def process_mail_folder(mail_dir: Path) -> dict:
     """단일 메일 폴더 처리"""
     print(f"\n📂 처리 중: {mail_dir}")
 
-    # combined.txt 읽기
+    # ========== meta.json에서 메타데이터 읽기 ==========
+    meta_path = mail_dir / "meta.json"
+    meta = {}
+    if meta_path.exists():
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+
+    team = meta.get("team", "unknown")
+    week = meta.get("week", "unknown")
+    mail_id = mail_dir.name  # "mail_001"
+    html_path = str(mail_dir / "body.html")
+
+    print(f"   📋 메타: team={team}, week={week}")
+
+    # ========== combined.txt 읽기 ==========
     combined_path = mail_dir / "combined.txt"
     if not combined_path.exists():
         print(f"   ⚠️ combined.txt 없음 - 스킵")
@@ -114,18 +126,26 @@ def process_mail_folder(mail_dir: Path) -> dict:
 
     print(f"   📄 입력: {len(combined_text)} chars")
 
-    # LLM으로 분류
+    # ========== LLM으로 분류 ==========
     try:
         result = classify_chunks(combined_text)
-        chunks = [chunk.model_dump() for chunk in result.chunks]
+
+        # 각 청크에 메타데이터 추가
+        chunks = []
+        for chunk in result.chunks:
+            chunk_data = chunk.model_dump()
+            chunk_data["team"] = team
+            chunk_data["week"] = week
+            chunk_data["mail_id"] = mail_id
+            chunk_data["html_path"] = html_path
+            chunks.append(chunk_data)
 
         print(f"   ✅ {len(chunks)}개 청크 분류 완료")
 
         # chunks.json 저장
         chunks_path = mail_dir / "chunks.json"
         chunks_path.write_text(
-            json.dumps(chunks, ensure_ascii=False, indent=2),
-            encoding="utf-8"
+            json.dumps(chunks, ensure_ascii=False, indent=2), encoding="utf-8"
         )
         print(f"   💾 저장: chunks.json")
 
@@ -141,6 +161,8 @@ def process_mail_folder(mail_dir: Path) -> dict:
         return {
             "total_chunks": len(chunks),
             "domains": domains,
+            "team": team,
+            "week": week,
         }
 
     except Exception as e:
@@ -191,4 +213,3 @@ def process_all():
 
 if __name__ == "__main__":
     process_all()
-
