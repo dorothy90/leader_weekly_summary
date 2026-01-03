@@ -64,15 +64,27 @@ Mail Ingest → Vision Parse Images → Merge Text (combined.txt)
 - DRAM/NAND + Tech 기준 Cross-team 현황 가시화
 
 ### 5.2 레이아웃
-| Domain | Tech | Team A | Team B | Team C | ... |
-|--------|------|--------|--------|--------|-----|
-| DRAM   | 1a   | 내용   | 내용   | 내용   |     |
-| DRAM   | 1b   | 내용   | 내용   | 내용   |     |
-| NAND   | 312  | 내용   | 내용   | 내용   |     |
+Domain/Tech별 섹션으로 구분하고, 각 섹션 내에서 Product × 팀 × 업무 구조로 표시
 
-- 좌측: Domain(DRAM/NAND), Tech(공통/1a/1b/.../312/...)
-- 우측: 팀 컬럼
-- Cell: 해당 Tech에서 팀이 수행한 weekly 업무 요약 (bullet, 다중 줄 허용)
+#### 섹션 헤더
+```
+DRAM / 1a
+```
+
+#### 테이블 구조
+| Product | 팀 | 업무 내용 |
+|---------|-----|----------|
+| 12G LPDDR5 | FA팀 | 내용1 |
+|            | QA팀 | 내용2 |
+| 24G LPDDR  | CS팀 | 내용3 |
+|            |      | 내용4 |
+|            | DT팀 | 내용5 |
+
+#### 병합 규칙
+- 같은 Product끼리 rowspan 병합
+- 같은 Product 내 같은 팀끼리 rowspan 병합
+- Product가 없는 경우 빈칸 표시
+- Product, 팀 순으로 정렬 (빈 Product는 마지막)
 
 ### 5.3 Row 관리
 - Tech row는 JSON 파일로 사전 정의
@@ -85,6 +97,23 @@ Mail Ingest → Vision Parse Images → Merge Text (combined.txt)
 - 불필요한 배경 제거
 - Bullet 형태
 - 길이 제한 없음
+
+### 5.5 Tech ↔ Product 매핑
+
+| Domain | Tech | Product |
+|--------|------|---------|
+| DRAM | 1a | 12G LPDDR5 |
+| DRAM | 1b | 16G DDR5 |
+| DRAM | 1c | 12G LPDDR5X |
+| DRAM | 1d | 24G DDR5 |
+| NAND | 256 | 512Gb TLC |
+| NAND | 312 | 1Tb QLC |
+| NAND | 400 | 2Tb QLC |
+
+#### 분류 규칙
+- **product만 명시된 경우**: 매핑 테이블로 tech/domain 추론
+- **tech만 명시된 경우**: product는 빈칸
+- **둘 다 없는 경우**: domain=COMMON, tech=공통
 
 ---
 
@@ -172,6 +201,7 @@ Layer1 전수 로그와 최근 3주 히스토리를 반영하여
   "text": "recipe 변경으로 수율 +1.2% 개선",
   "domain": "DRAM",
   "tech": "1a",
+  "product": "12G LPDDR5",
   "team": "FA팀",
   "week": "2025-48",
   "mail_id": "mail_001",
@@ -185,6 +215,7 @@ Layer1 전수 로그와 최근 3주 히스토리를 반영하여
 | text | 업무 내용 | LLM 추출 |
 | domain | DRAM/NAND/COMMON | LLM 분류 |
 | tech | 1a, 1b, 312, 공통 등 | LLM 분류 |
+| product | 12G LPDDR5, 1Tb QLC 등 | LLM 분류 (tech에서 추론 가능) |
 | team | 팀명 | meta.json |
 | week | YYYY-WW | meta.json |
 | mail_id | 메일 식별자 | 폴더명 |
@@ -235,7 +266,8 @@ Vector DB에는 **원본 텍스트**와 **청킹된 업무 단위** 둘 다 저�
     "html_path": "data/2025-48/FA팀/mail_001/body.html",
     "type": "chunk",
     "domain": "DRAM",
-    "tech": "1a"
+    "tech": "1a",
+    "product": "12G LPDDR5"
   }
 }
 ```
@@ -250,6 +282,7 @@ Vector DB에는 **원본 텍스트**와 **청킹된 업무 단위** 둘 다 저�
 | type | original_mail / chunk / summary | 검색 대상 구분 | 전체 |
 | domain | DRAM/NAND/COMMON | 도메인 필터링 | chunk만 |
 | tech | 1a, 1b, 312 등 | Tech 필터링 | chunk만 |
+| product | 12G LPDDR5, 1Tb QLC 등 | Product 필터링 | chunk만 |
 
 ### 8.4 활용
 - **Layer1**: chunks.json의 domain/tech/team으로 그룹핑하여 테이블 생성

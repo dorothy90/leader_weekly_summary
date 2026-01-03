@@ -24,6 +24,19 @@ TECH_ORDER = {
 # 도메인 순서
 DOMAIN_ORDER = ["COMMON", "DRAM", "NAND"]
 
+# Tech → Product 매핑
+TECH_TO_PRODUCT = {
+    # DRAM
+    "1a": "12G LPDDR5",
+    "1b": "16G DDR5",
+    "1c": "12G LPDDR5X",
+    "1d": "24G DDR5",
+    # NAND
+    "256": "512Gb TLC",
+    "312": "1Tb QLC",
+    "400": "2Tb QLC",
+}
+
 
 # ========== 데이터 로드 ==========
 def load_all_chunks(week: Optional[str] = None) -> List[Dict]:
@@ -78,8 +91,8 @@ def build_layer1_data(chunks: List[Dict]) -> Dict:
         {
             "DRAM": {
                 "1a": {
-                    "FA팀": ["내용1", "내용2"],
-                    "YIELD팀": ["내용3"],
+                    "FA팀": [{"text": "내용1", "product": "12G LPDDR5"}, ...],
+                    "YIELD팀": [{"text": "내용3", "product": ""}],
                 },
                 ...
             },
@@ -94,9 +107,10 @@ def build_layer1_data(chunks: List[Dict]) -> Dict:
         tech = chunk.get("tech", "공통")
         team = chunk.get("team", "unknown")
         text = chunk.get("text", "")
+        product = chunk.get("product", "")
 
         if text.strip():
-            data[domain][tech][team].append(text)
+            data[domain][tech][team].append({"text": text, "product": product})
 
     return data
 
@@ -133,7 +147,7 @@ def generate_markdown(
     teams: List[str],
     week: Optional[str] = None,
 ) -> str:
-    """Layer1 테이블을 Markdown으로 생성"""
+    """Layer1 테이블을 Markdown으로 생성 (세로형)"""
 
     lines = []
 
@@ -146,37 +160,26 @@ def generate_markdown(
     lines.append(f"생성 시각: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     lines.append("")
 
-    # 테이블 헤더
-    header = "| Domain | Tech |"
-    separator = "|--------|------|"
-    for team in teams:
-        header += f" {team} |"
-        separator += "------|"
+    # 테이블 헤더 (세로형: Domain, Tech, Product, 팀, 업무 내용)
+    lines.append("| Domain | Tech | Product | 팀 | 업무 내용 |")
+    lines.append("|--------|------|---------|-----|-----------|")
 
-    lines.append(header)
-    lines.append(separator)
-
-    # 테이블 행
+    # 테이블 행 (내용이 있는 항목만)
     all_techs = get_all_techs(data)
 
     for domain in DOMAIN_ORDER:
         techs = all_techs.get(domain, ["공통"])
 
         for tech in techs:
-            row = f"| {domain} | {tech} |"
-
             for team in teams:
                 cell_items = data.get(domain, {}).get(tech, {}).get(team, [])
 
                 if cell_items:
-                    # 불릿 형태로 합치기 (줄바꿈은 <br>로)
-                    cell_text = "<br>".join([f"• {item}" for item in cell_items])
-                else:
-                    cell_text = "-"
-
-                row += f" {cell_text} |"
-
-            lines.append(row)
+                    for item in cell_items:
+                        item_text = item.get("text", "")
+                        item_product = item.get("product", "")
+                        row = f"| {domain} | {tech} | {item_product} | {team} | {item_text} |"
+                        lines.append(row)
 
     return "\n".join(lines)
 
@@ -187,152 +190,154 @@ def generate_html(
     teams: List[str],
     week: Optional[str] = None,
 ) -> str:
-    """Layer1 테이블을 HTML로 생성"""
+    """Layer1 테이블을 HTML로 생성 (Outlook 이메일 호환 - Domain/Tech별 분리)"""
 
     title = "Layer1 전수 집계 테이블"
     if week:
         title += f" ({week})"
 
+    # Domain별 색상 정의
+    domain_colors = {
+        "COMMON": "#6fa8dc",  # 연한 파랑
+        "DRAM": "#81c784",  # 연한 초록
+        "NAND": "#ffb74d",  # 연한 주황
+    }
+
+    all_techs = get_all_techs(data)
+
     html = f"""<!DOCTYPE html>
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{title}</title>
-    <style>
-        * {{
-            box-sizing: border-box;
-        }}
-        body {{
-            font-family: 'Pretendard', 'Apple SD Gothic Neo', sans-serif;
-            margin: 20px;
-            background: #f5f5f5;
-        }}
-        h1 {{
-            color: #1a1a2e;
-            margin-bottom: 10px;
-        }}
-        .meta {{
-            color: #666;
-            margin-bottom: 20px;
-        }}
-        .table-container {{
-            overflow-x: auto;
-            background: white;
-            border-radius: 8px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-        }}
-        table {{
-            border-collapse: collapse;
-            width: 100%;
-            min-width: 800px;
-        }}
-        th, td {{
-            border: 1px solid #ddd;
-            padding: 12px 8px;
-            text-align: left;
-            vertical-align: top;
-        }}
-        th {{
-            background: #1a1a2e;
-            color: white;
-            font-weight: 600;
-            position: sticky;
-            top: 0;
-        }}
-        th.domain, th.tech {{
-            background: #16213e;
-        }}
-        tr:nth-child(even) {{
-            background: #f9f9f9;
-        }}
-        tr:hover {{
-            background: #f0f0f0;
-        }}
-        td.domain {{
-            font-weight: bold;
-            background: #e8e8e8;
-        }}
-        td.tech {{
-            font-weight: 500;
-            background: #f0f0f0;
-        }}
-        .cell-content {{
-            font-size: 13px;
-            line-height: 1.5;
-        }}
-        .cell-content ul {{
-            margin: 0;
-            padding-left: 16px;
-        }}
-        .cell-content li {{
-            margin-bottom: 4px;
-        }}
-        .empty {{
-            color: #ccc;
-            text-align: center;
-        }}
-        /* Domain 색상 */
-        .domain-COMMON {{ background: #e3f2fd !important; }}
-        .domain-DRAM {{ background: #e8f5e9 !important; }}
-        .domain-NAND {{ background: #fff3e0 !important; }}
-    </style>
 </head>
-<body>
-    <h1>{title}</h1>
-    <p class="meta">생성 시각: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
-
-    <div class="table-container">
-        <table>
-            <thead>
-                <tr>
-                    <th class="domain">Domain</th>
-                    <th class="tech">Tech</th>
+<body style="margin:0; padding:20px; font-family:'Malgun Gothic','맑은 고딕',sans-serif; background:#ffffff;">
+    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:800px;">
+        <tr>
+            <td style="padding-bottom:20px;">
+                <h1 style="color:#1a1a2e; font-size:22px; margin:0 0 8px 0;">{title}</h1>
+                <p style="color:#666; font-size:12px; margin:0;">생성 시각: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+            </td>
+        </tr>
 """
 
-    # 팀 헤더
-    for team in teams:
-        html += f'                    <th>{team}</th>\n'
-
-    html += """                </tr>
-            </thead>
-            <tbody>
-"""
-
-    # 테이블 행
-    all_techs = get_all_techs(data)
-
+    # Domain-Tech별 테이블 생성
     for domain in DOMAIN_ORDER:
         techs = all_techs.get(domain, ["공통"])
+        header_color = domain_colors.get(domain, "#666")
 
-        for i, tech in enumerate(techs):
-            html += f'                <tr>\n'
+        for tech in techs:
+            # 해당 Domain-Tech에 데이터가 있는지 확인
+            has_data = False
+            for team in teams:
+                if data.get(domain, {}).get(tech, {}).get(team, []):
+                    has_data = True
+                    break
 
-            # Domain 셀 (첫 번째 Tech일 때만 rowspan)
-            if i == 0:
-                rowspan = len(techs)
-                html += f'                    <td class="domain domain-{domain}" rowspan="{rowspan}">{domain}</td>\n'
+            if not has_data:
+                continue
 
-            # Tech 셀
-            html += f'                    <td class="tech">{tech}</td>\n'
+            # 섹션 제목: COMMON/공통, DRAM/1a 등 (product 제외)
+            section_title = f"{domain} / {tech}"
 
-            # 팀별 셀
+            html += f"""
+        <tr>
+            <td style="padding-bottom:20px;">
+                <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                    <tr>
+                        <td style="background:{header_color}; color:white; padding:10px 14px; font-size:14px; font-weight:bold;">
+                            {section_title}
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>
+                            <table width="100%" cellpadding="0" cellspacing="0" border="1" style="border-collapse:collapse; border-color:#ddd;">
+                                <tr style="background:#f5f5f5;">
+                                    <th style="padding:8px 10px; text-align:left; font-size:12px; width:100px; border:1px solid #ddd;">Product</th>
+                                    <th style="padding:8px 10px; text-align:left; font-size:12px; width:80px; border:1px solid #ddd;">팀</th>
+                                    <th style="padding:8px 10px; text-align:left; font-size:12px; border:1px solid #ddd;">업무 내용</th>
+                                </tr>
+"""
+
+            # 모든 아이템을 flat하게 수집 후 product, team별로 그룹핑
+            all_items = []
             for team in teams:
                 cell_items = data.get(domain, {}).get(tech, {}).get(team, [])
+                for item in cell_items:
+                    all_items.append(
+                        {
+                            "team": team,
+                            "text": item.get("text", ""),
+                            "product": item.get("product", ""),
+                        }
+                    )
 
-                if cell_items:
-                    html += '                    <td class="cell-content"><ul>\n'
-                    for item in cell_items:
-                        html += f'                        <li>{item}</li>\n'
-                    html += '                    </ul></td>\n'
-                else:
-                    html += '                    <td class="empty">-</td>\n'
+            # product, team 순으로 정렬 (빈 문자열은 마지막으로)
+            all_items.sort(key=lambda x: (x["product"] == "", x["product"], x["team"]))
 
-            html += '                </tr>\n'
+            # product별 rowspan 계산
+            product_counts = {}
+            for item in all_items:
+                p = item["product"]
+                product_counts[p] = product_counts.get(p, 0) + 1
 
-    html += """            </tbody>
-        </table>
-    </div>
+            # (product, team) 조합별 rowspan 계산
+            product_team_counts = {}
+            for item in all_items:
+                key = (item["product"], item["team"])
+                product_team_counts[key] = product_team_counts.get(key, 0) + 1
+
+            # 이미 출력한 product, (product, team) 추적
+            rendered_products = set()
+            rendered_product_teams = set()
+
+            for item in all_items:
+                item_product = item["product"]
+                item_team = item["team"]
+                item_text = item["text"]
+                pt_key = (item_product, item_team)
+
+                is_new_product = item_product not in rendered_products
+                is_new_team = pt_key not in rendered_product_teams
+
+                product_rowspan = product_counts[item_product]
+                team_rowspan = product_team_counts[pt_key]
+
+                if is_new_product:
+                    rendered_products.add(item_product)
+                if is_new_team:
+                    rendered_product_teams.add(pt_key)
+
+                # 행 생성
+                html += "                                <tr>\n"
+
+                # Product 셀 (새 product일 때만)
+                if is_new_product:
+                    if product_rowspan > 1:
+                        html += f'                                    <td rowspan="{product_rowspan}" style="padding:8px 10px; font-size:12px; color:#333; border:1px solid #ddd; background:#fafafa; vertical-align:top;">{item_product}</td>\n'
+                    else:
+                        html += f'                                    <td style="padding:8px 10px; font-size:12px; color:#333; border:1px solid #ddd; background:#fafafa;">{item_product}</td>\n'
+
+                # Team 셀 (새 (product, team)일 때만)
+                if is_new_team:
+                    if team_rowspan > 1:
+                        html += f'                                    <td rowspan="{team_rowspan}" style="padding:8px 10px; font-size:12px; color:#333; border:1px solid #ddd; background:#fafafa; vertical-align:top;">{item_team}</td>\n'
+                    else:
+                        html += f'                                    <td style="padding:8px 10px; font-size:12px; color:#333; border:1px solid #ddd; background:#fafafa;">{item_team}</td>\n'
+
+                # Text 셀 (항상)
+                html += f'                                    <td style="padding:8px 10px; font-size:12px; color:#333; line-height:1.5; border:1px solid #ddd;">{item_text}</td>\n'
+                html += "                                </tr>\n"
+
+            html += """                            </table>
+                        </td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+"""
+
+    html += """    </table>
 </body>
 </html>
 """
@@ -424,4 +429,3 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     generate_layer1(week=args.week, output_format=args.format)
-

@@ -19,6 +19,28 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "your_api_key")
 MODEL = "gpt-oss-120b"
 DATA_DIR = Path("data")
 
+# Tech → Product 매핑
+TECH_TO_PRODUCT = {
+    # DRAM
+    "1a": "12G LPDDR5",
+    "1b": "16G DDR5",
+    "1c": "12G LPDDR5X",
+    "1d": "24G DDR5",
+    # NAND
+    "256": "512Gb TLC",
+    "312": "1Tb QLC",
+    "400": "2Tb QLC",
+}
+
+# Product → Tech 역매핑 (product만 언급될 때 사용)
+PRODUCT_TO_TECH = {v: k for k, v in TECH_TO_PRODUCT.items()}
+
+# Tech → Domain 매핑
+TECH_TO_DOMAIN = {
+    "1a": "DRAM", "1b": "DRAM", "1c": "DRAM", "1d": "DRAM",
+    "256": "NAND", "312": "NAND", "400": "NAND",
+}
+
 
 # ========== Pydantic 스키마 ==========
 class WorkChunk(BaseModel):
@@ -29,6 +51,7 @@ class WorkChunk(BaseModel):
         description="도메인: COMMON(공통), DRAM, NAND"
     )
     tech: str = Field(description="세부 Tech: 공통, 1a, 1b, 1c, 1d, 256, 312, 400 등")
+    product: str = Field(default="", description="제품명: 12G LPDDR5, 16G DDR5, 512Gb TLC 등 (없으면 빈 문자열)")
 
 
 class ChunkList(BaseModel):
@@ -57,17 +80,48 @@ def get_llm():
 # ========== 프롬프트 ==========
 SYSTEM_PROMPT = """당신은 반도체 주간 업무 보고서 분석 전문가입니다.
 
-주어진 텍스트를 **업무 단위**로 분리하고, 각각 domain과 tech를 분류해주세요.
+주어진 텍스트를 **업무 단위**로 분리하고, 각각 domain, tech, product를 분류해주세요.
 
 ## Domain 분류 기준
 - COMMON: 도메인 무관 공통 업무 (스크립트 개발, 방법론 정리 등)
-- DRAM: DRAM 관련 업무
-- NAND: NAND 관련 업무
+- DRAM: DRAM 관련 업무 (Tech: 1a, 1b, 1c, 1d)
+- NAND: NAND 관련 업무 (Tech: 256, 312, 400)
 
-## Tech 분류 기준
-- 공통: 해당 도메인 전반 또는 특정 Tech 미지정
-- DRAM Tech: 1a, 1b, 1c, 1d
-- NAND Tech: 256, 312, 400
+## Tech ↔ Product 매핑 테이블
+
+### DRAM
+| Tech | Product |
+|------|---------|
+| 1a | 12G LPDDR5 |
+| 1b | 16G DDR5 |
+| 1c | 12G LPDDR5X |
+| 1d | 24G DDR5 |
+
+### NAND
+| Tech | Product |
+|------|---------|
+| 256 | 512Gb TLC |
+| 312 | 1Tb QLC |
+| 400 | 2Tb QLC |
+
+## ⭐ 분류 규칙 (중요!)
+
+### Case 1: tech/product 둘 다 명시 안 됨
+- tech = "공통"
+- product = "" (빈 문자열)
+- domain = 팀명이나 문맥으로 판단 (판단 불가 시 COMMON)
+
+### Case 2: product만 명시됨 (예: "12G LPDDR5 수율 개선")
+- 위 매핑 테이블에서 product → tech 찾기
+- 예: "12G LPDDR5" → tech="1a", product="12G LPDDR5", domain="DRAM"
+
+### Case 3: tech만 명시됨 (예: "1a 라인 이슈")
+- tech = 명시된 값 (예: "1a")
+- product = "" (빈 문자열로 남김)
+- domain = 매핑 테이블 참조 (1a/1b/1c/1d → DRAM, 256/312/400 → NAND)
+
+### Case 4: tech와 product 둘 다 명시됨
+- 둘 다 그대로 사용
 
 ## 분리 규칙
 1. 하나의 업무/이슈/액션은 하나의 청크로
@@ -76,10 +130,18 @@ SYSTEM_PROMPT = """당신은 반도체 주간 업무 보고서 분석 전문가�
 4. 원문의 핵심 정보를 유지
 
 ## 예시
-입력: "DRAM-1a recipe 변경으로 +1.2% 개선, 1b는 open fail FA 진행 중"
-출력:
-- text: "recipe 변경으로 +1.2% 개선", domain: "DRAM", tech: "1a"
-- text: "open fail FA 진행 중", domain: "DRAM", tech: "1b"
+
+입력: "주간 스크립트 개발 및 방법론 정리"
+→ text: "주간 스크립트 개발 및 방법론 정리", domain: "COMMON", tech: "공통", product: ""
+
+입력: "12G LPDDR5 수율 +1.2% 개선"
+→ text: "수율 +1.2% 개선", domain: "DRAM", tech: "1a", product: "12G LPDDR5"
+
+입력: "1a 라인 불량 모드 분석 진행"
+→ text: "불량 모드 분석 진행", domain: "DRAM", tech: "1a", product: ""
+
+입력: "312 read disturb 이슈, 1Tb QLC 제품 영향 분석"
+→ text: "read disturb 이슈, 영향 분석", domain: "NAND", tech: "312", product: "1Tb QLC"
 """
 
 
@@ -138,6 +200,14 @@ def process_mail_folder(mail_dir: Path) -> dict:
             chunk_data["week"] = week
             chunk_data["mail_id"] = mail_id
             chunk_data["html_path"] = html_path
+
+            # product만 있고 tech가 "공통"인 경우 → 역매핑으로 tech 찾기
+            if chunk_data.get("product") and chunk_data.get("tech") == "공통":
+                found_tech = PRODUCT_TO_TECH.get(chunk_data["product"])
+                if found_tech:
+                    chunk_data["tech"] = found_tech
+                    chunk_data["domain"] = TECH_TO_DOMAIN.get(found_tech, chunk_data["domain"])
+
             chunks.append(chunk_data)
 
         print(f"   ✅ {len(chunks)}개 청크 분류 완료")
@@ -152,7 +222,8 @@ def process_mail_folder(mail_dir: Path) -> dict:
         # 분류 요약 출력
         domains = {}
         for chunk in chunks:
-            key = f"{chunk['domain']}-{chunk['tech']}"
+            product_str = f" ({chunk['product']})" if chunk.get('product') else ""
+            key = f"{chunk['domain']}-{chunk['tech']}{product_str}"
             domains[key] = domains.get(key, 0) + 1
 
         for key, count in sorted(domains.items()):

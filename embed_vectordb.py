@@ -140,6 +140,7 @@ def create_index(client: OpenSearch, index_name: str = INDEX_NAME):
                 "html_path": {"type": "keyword"},
                 "domain": {"type": "keyword"},  # chunk만
                 "tech": {"type": "keyword"},  # chunk만
+                "product": {"type": "keyword"},  # chunk만 - 제품명
                 "chunk_index": {"type": "integer"},  # chunk만
             }
         },
@@ -251,6 +252,7 @@ def index_chunks(
                 "html_path": chunk.get("html_path", ""),
                 "domain": chunk.get("domain", "COMMON"),
                 "tech": chunk.get("tech", "공통"),
+                "product": chunk.get("product", ""),
                 "chunk_index": i,
             },
         }
@@ -431,6 +433,7 @@ def search_vector(
                 "html_path": hit["_source"].get("html_path", ""),
                 "domain": hit["_source"].get("domain"),
                 "tech": hit["_source"].get("tech"),
+                "product": hit["_source"].get("product"),
             }
         )
 
@@ -489,6 +492,7 @@ def search_keyword(
                 "html_path": hit["_source"].get("html_path", ""),
                 "domain": hit["_source"].get("domain"),
                 "tech": hit["_source"].get("tech"),
+                "product": hit["_source"].get("product"),
             }
         )
 
