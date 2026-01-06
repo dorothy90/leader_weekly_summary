@@ -1,6 +1,6 @@
 """
 6단계: Layer1 전수 집계 테이블 생성
-- 모든 chunks.json → Domain × Tech × Team 테이블
+- 모든 chunks_summary.json → Domain × Tech × Team 테이블
 - HTML 및 Markdown 출력
 """
 
@@ -40,7 +40,7 @@ TECH_TO_PRODUCT = {
 
 # ========== 데이터 로드 ==========
 def load_all_chunks(week: Optional[str] = None) -> List[Dict]:
-    """모든 chunks.json 파일에서 청크 로드
+    """모든 chunks_summary.json 파일에서 청크 로드
 
     Args:
         week: 특정 주만 필터 (예: "2025-48"), None이면 전체
@@ -51,14 +51,14 @@ def load_all_chunks(week: Optional[str] = None) -> List[Dict]:
         print(f"❌ data 폴더가 없습니다: {DATA_DIR}")
         return all_chunks
 
-    # 모든 chunks.json 찾기
-    chunks_files = list(DATA_DIR.glob("**/chunks.json"))
-    print(f"📁 발견된 chunks.json: {len(chunks_files)}개")
+    # 모든 chunks_summary.json 찾기
+    chunks_files = list(DATA_DIR.glob("**/chunks_summary.json"))
+    print(f"📁 발견된 chunks_summary.json: {len(chunks_files)}개")
 
     for chunks_path in chunks_files:
         # 주차 필터링
         if week:
-            # 경로에서 주차 추출 (data/2025-48/팀/mail_001/chunks.json)
+            # 경로에서 주차 추출 (data/2025-48/팀/mail_001/chunks_summary.json)
             path_parts = chunks_path.parts
             if week not in path_parts:
                 continue
