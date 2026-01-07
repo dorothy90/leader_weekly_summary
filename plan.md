@@ -177,16 +177,16 @@ Layer1 전수 로그와 최근 3주 히스토리를 반영하여
 
 ### 8.1 이중 저장 전략
 
-청킹 시 원본 맥락이 손실되는 문제를 방지하기 위해 **원본 + 청킹 둘 다 저장** 구조를 사용한다.
+**용도별 분리 저장** 구조를 사용한다.
 
 | 저장소 | 데이터 | type | 용도 |
 |--------|--------|------|------|
-| `chunks.json` (파일) | 업무 단위 청킹 + 분류 | - | Layer1/Layer2 생성 |
-| Vector DB | 원본 텍스트 (combined.txt) | `original_mail` | 전체 맥락 검색 |
-| Vector DB | 청킹된 업무 단위 | `chunk` | 특정 업무 정밀 검색 |
+| `chunks.json` (파일) | LLM 업무 단위 청킹 + 분류 | - | Layer1/Layer2 생성 |
+| Vector DB | 5000자 오버랩 청킹 | `original_part` | RAG 검색 |
 
+- `chunks.json`: LLM이 domain/tech 분류한 업무 단위 → 리포트 생성용
+- Vector DB: 5000자 오버랩 청킹 → 문맥 유지 + 검색 최적화
 - 모든 데이터는 `mail_id`로 상호 참조 가능
-- RAG 검색 시 질문 유형에 따라 원본/청크 선택적 검색 가능
 
 ### 8.2 chunks.json (Layer1/Layer2용)
 
@@ -223,24 +223,25 @@ Layer1 전수 로그와 최근 3주 히스토리를 반영하여
 
 ### 8.3 Vector DB (RAG용)
 
-Vector DB에는 **원본 텍스트**와 **청킹된 업무 단위** 둘 다 저장한다.
+Vector DB에는 **5000자 오버랩 청킹**된 원본 텍스트를 저장한다.
 
 #### 8.3.1 저장 내용
-1. **원본 텍스트** (`type: original_mail`)
-   - combined.txt 전체 (메일 본문 + Vision 결과)
-   - 전체 맥락 유지, 요약형 질문에 적합
+- **5000자 오버랩 청킹** (`type: original_part`)
+  - combined.txt를 5000자씩 분리 (1000자 오버랩)
+  - 문장 경계에서 자르기 시도 (마침표, 줄바꿈)
+  - 오버랩으로 문맥 유지
+  - RAG 검색 최적화
 
-2. **청킹된 업무 단위** (`type: chunk`)
-   - chunks.json의 각 청크
-   - 특정 업무/이슈 정밀 검색에 적합
-   - domain/tech 메타데이터로 필터링 가능
+#### 8.3.2 청킹 설정
+```python
+CHUNK_SIZE = 5000   # 5000자
+CHUNK_OVERLAP = 1000  # 1000자 오버랩 (20%)
+```
 
-3. (선택) Layer2 요약 (`type: summary`)
-
-#### 8.3.2 원본 스키마 (type: original_mail)
+#### 8.3.3 스키마 (type: original_part)
 ```json
 {
-  "id": "FA팀_2025-48_mail_001_original",
+  "id": "FA팀_2025-48_mail_001_part_0",
   "text": "금주 업무 보고드립니다.\n\n1. DRAM-1a recipe 변경...",
   "embedding": [0.123, 0.456, ...],
   "metadata": {
@@ -248,48 +249,31 @@ Vector DB에는 **원본 텍스트**와 **청킹된 업무 단위** 둘 다 저�
     "week": "2025-48",
     "mail_id": "mail_001",
     "html_path": "data/2025-48/FA팀/mail_001/body.html",
-    "type": "original_mail"
-  }
-}
-```
-
-#### 8.3.3 청크 스키마 (type: chunk)
-```json
-{
-  "id": "FA팀_2025-48_mail_001_chunk_0",
-  "text": "recipe 변경으로 수율 +1.2% 개선",
-  "embedding": [0.789, 0.012, ...],
-  "metadata": {
-    "team": "FA팀",
-    "week": "2025-48",
-    "mail_id": "mail_001",
-    "html_path": "data/2025-48/FA팀/mail_001/body.html",
-    "type": "chunk",
-    "domain": "DRAM",
-    "tech": "1a",
-    "product": "12G LPDDR5"
+    "type": "original_part",
+    "part_index": 0,
+    "total_parts": 3
   }
 }
 ```
 
 #### 8.3.4 메타데이터 필드
-| 필드 | 설명 | 용도 | 적용 대상 |
-|------|------|------|----------|
-| team | 팀명 | 팀별 필터링 | 전체 |
-| week | YYYY-WW | 히스토리 조회 | 전체 |
-| mail_id | 메일 식별자 | 원본/청크 연결 | 전체 |
-| html_path | body.html 경로 | RAG 참조 링크 | 전체 |
-| type | original_mail / chunk / summary | 검색 대상 구분 | 전체 |
-| domain | DRAM/NAND/COMMON | 도메인 필터링 | chunk만 |
-| tech | 1a, 1b, 312 등 | Tech 필터링 | chunk만 |
-| product | 12G LPDDR5, 1Tb QLC 등 | Product 필터링 | chunk만 |
+| 필드 | 설명 | 용도 |
+|------|------|------|
+| team | 팀명 | 팀별 필터링 |
+| week | YYYY-WW | 히스토리 조회 |
+| mail_id | 메일 식별자 | 원본 연결 |
+| html_path | body.html 경로 | RAG 참조 링크 |
+| type | original_part | 검색 대상 구분 |
+| part_index | 파트 인덱스 | 순서 정보 |
+| total_parts | 총 파트 수 | 전체 파트 개수 |
 
 ### 8.4 활용
 - **Layer1**: chunks.json의 domain/tech/team으로 그룹핑하여 테이블 생성
-- **Layer2**: chunks.json으로 팀별 업무 목록 + Vector DB(original_mail)로 최근 3주 히스토리 조회
+- **Layer2**: chunks.json으로 팀별 업무 목록 + Vector DB(original_part)로 최근 3주 히스토리 조회
 - **RAG Chatbot**:
-  - 전체 맥락 질문 → `type: original_mail` 검색 (예: "FA팀 이번 주 보고 요약해줘")
-  - 특정 업무 질문 → `type: chunk` + domain/tech 필터 검색 (예: "DRAM-1b open fail 관련 찾아줘")
+  - Vector DB에서 `type: original_part` 검색
+  - 오버랩 청킹으로 문맥 유지, 전체 맥락 검색 가능
+  - 예: "FA팀 이번 주 보고 요약해줘", "수율 개선 관련 찾아줘"
 
 ### 8.5 원본 참조 방식
 - 메일 수집 시 HTML 본문을 `body.html` 파일로 저장 (인라인 이미지는 Base64 Data URI로 변환)
@@ -355,41 +339,74 @@ Vector DB에는 **원본 텍스트**와 **청킹된 업무 단위** 둘 다 저�
 ### 9.1 목적
 주간 메일 히스토리를 기반으로 한 대화형 Q&A 제공
 
-### 9.2 예시 질문
-- "최근 3주 DRAM-1b에서 어떤 이슈 있었어?"
-- "FA팀이 지난달에 한 주요 분석은?"
-- "312단 수율 개선 액션 히스토리 요약해줘"
+### 9.2 아키텍처
+사내 메신저 API 연동 방식으로, 별도 프론트엔드 없이 **REST API 서버**만 구현
 
-### 9.3 Workflow
-User Query → Intent/Filter Parsing → Vector DB Retrieve → Context 기반 Answer
+```
+┌──────────────┐    HTTP POST     ┌──────────────────┐
+│  사내 메신저  │ ──────────────→ │  RAG API Server  │
+│  (Webhook)   │ ←────────────── │  (FastAPI)       │
+└──────────────┘    JSON Response └────────┬─────────┘
+                                           │
+                                    ┌──────▼──────┐
+                                    │  Vector DB  │
+                                    │  (ChromaDB) │
+                                    └─────────────┘
+```
 
-### 9.4 Query Parsing
-- team, domain, tech, 기간(week range)을 구조화 JSON으로 추출
+### 9.3 구현 파일
+- `rag_api.py`: FastAPI 기반 API 서버
 
-### 9.5 Answer 원칙
-- 제공된 context만 근거로 답변
-- 근거 없으면 "정보 없음" 명시
-- 추측/창작 금지
-- **답변에 사용된 출처의 원본 메일 HTML URL을 References로 제공**
-- **URL 형식: 제목, 발신자, 날짜, HTML 뷰어 링크**
+### 9.4 API 엔드포인트
 
-### 9.6 응답 포맷
-응답 시 참조 출처를 명시:
+#### POST /chat
+사내 메신저 webhook 수신 및 응답
 
+**Request:**
 ```json
 {
-  "answer": "...",
+  "user_id": "user@company.com",
+  "message": "최근 3주 DRAM-1b에서 어떤 이슈 있었어?"
+}
+```
+
+**Response:**
+```json
+{
+  "answer": "DRAM-1b 관련 최근 이슈는 다음과 같습니다...",
   "references": [
     {
-      "title": "주간 보고서",
-      "sender": "user@skhynix.com",
-      "date": "2025-01-06",
-      "team": "YIELD",
-      "url": "http://mail-server.internal/2025-01/YIELD/mail_001/body.html"
+      "team": "FA팀",
+      "week": "2025-48",
+      "mail_id": "mail_001",
+      "url": "http://mail-server.internal/2025-48/FA팀/mail_001/body.html"
     }
   ]
 }
 ```
+
+#### GET /health
+서버 상태 확인
+
+### 9.5 예시 질문
+- "최근 3주 DRAM-1b에서 어떤 이슈 있었어?"
+- "FA팀이 지난달에 한 주요 분석은?"
+- "수율 개선 액션 히스토리 요약해줘"
+
+### 9.6 Workflow
+```
+User Query → Query 파싱 (팀/기간 추출) → ChromaDB 검색 → LLM 답변 생성 → Response
+```
+
+### 9.7 Query Parsing
+- team, domain, tech, 기간(week range)을 LLM으로 구조화 추출 (선택적)
+- 추출 실패 시 전체 검색
+
+### 9.8 Answer 원칙
+- 제공된 context만 근거로 답변
+- 근거 없으면 "정보 없음" 명시
+- 추측/창작 금지
+- 답변에 사용된 출처 참조 URL 제공
 
 ---
 

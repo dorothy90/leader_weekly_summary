@@ -1,8 +1,8 @@
 """
 4단계: OpenSearch Vector DB 임베딩
-- combined.txt 원본 → Vector DB (type: original_mail)
-- chunks.json 청크 → Vector DB (type: chunk)
+- combined.txt → 5000자 오버랩 청킹 → Vector DB (type: original_part)
 - 메타데이터 포함 저장
+- chunks.json은 Layer1/Layer2 생성용으로만 사용 (임베딩 안 함)
 """
 
 import os
@@ -29,6 +29,10 @@ EMBEDDING_DIMENSION = 1536  # text-embedding-3-small 차원
 # 인덱스 설정
 INDEX_NAME = "weekly_mail"
 DATA_DIR = Path("data")
+
+# 청킹 설정
+CHUNK_SIZE = 5000  # 5000자
+CHUNK_OVERLAP = 1000  # 1000자 오버랩 (20%)
 
 
 # ========== OpenSearch 클라이언트 ==========
@@ -77,6 +81,59 @@ def get_embeddings_batch(texts: List[str], client: OpenAI) -> List[List[float]]:
         input=truncated_texts,
     )
     return [item.embedding for item in response.data]
+
+
+# ========== 텍스트 청킹 ==========
+def split_text_with_overlap(
+    text: str,
+    chunk_size: int = CHUNK_SIZE,
+    overlap: int = CHUNK_OVERLAP,
+) -> List[str]:
+    """텍스트를 오버랩 청킹으로 분리
+
+    Args:
+        text: 원본 텍스트
+        chunk_size: 청크 크기 (기본 5000자)
+        overlap: 오버랩 크기 (기본 1000자)
+
+    Returns:
+        청크 리스트
+    """
+    if not text or len(text) <= chunk_size:
+        return [text] if text else []
+
+    chunks = []
+    start = 0
+    text_len = len(text)
+
+    while start < text_len:
+        # 청크 끝 위치 계산
+        end = start + chunk_size
+
+        if end >= text_len:
+            # 마지막 청크
+            chunks.append(text[start:])
+            break
+
+        # 문장 경계에서 자르기 시도 (마침표, 줄바꿈)
+        # 청크 끝에서 역방향으로 경계 찾기
+        best_break = end
+        for sep in ["\n\n", "\n", ". ", "。", "? ", "! "]:
+            # 청크 마지막 20%에서 경계 찾기
+            search_start = end - int(chunk_size * 0.2)
+            pos = text.rfind(sep, search_start, end)
+            if pos > start:
+                best_break = pos + len(sep)
+                break
+
+        chunks.append(text[start:best_break])
+
+        # 다음 시작 위치 (오버랩 적용)
+        start = best_break - overlap
+        if start < 0:
+            start = 0
+
+    return chunks
 
 
 # ========== 인덱스 관리 ==========
@@ -133,15 +190,13 @@ def create_index(client: OpenSearch, index_name: str = INDEX_NAME):
                     "search_analyzer": "korean",
                 },
                 # 메타데이터 필드
-                "type": {"type": "keyword"},  # original_mail, chunk, summary
+                "type": {"type": "keyword"},  # original_part (5000자 청킹)
                 "team": {"type": "keyword"},
                 "week": {"type": "keyword"},
                 "mail_id": {"type": "keyword"},
                 "html_path": {"type": "keyword"},
-                "domain": {"type": "keyword"},  # chunk만
-                "tech": {"type": "keyword"},  # chunk만
-                "product": {"type": "keyword"},  # chunk만 - 제품명
-                "chunk_index": {"type": "integer"},  # chunk만
+                "part_index": {"type": "integer"},  # 청크 파트 인덱스
+                "total_parts": {"type": "integer"},  # 총 파트 수
             }
         },
     }
@@ -164,7 +219,7 @@ def index_original_mail(
     mail_dir: Path,
     index_name: str = INDEX_NAME,
 ) -> Optional[Dict]:
-    """원본 메일 (combined.txt) 임베딩 및 저장"""
+    """원본 메일 (combined.txt) 5000자 오버랩 청킹 후 임베딩 및 저장"""
 
     # combined.txt 읽기
     combined_path = mail_dir / "combined.txt"
@@ -186,74 +241,33 @@ def index_original_mail(
     mail_id = mail_dir.name
     html_path = str(mail_dir / "body.html")
 
-    # 임베딩 생성
-    embedding = get_embedding(combined_text, embedding_client)
+    # 5000자 오버랩 청킹
+    chunks = split_text_with_overlap(combined_text)
 
-    # 문서 ID
-    doc_id = f"{team}_{week}_{mail_id}_original"
-
-    # 문서 저장
-    doc = {
-        "text": combined_text,
-        "embedding": embedding,
-        "type": "original_mail",
-        "team": team,
-        "week": week,
-        "mail_id": mail_id,
-        "html_path": html_path,
-    }
-
-    client.index(index=index_name, id=doc_id, body=doc)
-
-    return {
-        "doc_id": doc_id,
-        "team": team,
-        "week": week,
-        "text_length": len(combined_text),
-    }
-
-
-def index_chunks(
-    client: OpenSearch,
-    embedding_client: OpenAI,
-    mail_dir: Path,
-    index_name: str = INDEX_NAME,
-) -> Optional[Dict]:
-    """청크 (chunks.json) 임베딩 및 저장"""
-
-    # chunks.json 읽기
-    chunks_path = mail_dir / "chunks.json"
-    if not chunks_path.exists():
-        return None
-
-    chunks = json.loads(chunks_path.read_text(encoding="utf-8"))
     if not chunks:
         return None
 
     # 배치 임베딩
-    texts = [chunk["text"] for chunk in chunks]
-    embeddings = get_embeddings_batch(texts, embedding_client)
+    embeddings = get_embeddings_batch(chunks, embedding_client)
 
-    # 문서 준비
+    # 벌크 저장을 위한 문서 준비
     actions = []
-    for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
-        doc_id = f"{chunk['team']}_{chunk['week']}_{chunk['mail_id']}_chunk_{i}"
+    for idx, (chunk_text, embedding) in enumerate(zip(chunks, embeddings)):
+        doc_id = f"{team}_{week}_{mail_id}_part_{idx}"
 
         doc = {
             "_index": index_name,
             "_id": doc_id,
             "_source": {
-                "text": chunk["text"],
+                "text": chunk_text,
                 "embedding": embedding,
-                "type": "chunk",
-                "team": chunk.get("team", "unknown"),
-                "week": chunk.get("week", "unknown"),
-                "mail_id": chunk.get("mail_id", "unknown"),
-                "html_path": chunk.get("html_path", ""),
-                "domain": chunk.get("domain", "COMMON"),
-                "tech": chunk.get("tech", "공통"),
-                "product": chunk.get("product", ""),
-                "chunk_index": i,
+                "type": "original_part",
+                "team": team,
+                "week": week,
+                "mail_id": mail_id,
+                "html_path": html_path,
+                "part_index": idx,
+                "total_parts": len(chunks),
             },
         }
         actions.append(doc)
@@ -263,9 +277,24 @@ def index_chunks(
         helpers.bulk(client, actions)
 
     return {
-        "chunks_count": len(chunks),
-        "team": chunks[0].get("team", "unknown") if chunks else "unknown",
+        "doc_id": f"{team}_{week}_{mail_id}",
+        "team": team,
+        "week": week,
+        "text_length": len(combined_text),
+        "parts_count": len(chunks),
     }
+
+
+# [DEPRECATED] LLM 청크 임베딩은 더 이상 사용하지 않음
+# chunks.json은 Layer1/Layer2 생성용으로만 사용
+# def index_chunks(
+#     client: OpenSearch,
+#     embedding_client: OpenAI,
+#     mail_dir: Path,
+#     index_name: str = INDEX_NAME,
+# ) -> Optional[Dict]:
+#     """청크 (chunks.json) 임베딩 및 저장 - DEPRECATED"""
+#     pass
 
 
 # ========== 메일 폴더 처리 ==========
@@ -275,32 +304,24 @@ def process_mail_folder(
     mail_dir: Path,
     index_name: str = INDEX_NAME,
 ) -> Dict:
-    """단일 메일 폴더의 원본 + 청크 임베딩"""
+    """단일 메일 폴더의 원본 5000자 오버랩 청킹 임베딩"""
 
     print(f"\n📂 처리 중: {mail_dir}")
 
     result = {
         "original": None,
-        "chunks": None,
     }
 
-    # 1. 원본 임베딩
+    # 원본 5000자 오버랩 청킹 임베딩
     original_result = index_original_mail(
         client, embedding_client, mail_dir, index_name
     )
     if original_result:
-        print(f"   ✅ 원본 저장: {original_result['doc_id']}")
+        parts_info = f"{original_result['parts_count']}개 파트"
+        print(f"   ✅ 저장: {original_result['doc_id']} ({parts_info})")
         result["original"] = original_result
     else:
         print(f"   ⚠️ 원본 없음 (combined.txt)")
-
-    # 2. 청크 임베딩
-    chunks_result = index_chunks(client, embedding_client, mail_dir, index_name)
-    if chunks_result:
-        print(f"   ✅ 청크 저장: {chunks_result['chunks_count']}개")
-        result["chunks"] = chunks_result
-    else:
-        print(f"   ⚠️ 청크 없음 (chunks.json)")
 
     return result
 
@@ -308,7 +329,7 @@ def process_mail_folder(
 def process_all(recreate_index: bool = False):
     """모든 메일 폴더 처리"""
     print("=" * 50)
-    print("OpenSearch Vector DB 임베딩")
+    print("OpenSearch Vector DB 임베딩 (5000자 오버랩 청킹)")
     print("=" * 50)
 
     # 클라이언트 초기화
@@ -341,8 +362,8 @@ def process_all(recreate_index: bool = False):
 
     stats = {
         "processed": 0,
-        "originals": 0,
-        "chunks": 0,
+        "mails": 0,
+        "parts": 0,
         "failed": 0,
     }
 
@@ -355,9 +376,8 @@ def process_all(recreate_index: bool = False):
             stats["processed"] += 1
 
             if result["original"]:
-                stats["originals"] += 1
-            if result["chunks"]:
-                stats["chunks"] += result["chunks"]["chunks_count"]
+                stats["mails"] += 1
+                stats["parts"] += result["original"]["parts_count"]
 
         except Exception as e:
             print(f"   ❌ 처리 실패: {e}")
@@ -371,15 +391,15 @@ def process_all(recreate_index: bool = False):
     print("✅ 임베딩 완료")
     print("=" * 50)
     print(f"   처리된 폴더: {stats['processed']}개")
-    print(f"   원본 문서: {stats['originals']}개")
-    print(f"   청크 문서: {stats['chunks']}개")
+    print(f"   임베딩된 메일: {stats['mails']}개")
+    print(f"   총 파트 수: {stats['parts']}개 (5000자 청킹)")
     print(f"   실패: {stats['failed']}개")
 
 
 # ========== 검색 함수 ==========
 def search_vector(
     query: str,
-    doc_type: Optional[str] = None,  # "original_mail", "chunk", None (전체)
+    doc_type: Optional[str] = None,  # "original_part" (5000자 청킹), None (전체)
     team: Optional[str] = None,
     week: Optional[str] = None,
     domain: Optional[str] = None,
@@ -430,10 +450,10 @@ def search_vector(
                 "type": hit["_source"]["type"],
                 "team": hit["_source"]["team"],
                 "week": hit["_source"]["week"],
+                "mail_id": hit["_source"].get("mail_id", ""),
                 "html_path": hit["_source"].get("html_path", ""),
-                "domain": hit["_source"].get("domain"),
-                "tech": hit["_source"].get("tech"),
-                "product": hit["_source"].get("product"),
+                "part_index": hit["_source"].get("part_index"),
+                "total_parts": hit["_source"].get("total_parts"),
             }
         )
 
@@ -489,10 +509,10 @@ def search_keyword(
                 "type": hit["_source"]["type"],
                 "team": hit["_source"]["team"],
                 "week": hit["_source"]["week"],
+                "mail_id": hit["_source"].get("mail_id", ""),
                 "html_path": hit["_source"].get("html_path", ""),
-                "domain": hit["_source"].get("domain"),
-                "tech": hit["_source"].get("tech"),
-                "product": hit["_source"].get("product"),
+                "part_index": hit["_source"].get("part_index"),
+                "total_parts": hit["_source"].get("total_parts"),
             }
         )
 
@@ -574,43 +594,67 @@ def search_hybrid(
 search_similar = search_vector
 
 
+def run_search(
+    query: str,
+    mode: str = "hybrid",
+    doc_type: Optional[str] = None,
+    team: Optional[str] = None,
+    week: Optional[str] = None,
+):
+    """검색 실행
+
+    Args:
+        query: 검색어
+        mode: 검색 모드 ("vector", "keyword", "hybrid")
+        doc_type: 문서 타입 필터 ("original_part" 또는 None)
+        team: 팀 필터
+        week: 주차 필터
+    """
+    print(f"\n🔍 검색: '{query}' (모드: {mode})")
+
+    if mode == "vector":
+        results = search_vector(query, doc_type=doc_type, team=team, week=week)
+    elif mode == "keyword":
+        results = search_keyword(query, doc_type=doc_type, team=team, week=week)
+    else:  # hybrid
+        results = search_hybrid(query, doc_type=doc_type, team=team, week=week)
+
+    for i, r in enumerate(results, 1):
+        score_info = f"Score: {r['score']:.4f}"
+        if mode == "hybrid":
+            score_info += f" (벡터: {r.get('vector_score', 0):.2f}, 키워드: {r.get('keyword_score', 0):.2f})"
+        print(f"\n[{i}] {score_info}")
+        part_info = ""
+        if r.get("total_parts") and r.get("total_parts") > 1:
+            part_info = f" | Part: {r['part_index']+1}/{r['total_parts']}"
+        print(
+            f"    Type: {r['type']} | Team: {r['team']} | Week: {r['week']}{part_info}"
+        )
+        print(f"    {r['text']}")
+
+    return results
+
+
 if __name__ == "__main__":
-    import argparse
+    # ========== 실행 설정 ==========
+    # 임베딩 설정
+    RECREATE_INDEX = False  # True: 인덱스 재생성
 
-    parser = argparse.ArgumentParser(description="OpenSearch Vector DB 임베딩")
-    parser.add_argument("--recreate", action="store_true", help="인덱스 재생성")
-    parser.add_argument("--search", type=str, help="검색 테스트")
-    parser.add_argument(
-        "--type", type=str, choices=["original_mail", "chunk"], help="검색 대상 타입"
-    )
-    parser.add_argument(
-        "--mode",
-        type=str,
-        choices=["vector", "keyword", "hybrid"],
-        default="hybrid",
-        help="검색 모드 (기본: hybrid)",
-    )
+    # 검색 설정 (SEARCH_QUERY가 None이 아니면 검색 실행)
+    SEARCH_QUERY = None  # 검색어 (예: "수율 개선")
+    SEARCH_MODE = "hybrid"  # "vector", "keyword", "hybrid"
+    SEARCH_TYPE = None  # "original_part" 또는 None
+    SEARCH_TEAM = None  # 팀 필터 (예: "FA팀")
+    SEARCH_WEEK = None  # 주차 필터 (예: "2025-48")
 
-    args = parser.parse_args()
-
-    if args.search:
-        print(f"\n🔍 검색: '{args.search}' (모드: {args.mode})")
-
-        if args.mode == "vector":
-            results = search_vector(args.search, doc_type=args.type)
-        elif args.mode == "keyword":
-            results = search_keyword(args.search, doc_type=args.type)
-        else:  # hybrid
-            results = search_hybrid(args.search, doc_type=args.type)
-
-        for i, r in enumerate(results, 1):
-            score_info = f"Score: {r['score']:.4f}"
-            if args.mode == "hybrid":
-                score_info += f" (벡터: {r.get('vector_score', 0):.2f}, 키워드: {r.get('keyword_score', 0):.2f})"
-            print(f"\n[{i}] {score_info}")
-            print(f"    Type: {r['type']} | Team: {r['team']} | Week: {r['week']}")
-            if r.get("domain"):
-                print(f"    Domain: {r['domain']} | Tech: {r['tech']}")
-            print(f"    {r['text']}")
+    # 실행
+    if SEARCH_QUERY:
+        run_search(
+            query=SEARCH_QUERY,
+            mode=SEARCH_MODE,
+            doc_type=SEARCH_TYPE,
+            team=SEARCH_TEAM,
+            week=SEARCH_WEEK,
+        )
     else:
-        process_all(recreate_index=args.recreate)
+        process_all(recreate_index=RECREATE_INDEX)

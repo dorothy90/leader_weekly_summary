@@ -1,12 +1,11 @@
 """
 ChromaDB 테스트용 임베딩 스크립트
-- combined.txt → original_mail 타입으로 저장
-- chunks.json → chunk 타입으로 저장
-- OpenAI text-embedding-3-small 사용
+- combined.txt → 5000자 오버랩 청킹 → original_part 타입으로 저장
+- chunks.json은 Layer1/Layer2 생성용으로만 사용 (임베딩 안 함)
+- 로컬 임베딩 모델 사용 (sentence-transformers)
 """
 
 import json
-import argparse
 from pathlib import Path
 from typing import List, Dict, Optional
 from datetime import datetime
@@ -19,11 +18,76 @@ DATA_DIR = Path("data")
 CHROMA_DIR = Path("chroma_db")
 COLLECTION_NAME = "weekly_mail"
 
+# 청킹 설정
+CHUNK_SIZE = 5000  # 5000자
+CHUNK_OVERLAP = 1000  # 1000자 오버랩 (20%)
+
 # 팀 목록
 TEAMS = [
-    "CS팀", "DT팀", "EQUIP팀", "FA팀", "PE팀",
-    "PI팀", "PROCESS팀", "QA팀", "TEST팀", "YIELD팀",
+    "CS팀",
+    "DT팀",
+    "EQUIP팀",
+    "FA팀",
+    "PE팀",
+    "PI팀",
+    "PROCESS팀",
+    "QA팀",
+    "TEST팀",
+    "YIELD팀",
 ]
+
+
+# ========== 텍스트 청킹 ==========
+def split_text_with_overlap(
+    text: str,
+    chunk_size: int = CHUNK_SIZE,
+    overlap: int = CHUNK_OVERLAP,
+) -> List[str]:
+    """텍스트를 오버랩 청킹으로 분리
+
+    Args:
+        text: 원본 텍스트
+        chunk_size: 청크 크기 (기본 5000자)
+        overlap: 오버랩 크기 (기본 1000자)
+
+    Returns:
+        청크 리스트
+    """
+    if not text or len(text) <= chunk_size:
+        return [text] if text else []
+
+    chunks = []
+    start = 0
+    text_len = len(text)
+
+    while start < text_len:
+        # 청크 끝 위치 계산
+        end = start + chunk_size
+
+        if end >= text_len:
+            # 마지막 청크
+            chunks.append(text[start:])
+            break
+
+        # 문장 경계에서 자르기 시도 (마침표, 줄바꿈)
+        # 청크 끝에서 역방향으로 경계 찾기
+        best_break = end
+        for sep in ["\n\n", "\n", ". ", "。", "? ", "! "]:
+            # 청크 마지막 20%에서 경계 찾기
+            search_start = end - int(chunk_size * 0.2)
+            pos = text.rfind(sep, search_start, end)
+            if pos > start:
+                best_break = pos + len(sep)
+                break
+
+        chunks.append(text[start:best_break])
+
+        # 다음 시작 위치 (오버랩 적용)
+        start = best_break - overlap
+        if start < 0:
+            start = 0
+
+    return chunks
 
 
 class ChromaDBClient:
@@ -41,7 +105,7 @@ class ChromaDBClient:
         return self.client.get_or_create_collection(
             name=COLLECTION_NAME,
             embedding_function=self.embedding_fn,
-            metadata={"description": "Weekly mail embeddings"}
+            metadata={"description": "Weekly mail embeddings"},
         )
 
     def add_document(
@@ -89,11 +153,13 @@ class ChromaDBClient:
 
         docs = []
         for i, doc_id in enumerate(results["ids"]):
-            docs.append({
-                "id": doc_id,
-                "text": results["documents"][i],
-                "metadata": results["metadatas"][i],
-            })
+            docs.append(
+                {
+                    "id": doc_id,
+                    "text": results["documents"][i],
+                    "metadata": results["metadatas"][i],
+                }
+            )
 
         return docs
 
@@ -131,12 +197,14 @@ class ChromaDBClient:
 
         docs = []
         for i, doc_id in enumerate(results["ids"][0]):
-            docs.append({
-                "id": doc_id,
-                "text": results["documents"][0][i],
-                "metadata": results["metadatas"][0][i],
-                "distance": results["distances"][0][i],
-            })
+            docs.append(
+                {
+                    "id": doc_id,
+                    "text": results["documents"][0][i],
+                    "metadata": results["metadatas"][0][i],
+                    "distance": results["distances"][0][i],
+                }
+            )
 
         return docs
 
@@ -153,18 +221,18 @@ class ChromaDBClient:
 
 
 def embed_week(week: str, client: ChromaDBClient):
-    """특정 주차 데이터 임베딩"""
+    """특정 주차 데이터 임베딩 (5000자 오버랩 청킹)"""
     week_dir = DATA_DIR / week
 
     if not week_dir.exists():
         print(f"❌ 주차 폴더 없음: {week_dir}")
         return
 
-    print(f"\n📅 {week} 주차 데이터 임베딩")
+    print(f"\n📅 {week} 주차 데이터 임베딩 (5000자 오버랩 청킹)")
     print("-" * 40)
 
-    total_original = 0
-    total_chunks = 0
+    total_mails = 0
+    total_parts = 0
 
     for team_dir in week_dir.iterdir():
         if not team_dir.is_dir():
@@ -180,82 +248,60 @@ def embed_week(week: str, client: ChromaDBClient):
 
             mail_id = mail_dir.name
 
-            # 1. combined.txt 임베딩 (original_mail)
+            # combined.txt 5000자 오버랩 청킹 임베딩
             combined_file = mail_dir / "combined.txt"
             if combined_file.exists():
                 with open(combined_file, "r", encoding="utf-8") as f:
                     text = f.read().strip()
 
                 if text:
-                    doc_id = f"{team}_{week}_{mail_id}_original"
-                    metadata = {
-                        "team": team,
-                        "week": week,
-                        "mail_id": mail_id,
-                        "type": "original_mail",
-                    }
+                    # 5000자 오버랩 청킹
+                    chunks = split_text_with_overlap(text)
 
-                    try:
-                        client.add_document(doc_id, text, metadata)
-                        total_original += 1
-                        print(f"   ✅ {team}/{mail_id}/combined.txt")
-                    except Exception as e:
-                        print(f"   ❌ {team}/{mail_id}/combined.txt: {e}")
+                    for idx, chunk_text in enumerate(chunks):
+                        doc_id = f"{team}_{week}_{mail_id}_part_{idx}"
+                        metadata = {
+                            "team": team,
+                            "week": week,
+                            "mail_id": mail_id,
+                            "type": "original_part",
+                            "part_index": idx,
+                            "total_parts": len(chunks),
+                        }
 
-            # 2. chunks.json 임베딩 (chunk)
-            chunks_file = mail_dir / "chunks.json"
-            if chunks_file.exists():
-                with open(chunks_file, "r", encoding="utf-8") as f:
-                    chunks = json.load(f)
+                        try:
+                            client.add_document(doc_id, chunk_text, metadata)
+                            total_parts += 1
+                        except Exception as e:
+                            print(f"   ❌ {team}/{mail_id}/part_{idx}: {e}")
 
-                for idx, chunk in enumerate(chunks):
-                    text = chunk.get("text", "").strip()
-                    if not text:
-                        continue
+                    total_mails += 1
+                    print(f"   ✅ {team}/{mail_id} ({len(chunks)}개 파트)")
 
-                    doc_id = f"{team}_{week}_{mail_id}_chunk_{idx}"
-                    metadata = {
-                        "team": team,
-                        "week": week,
-                        "mail_id": mail_id,
-                        "type": "chunk",
-                        "domain": chunk.get("domain", ""),
-                        "tech": chunk.get("tech", ""),
-                        "product": chunk.get("product", ""),
-                    }
-
-                    try:
-                        client.add_document(doc_id, text, metadata)
-                        total_chunks += 1
-                    except Exception as e:
-                        print(f"   ❌ {team}/{mail_id}/chunk_{idx}: {e}")
-
-                print(f"   ✅ {team}/{mail_id}/chunks.json ({len(chunks)}개)")
-
-    print(f"\n📊 {week} 임베딩 완료: original_mail {total_original}개, chunk {total_chunks}개")
+    print(f"\n📊 {week} 임베딩 완료: {total_mails}개 메일, {total_parts}개 파트")
 
 
-def main():
-    parser = argparse.ArgumentParser(description="ChromaDB 임베딩")
-    parser.add_argument("--week", type=str, required=True, help="대상 주차 (예: 2025-48)")
-    parser.add_argument("--clear", action="store_true", help="컬렉션 초기화 후 시작")
+def main(week: str, clear: bool = False):
+    """ChromaDB 임베딩 실행
 
-    args = parser.parse_args()
-
+    Args:
+        week: 대상 주차 (예: "2025-48")
+        clear: 컬렉션 초기화 후 시작 여부
+    """
     print("=" * 50)
-    print("ChromaDB 임베딩 시작")
+    print("ChromaDB 임베딩 시작 (5000자 오버랩 청킹)")
     print("=" * 50)
 
     # ChromaDB 클라이언트 초기화
     CHROMA_DIR.mkdir(exist_ok=True)
     client = ChromaDBClient()
 
-    if args.clear:
+    if clear:
         print("🗑️ 컬렉션 초기화...")
         client.clear_collection()
 
     # 주차 데이터 임베딩
-    embed_week(args.week, client)
+    embed_week(week, client)
 
     # 통계 출력
     stats = client.get_stats()
@@ -267,5 +313,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # ========== 실행 설정 ==========
+    WEEK = "2025-48"  # 대상 주차
+    CLEAR = False  # True: 컬렉션 초기화 후 시작
 
+    main(week=WEEK, clear=CLEAR)

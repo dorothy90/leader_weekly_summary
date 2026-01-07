@@ -47,8 +47,8 @@ class WorkChunk(BaseModel):
     """단일 업무 항목"""
 
     text: str = Field(description="업무 내용 (한 문장 또는 불릿)")
-    domain: Literal["COMMON", "DRAM", "NAND"] = Field(
-        description="도메인: COMMON(공통), DRAM, NAND"
+    domain: Literal["COMMON", "DRAM", "NAND", "WUXI"] = Field(
+        description="도메인: COMMON(공통), DRAM, NAND, WUXI(우시 법인)"
     )
     tech: str = Field(description="세부 Tech: 공통, 1a, 1b, 1c, 1d, 256, 312, 400 등")
     product: str = Field(default="", description="제품명: 12G LPDDR5, 16G DDR5, 512Gb TLC 등 (없으면 빈 문자열)")
@@ -86,6 +86,7 @@ SYSTEM_PROMPT = """당신은 반도체 주간 업무 보고서 분석 전문가�
 - COMMON: 도메인 무관 공통 업무 (스크립트 개발, 방법론 정리 등)
 - DRAM: DRAM 관련 업무 (Tech: 1a, 1b, 1c, 1d)
 - NAND: NAND 관련 업무 (Tech: 256, 312, 400)
+- WUXI: 우시 법인 관련 업무
 
 ## Tech ↔ Product 매핑 테이블
 
@@ -200,6 +201,10 @@ def process_mail_folder(mail_dir: Path) -> dict:
             chunk_data["week"] = week
             chunk_data["mail_id"] = mail_id
             chunk_data["html_path"] = html_path
+
+            # 팀명에 "우시"가 포함되어 있으면 domain을 "WUXI"로 설정
+            if "우시" in team:
+                chunk_data["domain"] = "WUXI"
 
             # product만 있고 tech가 "공통"인 경우 → 역매핑으로 tech 찾기
             if chunk_data.get("product") and chunk_data.get("tech") == "공통":
