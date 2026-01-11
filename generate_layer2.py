@@ -218,16 +218,25 @@ def _generate_llm_summary(team: str, history_text: str, current_week: str) -> st
 - **현재 주차 (⭐ 표시)**: 요약 대상 - 이번 주 업무 내용
 - **이전 주차들 (참조용)**: 맥락 파악용 - 현재 주차 업무의 배경 이해용
 
+## Executive Summary 처리 (중요!):
+메일 상단에 다음과 같은 형태의 Executive Summary가 있을 수 있습니다:
+- "Executive Summary", "Summary", "요약", "핵심 내용", "주요 사항" 등의 헤더
+- 또는 메일 본문 시작 부분의 짧은 요약 문단
+- 형식이 제각각이므로 메일 상단 부분의 핵심 내용을 파악하세요
+
+**이 Executive Summary 내용을 "1. 주요 보고" 섹션에 우선적으로 반영하세요.**
+
 ## 핵심 원칙:
 1. 요약은 **현재 주차** 업무 기준으로 작성
-2. 이전 주차 데이터는 **맥락 파악용**으로만 활용
-3. "지난주에 시작한 A가 이번 주 완료됨" 같은 스토리 연결 반영
+2. **메일 상단의 Executive Summary/요약 부분이 있다면 이를 주요 보고에 핵심적으로 반영**
+3. 이전 주차 데이터는 **맥락 파악용**으로만 활용
+4. "지난주에 시작한 A가 이번 주 완료됨" 같은 스토리 연결 반영
 
 ## 출력 형식 (반드시 준수):
 [팀명] Weekly Summary
 
 1. 주요 보고
-- 이전 주 맥락을 반영한 이번 주 핵심 스토리 (1-2문장)
+- 메일 상단 Executive Summary의 핵심 내용 + 이전 주 맥락을 반영한 이번 주 핵심 스토리 (2-3문장)
 
 2. Key Actions (이번 주 기준)
 1) Domain-Tech: 구체적 액션
@@ -243,6 +252,7 @@ def _generate_llm_summary(team: str, history_text: str, current_week: str) -> st
 (1-3개)
 
 ## 요약 원칙:
+- **메일 상단의 Executive Summary/요약 부분을 주요 보고의 핵심으로 활용**
 - 이전 주에서 시작해 현재 주에 진행/완료된 업무는 진척 상황 반영
 - 2주 이상 지속되는 이슈는 Risk로 강조
 - 수치가 있으면 포함
@@ -256,8 +266,10 @@ def _generate_llm_summary(team: str, history_text: str, current_week: str) -> st
 {history_text}
 ---
 
-위 데이터에서 {current_week} 주차가 핵심 요약 대상이고,
-이전 주차들은 맥락 파악용입니다.
+**중요 지시사항:**
+1. {current_week} 주차가 핵심 요약 대상입니다.
+2. 메일 상단에 Executive Summary, 요약, Summary 등의 내용이 있다면 이를 "주요 보고"에 우선 반영하세요.
+3. 이전 주차들은 맥락 파악용입니다.
 """
 
     client = OpenAI(
@@ -305,50 +317,242 @@ def get_mail_html_links(team: str, week: str) -> List[Dict[str, str]]:
     return links
 
 
+def parse_summary_to_html(team: str, summary: str) -> Dict:
+    """요약 텍스트를 구조화된 데이터로 변환"""
+    import re
+
+    # Markdown bold 제거 및 팀명 정리
+    summary = re.sub(r"\*\*\[?([^\]]*?)\]?\*\*", r"\1", summary)
+    summary = re.sub(r"\[([^\]]+)\]", r"\1", summary)
+
+    lines = summary.strip().split("\n")
+    sections = {"title": "", "summary": "", "actions": [], "risks": [], "plans": []}
+
+    current_section = None
+
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+
+        # 섹션 헤더 감지
+        if "주요 보고" in line or line.startswith("1."):
+            current_section = "summary"
+            continue
+        elif "Key Actions" in line or line.startswith("2."):
+            current_section = "actions"
+            continue
+        elif "Issue" in line or "Risk" in line or line.startswith("3."):
+            current_section = "risks"
+            continue
+        elif "향후 계획" in line or line.startswith("4."):
+            current_section = "plans"
+            continue
+        elif "Weekly Summary" in line:
+            sections["title"] = line
+            continue
+
+        # 내용 추가
+        if current_section == "summary":
+            line = re.sub(r"^[-•]\s*", "", line)
+            if line:
+                sections["summary"] += line + " "
+        elif current_section == "actions":
+            line = re.sub(r"^\d+\)\s*", "", line)
+            line = re.sub(r"^[-•]\s*", "", line)
+            if line:
+                sections["actions"].append(line)
+        elif current_section == "risks":
+            line = re.sub(r"^[-•]\s*", "", line)
+            if line:
+                sections["risks"].append(line)
+        elif current_section == "plans":
+            line = re.sub(r"^[-•]\s*", "", line)
+            if line:
+                sections["plans"].append(line)
+
+    return sections
+
+
 def generate_html(summaries: Dict[str, str], week: str, timestamp: str) -> str:
-    """HTML 출력 생성"""
+    """HTML 출력 생성 (Outlook 호환 - 테이블 레이아웃 + 인라인 스타일)"""
+
     html = f"""<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Layer2 팀별 요약 - {week}</title>
 </head>
-<body style="font-family: 'Malgun Gothic', sans-serif; max-width: 900px; margin: 0 auto; padding: 20px; background: #f5f5f5;">
-    <table width="100%" cellpadding="0" cellspacing="0" border="0">
+<body style="margin: 0; padding: 0; background-color: #f5f5f5; font-family: 'Malgun Gothic', '맑은 고딕', Arial, sans-serif;">
+    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: #f5f5f5;">
         <tr>
-            <td style="padding: 20px; background: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-                <h1 style="margin: 0 0 10px 0; color: #333; font-size: 24px;">Layer2 팀별 요약 리포트</h1>
-                <p style="margin: 0; color: #666; font-size: 14px;">대상 주차: {week} | 생성 시각: {timestamp}</p>
-            </td>
-        </tr>
-        <tr><td style="height: 20px;"></td></tr>
+            <td align="center" style="padding: 20px 10px;">
+                <table width="700" cellpadding="0" cellspacing="0" border="0" style="max-width: 700px;">
+                    <!-- Header -->
+                    <tr>
+                        <td style="background-color: #ffffff; padding: 24px 28px; border-bottom: 3px solid #4a5568;">
+                            <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                                <tr>
+                                    <td style="font-size: 22px; font-weight: bold; color: #1a202c;">
+                                        Layer2 팀별 요약 리포트
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td style="font-size: 13px; color: #718096; padding-top: 6px;">
+                                        대상 주차: {week} | 생성: {timestamp}
+                                    </td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+                    <tr><td style="height: 16px; background-color: #f5f5f5;"></td></tr>
 """
 
     for team, summary in summaries.items():
+        parsed = parse_summary_to_html(team, summary)
+
         # 원본 메일 링크 생성
         mail_links = get_mail_html_links(team, week)
         links_html = ""
         if mail_links:
-            links_html = '<div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #eee;">'
-            links_html += (
-                '<span style="font-size: 11px; color: #888;">📎 원본 메일: </span>'
-            )
+            links_html = '<tr><td style="padding: 12px 20px; border-top: 1px solid #e2e8f0; font-size: 11px; color: #718096;">원본: '
             for i, link in enumerate(mail_links):
                 if i > 0:
-                    links_html += '<span style="color: #ccc;"> | </span>'
-                links_html += f'<a href="{link["path"]}" style="font-size: 11px; color: #4a90d9; text-decoration: none;" target="_blank">{link["subject"]}</a>'
-            links_html += "</div>"
+                    links_html += " | "
+                links_html += f'<a href="{link["path"]}" style="color: #4a5568; text-decoration: underline;">{link["subject"]}</a>'
+            links_html += "</td></tr>"
 
-        html += f"""        <tr>
-            <td style="padding: 20px; background: white; border-radius: 8px; margin-bottom: 15px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-                <pre style="font-family: 'Malgun Gothic', sans-serif; white-space: pre-wrap; margin: 0; font-size: 13px; line-height: 1.6; color: #333;">{summary}</pre>
-                {links_html}
-            </td>
-        </tr>
-        <tr><td style="height: 15px;"></td></tr>
+        # Actions HTML (테이블 기반)
+        actions_html = ""
+        if parsed["actions"]:
+            for i, action in enumerate(parsed["actions"][:5], 1):
+                actions_html += f"""<tr>
+                    <td style="padding: 8px 12px; background-color: #fafafa; border-bottom: 1px solid #edf2f7; font-size: 13px; color: #2d3748; line-height: 1.5;">
+                        <span style="color: #718096; font-weight: bold;">{i}.</span> {action}
+                    </td>
+                </tr>"""
+        else:
+            actions_html = '<tr><td style="padding: 10px 12px; color: #a0aec0; font-size: 13px;">내용 없음</td></tr>'
+
+        # Risks HTML
+        if parsed["risks"]:
+            risk_text = " ".join(parsed["risks"])
+            if "특이사항 없음" in risk_text or "없음" == risk_text.strip():
+                risks_html = f"""<tr>
+                    <td style="padding: 12px 16px; background-color: #f0fff4; border-left: 3px solid #68d391; font-size: 13px; color: #276749; line-height: 1.5;">
+                        특이사항 없음
+                    </td>
+                </tr>"""
+            else:
+                risks_html = f"""<tr>
+                    <td style="padding: 12px 16px; background-color: #fff5f5; border-left: 3px solid #fc8181; font-size: 13px; color: #c53030; line-height: 1.5;">
+                        {risk_text}
+                    </td>
+                </tr>"""
+        else:
+            risks_html = f"""<tr>
+                <td style="padding: 12px 16px; background-color: #f0fff4; border-left: 3px solid #68d391; font-size: 13px; color: #276749; line-height: 1.5;">
+                    특이사항 없음
+                </td>
+            </tr>"""
+
+        # Plans HTML
+        plans_html = ""
+        if parsed["plans"]:
+            for plan in parsed["plans"][:3]:
+                plans_html += f"""<tr>
+                    <td style="padding: 8px 12px; background-color: #ebf8ff; border-bottom: 1px solid #bee3f8; font-size: 13px; color: #2c5282; line-height: 1.5;">
+                        → {plan}
+                    </td>
+                </tr>"""
+        else:
+            plans_html = '<tr><td style="padding: 10px 12px; color: #a0aec0; font-size: 13px;">내용 없음</td></tr>'
+
+        html += f"""
+                    <!-- {team} Card -->
+                    <tr>
+                        <td style="background-color: #ffffff;">
+                            <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                                <!-- Team Header -->
+                                <tr>
+                                    <td style="background-color: #4a5568; padding: 14px 20px; font-size: 15px; font-weight: bold; color: #ffffff;">
+                                        {team} Weekly Summary
+                                    </td>
+                                </tr>
+
+                                <!-- 주요 보고 -->
+                                <tr>
+                                    <td style="padding: 16px 20px 8px 20px;">
+                                        <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                                            <tr>
+                                                <td style="font-size: 12px; font-weight: bold; color: #4a5568; text-transform: uppercase; padding-bottom: 8px;">
+                                                    주요 보고
+                                                </td>
+                                            </tr>
+                                            <tr>
+                                                <td style="padding: 12px 16px; background-color: #f7fafc; border-left: 3px solid #4a5568; font-size: 13px; color: #2d3748; line-height: 1.6;">
+                                                    {parsed['summary'] or '내용 없음'}
+                                                </td>
+                                            </tr>
+                                        </table>
+                                    </td>
+                                </tr>
+
+                                <!-- Key Actions -->
+                                <tr>
+                                    <td style="padding: 12px 20px 8px 20px;">
+                                        <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                                            <tr>
+                                                <td style="font-size: 12px; font-weight: bold; color: #4a5568; text-transform: uppercase; padding-bottom: 8px;">
+                                                    Key Actions
+                                                </td>
+                                            </tr>
+                                            {actions_html}
+                                        </table>
+                                    </td>
+                                </tr>
+
+                                <!-- Issue / Risk -->
+                                <tr>
+                                    <td style="padding: 12px 20px 8px 20px;">
+                                        <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                                            <tr>
+                                                <td style="font-size: 12px; font-weight: bold; color: #4a5568; text-transform: uppercase; padding-bottom: 8px;">
+                                                    Issue / Risk
+                                                </td>
+                                            </tr>
+                                            {risks_html}
+                                        </table>
+                                    </td>
+                                </tr>
+
+                                <!-- 향후 계획 -->
+                                <tr>
+                                    <td style="padding: 12px 20px 16px 20px;">
+                                        <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                                            <tr>
+                                                <td style="font-size: 12px; font-weight: bold; color: #4a5568; text-transform: uppercase; padding-bottom: 8px;">
+                                                    향후 계획
+                                                </td>
+                                            </tr>
+                                            {plans_html}
+                                        </table>
+                                    </td>
+                                </tr>
+
+                                {links_html}
+                            </table>
+                        </td>
+                    </tr>
+                    <tr><td style="height: 12px; background-color: #f5f5f5;"></td></tr>
 """
 
-    html += """    </table>
+    html += """
+                </table>
+            </td>
+        </tr>
+    </table>
 </body>
 </html>
 """
