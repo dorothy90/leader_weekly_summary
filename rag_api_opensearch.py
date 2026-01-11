@@ -3,11 +3,13 @@ RAG Chatbot API Server (OpenSearch 버전)
 - 사내 메신저 API 연동을 위한 REST API 서버
 - FastAPI 기반
 - OpenSearch 하이브리드 검색 (벡터 + 키워드 가중치 조절) + LLM 답변 생성
+- LangGraph ReAct Agent 기반 Tool Calling 지원
 """
 
 import os
+import json
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 from datetime import datetime
 
 from fastapi import FastAPI, HTTPException
@@ -16,8 +18,20 @@ from pydantic import BaseModel, Field
 from opensearchpy import OpenSearch
 from openai import OpenAI
 from langchain_openai import ChatOpenAI
+from langchain_core.tools import tool
+from langgraph.prebuilt import create_react_agent
 
 from dotenv import load_dotenv
+
+# OpenSearch 집계 함수 import
+from opensearch import (
+    count_weekly_reports_by_team as _count_weekly_reports_by_team,
+    count_other_mails_by_team as _count_other_mails_by_team,
+    get_missing_teams as _get_missing_teams,
+    get_mail_type_summary as _get_mail_type_summary,
+    get_unique_teams,
+    get_unique_weeks as _get_unique_weeks,
+)
 
 load_dotenv()
 
@@ -354,7 +368,7 @@ class OpenSearchClient:
 
 # ========== LLM 클라이언트 ==========
 def get_llm():
-    """LLM 클라이언트"""
+    """LLM 클라이언트 (LangChain)"""
     return ChatOpenAI(
         model=LLM_MODEL,
         api_key=OPENROUTER_API_KEY,
@@ -365,6 +379,226 @@ def get_llm():
             "X-Title": "Weekly Mail RAG Chatbot (OpenSearch)",
         },
     )
+
+
+# ========== LangGraph Tool 정의 (@tool 데코레이터) ==========
+
+
+@tool
+def count_weekly_reports_by_team(week: Optional[str] = None) -> str:
+    """주간보고 메일의 팀별 count를 조회합니다. 주간보고가 몇 개인지, 어떤 팀이 주간보고를 보냈는지 확인할 때 사용합니다.
+
+    Args:
+        week: 주차 필터 (예: 2025-48). 미지정시 전체 기간 조회
+    """
+    try:
+        result = _count_weekly_reports_by_team(week=week)
+        return json.dumps(result, ensure_ascii=False, default=str)
+    except Exception as e:
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
+
+
+@tool
+def count_other_mails_by_team(
+    week: Optional[str] = None, team: Optional[str] = None
+) -> str:
+    """주간보고 외(일반) 메일의 팀별 count를 조회합니다. 주간보고가 아닌 다른 메일이 몇 개인지 확인할 때 사용합니다.
+
+    Args:
+        week: 주차 필터 (예: 2025-48)
+        team: 특정 팀 필터 (예: YIELD팀). 미지정시 전체 팀 조회
+    """
+    try:
+        result = _count_other_mails_by_team(week=week, team=team)
+        return json.dumps(result, ensure_ascii=False, default=str)
+    except Exception as e:
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
+
+
+@tool
+def get_missing_teams(week: str) -> str:
+    """주간보고를 제출하지 않은(미제출) 팀 목록을 조회합니다.
+
+    Args:
+        week: 주차 (필수, 예: 2025-48)
+    """
+    try:
+        result = _get_missing_teams(week=week)
+        return json.dumps(result, ensure_ascii=False, default=str)
+    except Exception as e:
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
+
+
+@tool
+def get_mail_type_summary(week: Optional[str] = None) -> str:
+    """주간보고와 일반 메일의 전체 요약 통계를 조회합니다. 전반적인 현황을 파악할 때 사용합니다.
+
+    Args:
+        week: 주차 필터. 미지정시 전체 기간 조회
+    """
+    try:
+        result = _get_mail_type_summary(week=week)
+        return json.dumps(result, ensure_ascii=False, default=str)
+    except Exception as e:
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
+
+
+@tool
+def search_mail_content(
+    query: str, team: Optional[str] = None, week: Optional[str] = None
+) -> str:
+    """메일 본문 내용을 검색합니다. 특정 정보, 이슈, 키워드를 찾을 때 사용합니다. 통계가 아닌 내용 검색에 사용하세요.
+
+    Args:
+        query: 검색 질문 또는 키워드
+        team: 특정 팀 필터
+        week: 주차 필터
+    """
+    try:
+        if os_client:
+            results = os_client.search(query, team=team, week=week, limit=5)
+            formatted = [
+                {
+                    "team": r["team"],
+                    "week": r["week"],
+                    "mail_id": r["mail_id"],
+                    "text": (
+                        r["text"][:500] + "..." if len(r["text"]) > 500 else r["text"]
+                    ),
+                    "score": round(r["score"], 4),
+                }
+                for r in results
+            ]
+            return json.dumps(formatted, ensure_ascii=False, default=str)
+        return json.dumps([], ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
+
+
+@tool
+def get_available_weeks() -> str:
+    """데이터가 있는 주차 목록을 조회합니다. 어떤 주차의 데이터가 있는지 확인할 때 사용합니다."""
+    try:
+        result = _get_unique_weeks()
+        return json.dumps(result, ensure_ascii=False, default=str)
+    except Exception as e:
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
+
+
+# Tool 리스트
+AGENT_TOOLS = [
+    count_weekly_reports_by_team,
+    count_other_mails_by_team,
+    get_missing_teams,
+    get_mail_type_summary,
+    search_mail_content,
+    get_available_weeks,
+]
+
+# 시스템 프롬프트
+AGENT_SYSTEM_PROMPT = """당신은 반도체 주간 업무 보고서 시스템의 AI 어시스턴트입니다.
+
+## 역할
+- 주간보고 및 메일 관련 통계 질문에 답변합니다.
+- 메일 내용 검색 요청에 응답합니다.
+- 제공된 도구(tool)를 적절히 활용하세요.
+
+## 답변 원칙
+1. 도구 실행 결과를 바탕으로 명확하게 답변하세요.
+2. 숫자와 팀명을 정확히 포함하세요.
+3. 표 형식이 적절하면 표로 정리하세요.
+4. 결과가 없으면 솔직히 알려주세요.
+
+## 도구 사용 가이드
+- 주간보고 통계: count_weekly_reports_by_team
+- 일반 메일 통계: count_other_mails_by_team
+- 미제출 팀: get_missing_teams
+- 전체 요약: get_mail_type_summary
+- 내용 검색: search_mail_content
+- 주차 목록: get_available_weeks
+"""
+
+# LangGraph ReAct Agent (지연 초기화)
+_react_agent = None
+
+
+def get_react_agent():
+    """LangGraph ReAct Agent 가져오기 (싱글톤)"""
+    global _react_agent
+    if _react_agent is None:
+        llm = get_llm()
+        _react_agent = create_react_agent(
+            model=llm,
+            tools=AGENT_TOOLS,
+            prompt=AGENT_SYSTEM_PROMPT,
+        )
+    return _react_agent
+
+
+def chat_with_tools(
+    user_message: str, team: str = None, week: str = None
+) -> Dict[str, Any]:
+    """LangGraph ReAct Agent를 사용한 채팅
+
+    LLM이 질문을 분석하여 적절한 tool을 선택하고 실행합니다.
+    ReAct 패턴으로 multi-step 추론이 가능합니다.
+
+    Args:
+        user_message: 사용자 질문
+        team: 팀 필터 (optional)
+        week: 주차 필터 (optional)
+
+    Returns:
+        answer: LLM 답변
+        tool_calls: 호출된 tool 정보
+        tool_results: tool 실행 결과
+    """
+    agent = get_react_agent()
+
+    # 컨텍스트 정보 추가
+    context_info = ""
+    if team:
+        context_info += f"\n[컨텍스트] 팀 필터: {team}"
+    if week:
+        context_info += f"\n[컨텍스트] 주차 필터: {week}"
+
+    full_message = user_message + context_info
+
+    # Agent 실행
+    result = agent.invoke({"messages": [{"role": "user", "content": full_message}]})
+
+    # 결과 파싱
+    messages = result.get("messages", [])
+    tool_calls_info = []
+    tool_results = []
+    answer = ""
+
+    for msg in messages:
+        # AIMessage에서 tool_calls 추출
+        if hasattr(msg, "tool_calls") and msg.tool_calls:
+            for tc in msg.tool_calls:
+                tool_calls_info.append(
+                    {"name": tc.get("name", ""), "arguments": tc.get("args", {})}
+                )
+
+        # ToolMessage에서 결과 추출
+        if hasattr(msg, "type") and msg.type == "tool":
+            tool_results.append(
+                {"name": getattr(msg, "name", "unknown"), "result": msg.content}
+            )
+
+        # 마지막 AIMessage가 최종 답변
+        if hasattr(msg, "type") and msg.type == "ai" and msg.content:
+            answer = msg.content
+
+    if not answer:
+        answer = "질문을 이해하지 못했습니다. 다시 말씀해주세요."
+
+    return {
+        "answer": answer,
+        "tool_calls": tool_calls_info,
+        "tool_results": tool_results,
+    }
 
 
 # ========== RAG 로직 ==========
@@ -456,15 +690,35 @@ def extract_references(contexts: List[Dict]) -> List[Reference]:
 
 # ========== FastAPI 앱 ==========
 app = FastAPI(
-    title="Weekly Mail RAG Chatbot API (OpenSearch)",
-    description="""주간 메일 히스토리 기반 Q&A API - OpenSearch 하이브리드 검색 지원
+    title="Weekly Mail RAG Chatbot API (OpenSearch + LangGraph)",
+    description="""주간 메일 히스토리 기반 Q&A API - OpenSearch 하이브리드 검색 + LangGraph ReAct Agent 지원
 
-## 검색 가중치 설정
-- `vector_weight=1.0, keyword_weight=0.0` → 순수 벡터 검색 (의미 기반)
-- `vector_weight=0.0, keyword_weight=1.0` → 순수 키워드 검색 (형태소 기반)
-- `vector_weight=0.7, keyword_weight=0.3` → 하이브리드 (기본값, 추천)
+## 주요 기능
+
+### 1. LangGraph ReAct Agent 채팅 (/chat/v2) ⭐ NEW
+LangGraph `create_react_agent` 기반으로 LLM이 자동으로 도구를 선택합니다:
+- 통계 질문 → 집계 함수 자동 호출
+- 내용 검색 → RAG 검색 자동 호출
+- Multi-step 추론 지원 (복잡한 질문도 가능)
+
+예시 질문:
+- "2025-48주차 주간보고 팀별 count 알려줘"
+- "YIELD팀이 보낸 주간보고 외 메일은 몇 개야?"
+- "주간보고 미제출 팀은?"
+- "수율 개선 관련 이슈 알려줘"
+
+### 2. 기존 RAG 채팅 (/chat)
+- `vector_weight=1.0, keyword_weight=0.0` → 순수 벡터 검색
+- `vector_weight=0.0, keyword_weight=1.0` → 순수 키워드 검색
+- `vector_weight=0.7, keyword_weight=0.3` → 하이브리드 (기본값)
+
+### 3. 통계 API (/stats/*)
+- `/stats/weekly-reports` - 주간보고 팀별 count
+- `/stats/other-mails` - 주간보고 외 메일 팀별 count
+- `/stats/missing-teams` - 미제출 팀 조회
+- `/stats/summary` - 전체 현황 요약
 """,
-    version="2.1.0",
+    version="4.0.0",
 )
 
 # Static files 서빙 (원본 메일 HTML 조회용)
@@ -592,12 +846,158 @@ async def get_teams():
     return {"teams": TEAMS}
 
 
+# ========== Tool Calling 기반 API ==========
+
+
+class ChatV2Request(BaseModel):
+    """Tool Calling 채팅 요청"""
+
+    user_id: str
+    message: str
+    team: Optional[str] = Field(default=None, description="팀 필터")
+    week: Optional[str] = Field(default=None, description="주차 필터 (예: 2025-48)")
+
+
+class ToolCallInfo(BaseModel):
+    """Tool 호출 정보"""
+
+    name: str
+    arguments: Dict[str, Any]
+
+
+class ToolResultInfo(BaseModel):
+    """Tool 실행 결과"""
+
+    name: str
+    result: Any
+
+
+class ChatV2Response(BaseModel):
+    """Tool Calling 채팅 응답"""
+
+    answer: str
+    tool_calls: List[ToolCallInfo]
+    tool_results: List[ToolResultInfo]
+
+
+@app.post("/chat/v2", response_model=ChatV2Response)
+async def chat_v2(request: ChatV2Request):
+    """Tool Calling 기반 채팅 API
+
+    LLM이 질문을 분석하여 적절한 도구를 선택하고 실행합니다.
+
+    - 통계 질문 → 집계 함수 자동 호출
+    - 내용 검색 → RAG 검색 자동 호출
+
+    예시 질문:
+    - "2025-48주차 주간보고 팀별 count 알려줘"
+    - "YIELD팀이 보낸 주간보고 외 메일은 몇 개야?"
+    - "이번주 주간보고 미제출 팀은?"
+    - "수율 개선 이슈 뭐야?"
+    """
+    if not os_client:
+        raise HTTPException(status_code=503, detail="OpenSearch 초기화 중")
+
+    message = request.message.strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="메시지가 비어있습니다")
+
+    result = chat_with_tools(message, team=request.team, week=request.week)
+
+    return ChatV2Response(
+        answer=result["answer"],
+        tool_calls=[ToolCallInfo(**tc) for tc in result["tool_calls"]],
+        tool_results=[ToolResultInfo(**tr) for tr in result["tool_results"]],
+    )
+
+
+# ========== 통계 API ==========
+
+
+@app.get("/stats/weekly-reports")
+async def stats_weekly_reports(week: Optional[str] = None):
+    """주간보고 팀별 통계
+
+    Args:
+        week: 주차 필터 (예: 2025-48). 미지정시 전체 기간
+    """
+    try:
+        counts = _count_weekly_reports_by_team(week=week)
+        return {
+            "type": "weekly_report",
+            "week": week or "all",
+            "by_team": counts,
+            "total": sum(counts.values()),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/stats/other-mails")
+async def stats_other_mails(week: Optional[str] = None, team: Optional[str] = None):
+    """주간보고 외 메일 팀별 통계
+
+    Args:
+        week: 주차 필터
+        team: 팀 필터 (특정 팀만 조회)
+    """
+    try:
+        counts = _count_other_mails_by_team(week=week, team=team)
+        return {
+            "type": "other",
+            "week": week or "all",
+            "team": team or "all",
+            "by_team": counts,
+            "total": sum(counts.values()),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/stats/missing-teams")
+async def stats_missing_teams(week: str):
+    """주간보고 미제출 팀 조회
+
+    Args:
+        week: 주차 (필수, 예: 2025-48)
+    """
+    try:
+        missing = _get_missing_teams(week=week)
+        return {"week": week, "missing_teams": missing, "count": len(missing)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/stats/summary")
+async def stats_summary(week: Optional[str] = None):
+    """전체 메일 현황 요약
+
+    Args:
+        week: 주차 필터. 미지정시 전체 기간
+    """
+    try:
+        summary = _get_mail_type_summary(week=week)
+        return summary
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/weeks")
+async def get_weeks():
+    """데이터가 있는 주차 목록"""
+    try:
+        weeks = _get_unique_weeks()
+        return {"weeks": weeks, "count": len(weeks)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ========== 실행 ==========
 if __name__ == "__main__":
     import uvicorn
 
     print("=" * 50)
-    print("RAG Chatbot API Server (OpenSearch)")
+    print("RAG Chatbot API Server (OpenSearch + LangGraph)")
     print("=" * 50)
     print(f"  Host: {HOST}")
     print(f"  Port: {PORT}")
@@ -605,6 +1005,7 @@ if __name__ == "__main__":
     print(f"  Mail: http://localhost:{PORT}/mail/")
     print(f"  OpenSearch: {OPENSEARCH_HOST}:{OPENSEARCH_PORT}")
     print(f"  Index: {INDEX_NAME}")
+    print(f"  Agent: LangGraph ReAct Agent")
     print("=" * 50)
 
     uvicorn.run(app, host=HOST, port=PORT)

@@ -197,6 +197,13 @@ def create_index(client: OpenSearch, index_name: str = INDEX_NAME):
                 "html_path": {"type": "keyword"},
                 "part_index": {"type": "integer"},  # 청크 파트 인덱스
                 "total_parts": {"type": "integer"},  # 총 파트 수
+                # 추가 필드 (통계/분류용)
+                "subject": {
+                    "type": "text",
+                    "analyzer": "korean",
+                    "fields": {"keyword": {"type": "keyword"}},  # 정확한 매칭용
+                },
+                "mail_type": {"type": "keyword"},  # weekly_report / other
             }
         },
     }
@@ -238,6 +245,8 @@ def index_original_mail(
 
     team = meta.get("team", "unknown")
     week = meta.get("week", "unknown")
+    subject = meta.get("subject", "")
+    mail_type = meta.get("mail_type", "other")  # weekly_report / other
     mail_id = mail_dir.name
     html_path = str(mail_dir / "body.html")
 
@@ -268,6 +277,8 @@ def index_original_mail(
                 "html_path": html_path,
                 "part_index": idx,
                 "total_parts": len(chunks),
+                "subject": subject,
+                "mail_type": mail_type,
             },
         }
         actions.append(doc)

@@ -72,6 +72,34 @@ def get_week_string(dt):
     return f"{iso[0]}-{iso[1]:02d}"
 
 
+def classify_mail_type(subject: str) -> str:
+    """메일 제목으로 유형 분류
+
+    Args:
+        subject: 메일 제목
+
+    Returns:
+        "weekly_report": 주간보고 메일
+        "other": 그 외 메일
+    """
+    if not subject:
+        return "other"
+
+    subject_lower = subject.lower()
+
+    # 주간보고 패턴
+    weekly_patterns = [
+        "주간보고", "주간 보고", "weekly", "주간업무", "주간 업무",
+        "금주", "차주", "주간현황", "주간 현황", "weekly report",
+        "주간실적", "주간 실적", "주보", "w/r", "wr"
+    ]
+
+    if any(p in subject_lower for p in weekly_patterns):
+        return "weekly_report"
+
+    return "other"
+
+
 def detect_team(subject, sender):
     """제목/발신자에서 팀 이름 추출"""
     text = f"{subject} {sender}".lower()
@@ -143,6 +171,7 @@ def save_mail(mail_data, week, team, mail_idx):
         html_path.write_text(fallback_html, encoding="utf-8")
 
     # 3. 메타데이터 저장 (URL 참조용 필드 포함)
+    mail_type = classify_mail_type(mail_data.get("subject", ""))
     meta = {
         "subject": mail_data["subject"],
         "sender": mail_data["sender"],
@@ -151,6 +180,7 @@ def save_mail(mail_data, week, team, mail_idx):
         ),
         "week": week,
         "team": team,
+        "mail_type": mail_type,  # 메일 유형 (weekly_report / other)
         "inline_images": [],
         "attachments": [],
         # URL 참조용 필드 (RAG 출처 제공용)

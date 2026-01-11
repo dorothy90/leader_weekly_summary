@@ -37,8 +37,13 @@ PRODUCT_TO_TECH = {v: k for k, v in TECH_TO_PRODUCT.items()}
 
 # Tech → Domain 매핑
 TECH_TO_DOMAIN = {
-    "1a": "DRAM", "1b": "DRAM", "1c": "DRAM", "1d": "DRAM",
-    "256": "NAND", "312": "NAND", "400": "NAND",
+    "1a": "DRAM",
+    "1b": "DRAM",
+    "1c": "DRAM",
+    "1d": "DRAM",
+    "256": "NAND",
+    "312": "NAND",
+    "400": "NAND",
 }
 
 
@@ -51,7 +56,10 @@ class WorkChunk(BaseModel):
         description="도메인: COMMON(공통), DRAM, NAND, WUXI(우시 법인)"
     )
     tech: str = Field(description="세부 Tech: 공통, 1a, 1b, 1c, 1d, 256, 312, 400 등")
-    product: str = Field(default="", description="제품명: 12G LPDDR5, 16G DDR5, 512Gb TLC 등 (없으면 빈 문자열)")
+    product: str = Field(
+        default="",
+        description="제품명: 12G LPDDR5, 16G DDR5, 512Gb TLC 등 (없으면 빈 문자열)",
+    )
 
 
 class ChunkList(BaseModel):
@@ -211,7 +219,9 @@ def process_mail_folder(mail_dir: Path) -> dict:
                 found_tech = PRODUCT_TO_TECH.get(chunk_data["product"])
                 if found_tech:
                     chunk_data["tech"] = found_tech
-                    chunk_data["domain"] = TECH_TO_DOMAIN.get(found_tech, chunk_data["domain"])
+                    chunk_data["domain"] = TECH_TO_DOMAIN.get(
+                        found_tech, chunk_data["domain"]
+                    )
 
             chunks.append(chunk_data)
 
@@ -227,7 +237,7 @@ def process_mail_folder(mail_dir: Path) -> dict:
         # 분류 요약 출력
         domains = {}
         for chunk in chunks:
-            product_str = f" ({chunk['product']})" if chunk.get('product') else ""
+            product_str = f" ({chunk['product']})" if chunk.get("product") else ""
             key = f"{chunk['domain']}-{chunk['tech']}{product_str}"
             domains[key] = domains.get(key, 0) + 1
 

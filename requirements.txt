@@ -1,6 +1,8 @@
 exchangelib==5.4.2
 openai==1.58.1
 langchain-openai==0.3.0
+langchain-core>=0.3.0
+langgraph>=0.2.0
 pydantic==2.10.4
 
 # 첨부파일 처리
