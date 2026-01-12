@@ -7,6 +7,7 @@ RAG Chatbot API Server (OpenSearch 버전)
 """
 
 import os
+import re
 import json
 from pathlib import Path
 from typing import List, Dict, Optional, Any
@@ -61,6 +62,7 @@ API_BASE_URL = os.getenv("API_BASE_URL", f"http://localhost:{PORT}")
 
 # 데이터 디렉토리
 DATA_DIR = Path("data")
+MAIL_DIR = Path("mail")  # body.html 모아두는 폴더 (정적 파일 서빙용)
 
 # 팀 목록
 TEAMS = [
@@ -634,6 +636,11 @@ def generate_answer(
 3. 관련 정보가 없으면 "관련 정보를 찾을 수 없습니다"라고 답하세요.
 4. 답변은 간결하고 명확하게 작성하세요.
 5. 수치, 이슈, 액션 등 핵심 정보를 포함하세요.
+
+## 출처 표시 규칙 (중요!)
+- 답변에 사용한 정보는 해당 위치에 [문서 1], [문서 2] 형식으로 출처를 표시하세요.
+- 참고하지 않은 문서는 절대 표시하지 마세요.
+- 답변 마지막 줄에 "참고: [문서 1], [문서 3]" 형태로 사용한 문서를 요약하세요.
 """
 
     weight_info = f"벡터:{vector_weight:.0%}, 키워드:{keyword_weight:.0%}"
@@ -654,6 +661,39 @@ def generate_answer(
     return response.content
 
 
+def parse_used_references(answer: str, contexts: List[Dict]) -> tuple:
+    """LLM 답변에서 실제 참고한 문서만 추출
+
+    Args:
+        answer: LLM 답변 (출처 표시 포함)
+        contexts: 검색된 문서 리스트
+
+    Returns:
+        (정제된 답변, 참고한 contexts 리스트)
+    """
+    # [문서 N] 패턴 찾기
+    pattern = r"\[문서\s*(\d+)\]"
+    matches = re.findall(pattern, answer)
+
+    if not matches:
+        # 출처 표시가 없으면 빈 리스트 반환
+        return answer, []
+
+    # 사용된 문서 인덱스 추출 (0-indexed)
+    used_indices = set(int(m) - 1 for m in matches if int(m) - 1 < len(contexts))
+
+    # 참고한 문서만 필터링
+    used_contexts = [ctx for i, ctx in enumerate(contexts) if i in used_indices]
+
+    # "참고: [문서 1], [문서 3]" 부분 제거 (출처는 별도로 표시하므로)
+    clean_answer = re.sub(
+        r"\n*참고:\s*(\[문서\s*\d+\],?\s*)+\.?$", "", answer, flags=re.MULTILINE
+    )
+    clean_answer = clean_answer.strip()
+
+    return clean_answer, used_contexts
+
+
 def extract_references(contexts: List[Dict]) -> List[Reference]:
     """검색 결과에서 참조 출처 추출"""
     refs = []
@@ -671,8 +711,8 @@ def extract_references(contexts: List[Dict]) -> List[Reference]:
             continue
         seen.add(key)
 
-        # /mail 경로로 static files 서빙
-        url = f"{API_BASE_URL}/mail/{week}/{team}/{mail_id}/body.html"
+        # /mail 경로로 static files 서빙: {week}_{team}_{mail_id}.html 형식
+        url = f"{API_BASE_URL}/mail/{week}_{team}_{mail_id}.html"
         refs.append(
             Reference(
                 team=team,
@@ -686,6 +726,20 @@ def extract_references(contexts: List[Dict]) -> List[Reference]:
         )
 
     return refs
+
+
+def format_answer_with_references(answer: str, references: List[Reference]) -> str:
+    """답변에 출처 정보를 포함하여 반환"""
+    if not references:
+        return answer
+
+    # 출처 섹션 구성: URL은 대괄호 없이 표시 (클릭 가능하도록)
+    ref_lines = ["\n\n━━━━━━━━━━━━━━━━━━━━", "📎 참고 출처:"]
+    for ref in references:
+        ref_lines.append(f"  • {ref.team} | {ref.week}")
+        ref_lines.append(f"    {ref.url}")
+
+    return answer + "\n".join(ref_lines)
 
 
 # ========== FastAPI 앱 ==========
@@ -722,9 +776,9 @@ LangGraph `create_react_agent` 기반으로 LLM이 자동으로 도구를 선택
 )
 
 # Static files 서빙 (원본 메일 HTML 조회용)
-# /mail/{week}/{team}/{mail_id}/body.html 경로로 접근 가능
-if DATA_DIR.exists():
-    app.mount("/mail", StaticFiles(directory=str(DATA_DIR)), name="mail")
+# /mail/{week}_{team}_{mail_id}.html 경로로 접근 가능
+MAIL_DIR.mkdir(exist_ok=True)
+app.mount("/mail", StaticFiles(directory=str(MAIL_DIR)), name="mail")
 
 # 전역 클라이언트
 os_client: Optional[OpenSearchClient] = None
@@ -779,18 +833,24 @@ async def chat(request: ChatRequest):
     )
 
     # 2. LLM 답변 생성
-    answer = generate_answer(
+    raw_answer = generate_answer(
         query,
         contexts,
         request.vector_weight,
         request.keyword_weight,
     )
 
-    # 3. 참조 출처 추출
-    references = extract_references(contexts)
+    # 3. 실제 참고한 문서만 추출
+    clean_answer, used_contexts = parse_used_references(raw_answer, contexts)
+
+    # 4. 참조 출처 추출 (사용된 문서만)
+    references = extract_references(used_contexts)
+
+    # 5. 답변에 출처 포함
+    answer_with_refs = format_answer_with_references(clean_answer, references)
 
     return ChatResponse(
-        answer=answer,
+        answer=answer_with_refs,
         references=references,
         vector_weight=request.vector_weight,
         keyword_weight=request.keyword_weight,

@@ -11,6 +11,7 @@ from typing import List, Dict, Optional
 from datetime import datetime
 
 from fastapi import FastAPI, HTTPException
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import chromadb
 from chromadb.utils import embedding_functions
@@ -26,8 +27,15 @@ COLLECTION_NAME = "weekly_mail"
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "your_api_key")
 MODEL = "gpt-oss-120b"
 
-# 메일 서버 URL (원본 HTML 조회용)
-MAIL_SERVER_URL = os.getenv("MAIL_SERVER_URL", "http://mail-server.internal")
+# 메일 HTML 파일 저장 폴더
+MAIL_DIR = Path("mail")
+
+# API 서버 설정
+HOST = "0.0.0.0"
+PORT = 8001
+
+# 메일 서버 URL (body.html 정적 파일 서빙용)
+MAIL_SERVER_URL = os.getenv("MAIL_SERVER_URL", f"http://localhost:{PORT}/mail")
 
 # 팀 목록
 TEAMS = [
@@ -206,7 +214,8 @@ def extract_references(contexts: List[Dict]) -> List[Reference]:
             continue
         seen.add(key)
 
-        url = f"{MAIL_SERVER_URL}/{week}/{team}/{mail_id}/body.html"
+        # URL 형식: /mail/{week}_{team}_{mail_id}.html
+        url = f"{MAIL_SERVER_URL}/{week}_{team}_{mail_id}.html"
         refs.append(
             Reference(
                 team=team,
@@ -217,6 +226,20 @@ def extract_references(contexts: List[Dict]) -> List[Reference]:
         )
 
     return refs
+
+
+def format_answer_with_references(answer: str, references: List[Reference]) -> str:
+    """답변에 출처 정보를 포함하여 반환"""
+    if not references:
+        return answer
+
+    # 출처 섹션 구성: URL은 대괄호 없이 표시 (클릭 가능하도록)
+    ref_lines = ["\n\n━━━━━━━━━━━━━━━━━━━━", "📎 참고 출처:"]
+    for ref in references:
+        ref_lines.append(f"  • {ref.team} | {ref.week}")
+        ref_lines.append(f"    {ref.url}")
+
+    return answer + "\n".join(ref_lines)
 
 
 # ========== FastAPI 앱 ==========
@@ -232,11 +255,18 @@ db_client: Optional[ChromaDBClient] = None
 
 @app.on_event("startup")
 async def startup():
-    """서버 시작 시 ChromaDB 클라이언트 초기화"""
+    """서버 시작 시 ChromaDB 클라이언트 초기화 및 정적 파일 서빙 설정"""
     global db_client
     CHROMA_DIR.mkdir(exist_ok=True)
+    MAIL_DIR.mkdir(exist_ok=True)
     db_client = ChromaDBClient()
     print(f"✅ ChromaDB 초기화 완료: {db_client.get_stats()}")
+    print(f"📁 메일 HTML 서빙 경로: {MAIL_DIR.absolute()}")
+
+
+# 정적 파일 서빙: /mail 경로로 mail 폴더 제공
+MAIL_DIR.mkdir(exist_ok=True)  # 폴더 미리 생성
+app.mount("/mail", StaticFiles(directory=str(MAIL_DIR)), name="mail")
 
 
 @app.get("/health")
@@ -268,8 +298,11 @@ async def chat(request: ChatRequest):
     # 3. 참조 출처 추출
     references = extract_references(contexts)
 
+    # 4. 답변에 출처 포함
+    answer_with_refs = format_answer_with_references(answer, references)
+
     return ChatResponse(
-        answer=answer,
+        answer=answer_with_refs,
         references=references,
     )
 
@@ -278,16 +311,13 @@ async def chat(request: ChatRequest):
 if __name__ == "__main__":
     import uvicorn
 
-    # 서버 설정
-    HOST = "0.0.0.0"
-    PORT = 8001
-
     print("=" * 50)
     print("RAG Chatbot API Server")
     print("=" * 50)
     print(f"  Host: {HOST}")
     print(f"  Port: {PORT}")
     print(f"  Docs: http://localhost:{PORT}/docs")
+    print(f"  Mail: http://localhost:{PORT}/mail/")
     print("=" * 50)
 
     uvicorn.run(app, host=HOST, port=PORT)

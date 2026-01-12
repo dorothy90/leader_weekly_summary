@@ -8,6 +8,7 @@ import os
 import re
 import json
 import base64
+import shutil
 from pathlib import Path
 from datetime import datetime, timedelta
 from urllib.parse import quote
@@ -29,6 +30,7 @@ PASSWORD = "rlaeorka1!"
 # PASSWORD = os.getenv("EWS_PASSWORD", "your_password")
 TARGET_RECIPIENT = "2067627@skhynix.com"
 DATA_DIR = Path("data")  # 저장 폴더
+MAIL_DIR = Path("mail")  # body.html 모아두는 폴더 (RAG API 서빙용)
 
 
 # %%
@@ -213,8 +215,35 @@ def save_mail(mail_data, week, team, mail_idx):
         json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
+    # 6. mail 폴더에 body.html 복사 (RAG API 서빙용)
+    mail_id = f"mail_{mail_idx:03d}"
+    copy_body_html_to_mail_dir(html_path, week, team, mail_id)
+
     print(f"   💾 저장: {mail_dir}")
     return mail_dir
+
+
+def copy_body_html_to_mail_dir(source_html_path: Path, week: str, team: str, mail_id: str):
+    """body.html을 mail 폴더에 복사 (RAG API 서빙용)
+
+    Args:
+        source_html_path: 원본 body.html 경로
+        week: 주차 (예: 2025-48)
+        team: 팀명 (예: FA팀)
+        mail_id: 메일 ID (예: mail_001)
+
+    파일명 형식: {week}_{team}_{mail_id}.html
+    예: 2025-48_FA팀_mail_001.html
+    """
+    MAIL_DIR.mkdir(exist_ok=True)
+
+    # 파일명: {week}_{team}_{mail_id}.html
+    dest_filename = f"{week}_{team}_{mail_id}.html"
+    dest_path = MAIL_DIR / dest_filename
+
+    if source_html_path.exists():
+        shutil.copy2(source_html_path, dest_path)
+        print(f"   📄 복사: {dest_path}")
 
 
 def fetch_mails(account, days_back=7):
@@ -347,5 +376,54 @@ def main():
         print(f"   {week} / {team}: {count}개")
 
 
+def sync_existing_body_html():
+    """기존 data 폴더의 body.html을 mail 폴더로 복사
+
+    이미 수집된 메일들을 mail 폴더로 동기화할 때 사용
+    """
+    print("=" * 50)
+    print("📂 기존 body.html 파일을 mail 폴더로 동기화")
+    print("=" * 50)
+
+    MAIL_DIR.mkdir(exist_ok=True)
+    copied_count = 0
+
+    # data/{week}/{team}/mail_xxx/body.html 순회
+    for week_dir in DATA_DIR.iterdir():
+        if not week_dir.is_dir():
+            continue
+        week = week_dir.name
+
+        for team_dir in week_dir.iterdir():
+            if not team_dir.is_dir():
+                continue
+            team = team_dir.name
+
+            for mail_dir in team_dir.iterdir():
+                if not mail_dir.is_dir():
+                    continue
+                mail_id = mail_dir.name
+
+                body_html = mail_dir / "body.html"
+                if body_html.exists():
+                    dest_filename = f"{week}_{team}_{mail_id}.html"
+                    dest_path = MAIL_DIR / dest_filename
+                    shutil.copy2(body_html, dest_path)
+                    copied_count += 1
+                    print(f"   ✅ {dest_filename}")
+
+    print("=" * 50)
+    print(f"✅ 총 {copied_count}개 파일 복사 완료")
+    print(f"📁 저장 위치: {MAIL_DIR.absolute()}")
+    print("=" * 50)
+
+
 if __name__ == "__main__":
-    main()
+    import sys
+
+    if len(sys.argv) > 1 and sys.argv[1] == "--sync":
+        # 기존 파일 동기화 모드
+        sync_existing_body_html()
+    else:
+        # 기본 메일 수집 모드
+        main()
