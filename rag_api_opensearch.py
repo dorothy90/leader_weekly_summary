@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 from typing import List, Dict, Optional, Any
 from datetime import datetime
+from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
@@ -253,77 +254,82 @@ class OpenSearchClient:
         vector_weight: float = 0.7,
         keyword_weight: float = 0.3,
     ) -> List[Dict]:
-        """하이브리드 검색 (벡터 + 키워드)
+        """네이티브 하이브리드 검색 (단일 쿼리로 벡터 + 키워드)
 
-        최종 점수 = (벡터 유사도 × vector_weight) + (키워드 BM25 × keyword_weight)
+        OpenSearch에 1번의 요청으로 벡터/키워드 검색을 동시에 수행합니다.
 
         가중치 설정:
         - vector_weight=1.0, keyword_weight=0.0 → 순수 벡터 검색
         - vector_weight=0.0, keyword_weight=1.0 → 순수 키워드 검색
         - vector_weight=0.7, keyword_weight=0.3 → 하이브리드 (기본값)
         """
-        # 가중치 정규화 (합이 1이 아닐 경우)
+        # 가중치 정규화
         total_weight = vector_weight + keyword_weight
         if total_weight > 0:
             vector_weight = vector_weight / total_weight
             keyword_weight = keyword_weight / total_weight
         else:
-            # 둘 다 0인 경우 기본값
             vector_weight = 0.7
             keyword_weight = 0.3
 
-        score_map = {}
+        # 순수 키워드 검색 (벡터 가중치가 0인 경우)
+        if vector_weight == 0:
+            return self._search_keyword(query, team, week, limit)
 
-        # 1. 벡터 검색 (가중치가 0보다 클 때만)
-        if vector_weight > 0:
-            vector_results = self._search_vector(query, team, week, limit=limit * 2)
-            if vector_results:
-                max_vector = max(r["score"] for r in vector_results)
-                for r in vector_results:
-                    key = f"{r['team']}_{r['week']}_{r['mail_id']}_{r.get('part_index', 0)}"
-                    normalized_score = r["score"] / max_vector if max_vector > 0 else 0
-                    score_map[key] = {
-                        "vector_score": normalized_score,
-                        "keyword_score": 0,
-                        "doc": r,
-                    }
+        # 순수 벡터 검색 (키워드 가중치가 0인 경우)
+        if keyword_weight == 0:
+            return self._search_vector(query, team, week, limit)
 
-        # 2. 키워드 검색 (가중치가 0보다 클 때만)
-        if keyword_weight > 0:
-            keyword_results = self._search_keyword(query, team, week, limit=limit * 2)
-            if keyword_results:
-                max_keyword = max(r["score"] for r in keyword_results)
-                for r in keyword_results:
-                    key = f"{r['team']}_{r['week']}_{r['mail_id']}_{r.get('part_index', 0)}"
-                    normalized_score = (
-                        r["score"] / max_keyword if max_keyword > 0 else 0
-                    )
-                    if key in score_map:
-                        score_map[key]["keyword_score"] = normalized_score
-                    else:
-                        score_map[key] = {
-                            "vector_score": 0,
-                            "keyword_score": normalized_score,
-                            "doc": r,
-                        }
+        # 하이브리드 검색: 단일 쿼리로 knn + match 결합
+        query_embedding = self._get_embedding(query)
 
-        # 3. 최종 점수 계산 및 정렬
-        final_results = []
-        for key, data in score_map.items():
-            final_score = (
-                data["vector_score"] * vector_weight
-                + data["keyword_score"] * keyword_weight
-            )
-            doc = data["doc"]
-            doc["score"] = final_score
-            doc["vector_score"] = data["vector_score"]
-            doc["keyword_score"] = data["keyword_score"]
-            final_results.append(doc)
+        # 필터 구성
+        filters = []
+        if team:
+            filters.append({"term": {"team": team}})
+        if week:
+            filters.append({"term": {"week": week}})
 
-        # 점수 내림차순 정렬
-        final_results.sort(key=lambda x: x["score"], reverse=True)
+        # boost 값 계산 (상대적 가중치 반영)
+        # BM25 점수가 보통 5~20 범위, knn 점수가 0~1 범위이므로 스케일 조정
+        knn_boost = vector_weight * 10  # knn 점수 스케일업
+        bm25_boost = keyword_weight
 
-        return final_results[:limit]
+        # 네이티브 하이브리드 쿼리 (단일 요청)
+        search_body = {
+            "size": limit,
+            "query": {
+                "bool": {
+                    "should": [
+                        # 벡터 검색 (k-NN)
+                        {
+                            "knn": {
+                                "embedding": {
+                                    "vector": query_embedding,
+                                    "k": limit,
+                                    "boost": knn_boost,
+                                }
+                            }
+                        },
+                        # 키워드 검색 (BM25)
+                        {
+                            "match": {
+                                "text": {
+                                    "query": query,
+                                    "analyzer": "korean",
+                                    "boost": bm25_boost,
+                                }
+                            }
+                        },
+                    ],
+                    "filter": filters if filters else [],
+                    "minimum_should_match": 1,
+                }
+            },
+        }
+
+        response = self.client.search(index=self.index_name, body=search_body)
+        return self._parse_results(response)
 
     def _parse_results(self, response: Dict) -> List[Dict]:
         """검색 결과 파싱"""
@@ -446,19 +452,17 @@ def get_mail_type_summary(week: Optional[str] = None) -> str:
 
 
 @tool
-def search_mail_content(
-    query: str, team: Optional[str] = None, week: Optional[str] = None
-) -> str:
-    """메일 본문 내용을 검색합니다. 특정 정보, 이슈, 키워드를 찾을 때 사용합니다. 통계가 아닌 내용 검색에 사용하세요.
+def search_mail_content(query: str, week: Optional[str] = None) -> str:
+    """메일 본문 내용을 검색합니다. 팀명, 제품군(NAND/DRAM), 키워드를 모두 query에 포함시키세요.
 
     Args:
-        query: 검색 질문 또는 키워드
-        team: 특정 팀 필터
+        query: 검색 질문 또는 키워드 (팀명, 제품군 포함)
         week: 주차 필터
     """
     try:
         if os_client:
-            results = os_client.search(query, team=team, week=week, limit=5)
+            # team 필터 없이 검색 (팀명은 query에 포함)
+            results = os_client.search(query, team=None, week=week, limit=5)
             formatted = [
                 {
                     "team": r["team"],
@@ -504,6 +508,20 @@ AGENT_SYSTEM_PROMPT = """당신은 반도체 주간 업무 보고서 시스템�
 - 주간보고 및 메일 관련 통계 질문에 답변합니다.
 - 메일 내용 검색 요청에 응답합니다.
 - 제공된 도구(tool)를 적절히 활용하세요.
+
+## 검색 규칙 (중요!)
+search_mail_content 사용 시:
+- 팀명, 제품군(NAND/DRAM), 키워드를 **모두 query에 포함**시키세요.
+- 축약어도 그대로 사용하세요 (예: CL팀, 256단 등).
+
+예시:
+- "NAND M0C단 이슈" → query="NAND M0C단 이슈"
+- "CL팀 수율" → query="CL팀 수율"
+- "DRAM 불량 분석" → query="DRAM 불량 분석"
+
+## 참고: 예외 팀-제품군 매핑
+다음 팀들은 이름에 NAND/DRAM이 없지만 해당 제품군입니다:
+- 256단 수율팀, Colosseum수율팀 → NAND
 
 ## 답변 원칙
 1. 도구 실행 결과를 바탕으로 명확하게 답변하세요.
@@ -712,7 +730,9 @@ def extract_references(contexts: List[Dict]) -> List[Reference]:
         seen.add(key)
 
         # /mail 경로로 static files 서빙: {week}_{team}_{mail_id}.html 형식
-        url = f"{API_BASE_URL}/mail/{week}_{team}_{mail_id}.html"
+        # URL 인코딩 적용 (팀명 등에 띄어쓰기가 있을 경우 대비)
+        filename = f"{week}_{team}_{mail_id}.html"
+        url = f"{API_BASE_URL}/mail/{quote(filename, safe='')}"
         refs.append(
             Reference(
                 team=team,
@@ -740,6 +760,70 @@ def format_answer_with_references(answer: str, references: List[Reference]) -> s
         ref_lines.append(f"    {ref.url}")
 
     return answer + "\n".join(ref_lines)
+
+
+def convert_table_to_bullet(text: str) -> str:
+    """마크다운 표를 개조식으로 변환 (사내 메신저 richnotification 호환용)"""
+    lines = text.split("\n")
+    result = []
+    table_lines = []
+    in_table = False
+
+    for line in lines:
+        # 표 시작 감지 (| 로 시작하는 라인)
+        if line.strip().startswith("|") and "|" in line[1:]:
+            in_table = True
+            table_lines.append(line)
+        else:
+            # 표 끝났으면 변환
+            if in_table and table_lines:
+                result.append(_parse_table_to_bullet(table_lines))
+                table_lines = []
+                in_table = False
+            result.append(line)
+
+    # 마지막 표 처리
+    if table_lines:
+        result.append(_parse_table_to_bullet(table_lines))
+
+    return "\n".join(result)
+
+
+def _parse_table_to_bullet(table_lines: list) -> str:
+    """표 라인들을 개조식으로 변환"""
+    rows = []
+    headers = []
+
+    for i, line in enumerate(table_lines):
+        # 구분선 스킵 (|---|---|)
+        if re.match(r"^\|[\s\-:\|]+\|?$", line.strip()):
+            continue
+
+        # 셀 파싱
+        cells = [c.strip() for c in line.split("|")]
+        # 앞뒤 빈 셀 제거 (| col1 | col2 | 형식에서 발생)
+        cells = [c for c in cells if c]
+
+        if not headers:
+            headers = cells
+        else:
+            rows.append(cells)
+
+    # 개조식으로 변환
+    bullet_lines = []
+    for row in rows:
+        if len(headers) == len(row) and len(row) >= 2:
+            # 첫 번째 컬럼을 제목으로, 나머지는 속성으로
+            item = f"• {row[0]}"
+            details = [f"{headers[j]}: {row[j]}" for j in range(1, len(row)) if row[j]]
+            if details:
+                item += f" ({', '.join(details)})"
+            bullet_lines.append(item)
+        elif row:
+            # 헤더 없거나 맞지 않으면 그냥 나열
+            bullet_lines.append(f"• {' | '.join(row)}")
+
+    return "\n".join(bullet_lines) if bullet_lines else ""
 
 
 # ========== FastAPI 앱 ==========
@@ -938,6 +1022,7 @@ class ChatV2Response(BaseModel):
     answer: str
     tool_calls: List[ToolCallInfo]
     tool_results: List[ToolResultInfo]
+    references: List[Reference] = Field(default=[], description="참조 출처 목록")
 
 
 @app.post("/chat/v2", response_model=ChatV2Response)
@@ -964,10 +1049,27 @@ async def chat_v2(request: ChatV2Request):
 
     result = chat_with_tools(message, team=request.team, week=request.week)
 
+    # tool_results에서 search_mail_content 결과 추출하여 references 생성
+    references = []
+    for tr in result["tool_results"]:
+        if tr["name"] == "search_mail_content":
+            try:
+                search_results = json.loads(tr["result"])
+                if isinstance(search_results, list) and search_results:
+                    # 검색 결과에서 참조 출처 추출
+                    references = extract_references(search_results)
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+    # 표를 개조식으로 변환 (사내 메신저 richnotification 호환)
+    answer_converted = convert_table_to_bullet(result["answer"])
+
+    # 출처는 references 필드로 분리 (클라이언트에서 별도 처리)
     return ChatV2Response(
-        answer=result["answer"],
+        answer=answer_converted,
         tool_calls=[ToolCallInfo(**tc) for tc in result["tool_calls"]],
         tool_results=[ToolResultInfo(**tr) for tr in result["tool_results"]],
+        references=references,
     )
 
 

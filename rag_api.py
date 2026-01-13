@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 from typing import List, Dict, Optional
 from datetime import datetime
+from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
@@ -215,7 +216,9 @@ def extract_references(contexts: List[Dict]) -> List[Reference]:
         seen.add(key)
 
         # URL 형식: /mail/{week}_{team}_{mail_id}.html
-        url = f"{MAIL_SERVER_URL}/{week}_{team}_{mail_id}.html"
+        # URL 인코딩 적용 (팀명 등에 띄어쓰기가 있을 경우 대비)
+        filename = f"{week}_{team}_{mail_id}.html"
+        url = f"{MAIL_SERVER_URL}/{quote(filename, safe='')}"
         refs.append(
             Reference(
                 team=team,
