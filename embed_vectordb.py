@@ -6,6 +6,7 @@
 """
 
 import os
+import re
 import json
 from pathlib import Path
 from typing import List, Dict, Any, Optional
@@ -31,8 +32,8 @@ INDEX_NAME = "weekly_mail"
 DATA_DIR = Path("data")
 
 # 청킹 설정
-CHUNK_SIZE = 5000  # 5000자
-CHUNK_OVERLAP = 1000  # 1000자 오버랩 (20%)
+CHUNK_SIZE = 1500  # 1500자 (context 효율화)
+CHUNK_OVERLAP = 300  # 300자 오버랩 (20%)
 
 
 # ========== OpenSearch 클라이언트 ==========
@@ -81,6 +82,38 @@ def get_embeddings_batch(texts: List[str], client: OpenAI) -> List[List[float]]:
         input=truncated_texts,
     )
     return [item.embedding for item in response.data]
+
+
+# ========== 텍스트 전처리 ==========
+def clean_table_garbage(text: str) -> str:
+    """표 관련 garbage 패턴 정제 (Vision 출력 후처리)
+
+    - 연속된 | 패턴 제거 (|||||| 등)
+    - 빈 markdown 표 행 제거
+    - 반복 패턴 압축
+    """
+    if not text:
+        return text
+
+    # 1. 연속된 | 문자 축소 (|||| → |)
+    text = re.sub(r"\|{2,}", "|", text)
+
+    # 2. 빈 테이블 셀만 있는 패턴 제거 (| | | | 등)
+    text = re.sub(r"\|(\s*\|)+", "|", text)
+
+    # 3. 빈 markdown 표 행 제거 (| 만 있거나 |---|---| 형태)
+    text = re.sub(r"^\s*\|[\s\|\-:]*\|\s*$", "", text, flags=re.MULTILINE)
+
+    # 4. 단독 | 또는 |만 있는 줄 제거
+    text = re.sub(r"^\s*\|?\s*$", "", text, flags=re.MULTILINE)
+
+    # 5. 연속된 빈 줄 압축
+    text = re.sub(r"\n{3,}", "\n\n", text)
+
+    # 6. 동일 패턴 5회 이상 반복 제거 (예: "| | |\n" 반복)
+    text = re.sub(r"(.{5,50}?)\1{4,}", r"\1", text)
+
+    return text.strip()
 
 
 # ========== 텍스트 청킹 ==========
@@ -234,6 +267,11 @@ def index_original_mail(
         return None
 
     combined_text = combined_path.read_text(encoding="utf-8")
+    if not combined_text.strip():
+        return None
+
+    # 표 garbage 전처리 (Vision 출력 정제)
+    combined_text = clean_table_garbage(combined_text)
     if not combined_text.strip():
         return None
 

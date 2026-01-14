@@ -18,7 +18,7 @@ DATA_DIR = Path("data")
 
 # 타임아웃 & 재시도 설정
 VISION_TIMEOUT = 60  # 1분 타임아웃
-MAX_RETRIES = 3      # 최대 재시도 횟수
+MAX_RETRIES = 3  # 최대 재시도 횟수
 
 # OpenRouter 클라이언트 (타임아웃 설정)
 client = OpenAI(
@@ -31,11 +31,16 @@ client = OpenAI(
 VISION_PROMPT = """이미지에서 모든 정보를 추출해주세요.
 
 규칙:
-1. 모든 텍스트, 수치, 표를 빠짐없이 추출
-2. 표는 markdown 형식으로 변환
+1. 모든 텍스트, 수치를 빠짐없이 추출
+2. 표 처리 규칙:
+   - 빈 셀은 생략하고, 데이터가 있는 셀만 추출
+   - markdown 표 대신 "행제목: 열제목=값" 형식으로 작성
+   - 예: "1월: 매출=100, 비용=50"
+   - 빈 행/열이 연속되면 무시
 3. 그래프는 "항목: 값" 형태로 풀어서 작성
 4. 보이지 않는 내용은 추측하지 말 것
 5. 흐릿한 부분은 [불명확]으로 표시
+6. "|" 기호는 사용하지 말 것
 
 추출 결과:"""
 
@@ -100,7 +105,9 @@ def extract_text_from_image(image_path):
                 print(f"      ⏳ {wait_time}초 후 재시도...")
                 time.sleep(wait_time)
             else:
-                print(f"   ❌ Vision 최종 실패 ({image_path.name}): {MAX_RETRIES}회 시도 모두 실패")
+                print(
+                    f"   ❌ Vision 최종 실패 ({image_path.name}): {MAX_RETRIES}회 시도 모두 실패"
+                )
                 return f"[Vision 추출 실패: {MAX_RETRIES}회 시도 후 실패 - {e}]"
 
 
@@ -134,10 +141,12 @@ def process_mail_folder(mail_dir):
             txt_path = file.with_suffix(".txt")
             txt_path.write_text(extracted_text, encoding="utf-8")
 
-            vision_results.append({
-                "filename": file.name,
-                "text": extracted_text,
-            })
+            vision_results.append(
+                {
+                    "filename": file.name,
+                    "text": extracted_text,
+                }
+            )
             print(f"   ✅ 저장: {txt_path.name}")
 
     # 3. combined.txt 생성 (body + vision)
@@ -211,4 +220,3 @@ def process_all():
 
 if __name__ == "__main__":
     process_all()
-

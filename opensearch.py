@@ -533,6 +533,18 @@ def count_weekly_reports_by_team(week: str = None) -> Dict[str, int]:
     return count_mails_by_team(mail_type="weekly_report", week=week)
 
 
+def count_daily_reports_by_team(week: str = None) -> Dict[str, int]:
+    """일일보고 메일 팀별 count
+
+    Args:
+        week: 주차 필터 (예: "2025-48"). None이면 전체 기간
+
+    Returns:
+        팀별 일일보고 메일 수
+    """
+    return count_mails_by_team(mail_type="daily_report", week=week)
+
+
 def count_other_mails_by_team(week: str = None, team: str = None) -> Dict[str, int]:
     """주간보고 외 메일 팀별 count
 

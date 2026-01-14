@@ -28,6 +28,7 @@ from dotenv import load_dotenv
 # OpenSearch 집계 함수 import
 from opensearch import (
     count_weekly_reports_by_team as _count_weekly_reports_by_team,
+    count_daily_reports_by_team as _count_daily_reports_by_team,
     count_other_mails_by_team as _count_other_mails_by_team,
     get_missing_teams as _get_missing_teams,
     get_mail_type_summary as _get_mail_type_summary,
@@ -407,6 +408,20 @@ def count_weekly_reports_by_team(week: Optional[str] = None) -> str:
 
 
 @tool
+def count_daily_reports_by_team(week: Optional[str] = None) -> str:
+    """일일보고(daily) 메일의 팀별 count를 조회합니다. 일일보고가 몇 개인지, 어떤 팀이 일일보고를 보냈는지 확인할 때 사용합니다.
+
+    Args:
+        week: 주차 필터 (예: 2025-48). 미지정시 전체 기간 조회
+    """
+    try:
+        result = _count_daily_reports_by_team(week=week)
+        return json.dumps(result, ensure_ascii=False, default=str)
+    except Exception as e:
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
+
+
+@tool
 def count_other_mails_by_team(
     week: Optional[str] = None, team: Optional[str] = None
 ) -> str:
@@ -494,6 +509,7 @@ def get_available_weeks() -> str:
 # Tool 리스트
 AGENT_TOOLS = [
     count_weekly_reports_by_team,
+    count_daily_reports_by_team,
     count_other_mails_by_team,
     get_missing_teams,
     get_mail_type_summary,
@@ -523,6 +539,12 @@ search_mail_content 사용 시:
 다음 팀들은 이름에 NAND/DRAM이 없지만 해당 제품군입니다:
 - 256단 수율팀, Colosseum수율팀 → NAND
 
+## 날짜/주차 해석 규칙
+- "이번주", "이번 주차", "현재 주차" → 컨텍스트에 제공된 "이번주" 값을 사용
+- "지난주", "저번주" → 이번주 - 1주차 계산
+- "다음주" → 이번주 + 1주차 계산
+- 주차는 "YYYY-WW" 형식 (예: 2025-48)
+
 ## 답변 원칙
 1. 도구 실행 결과를 바탕으로 명확하게 답변하세요.
 2. 숫자와 팀명을 정확히 포함하세요.
@@ -531,6 +553,7 @@ search_mail_content 사용 시:
 
 ## 도구 사용 가이드
 - 주간보고 통계: count_weekly_reports_by_team
+- 일일보고 통계: count_daily_reports_by_team
 - 일반 메일 통계: count_other_mails_by_team
 - 미제출 팀: get_missing_teams
 - 전체 요약: get_mail_type_summary
@@ -575,8 +598,15 @@ def chat_with_tools(
     """
     agent = get_react_agent()
 
+    # 현재 날짜 및 주차 계산
+    now = datetime.now()
+    iso_cal = now.isocalendar()
+    current_week = f"{iso_cal[0]}-{iso_cal[1]:02d}"
+
     # 컨텍스트 정보 추가
-    context_info = ""
+    context_info = (
+        f"\n[컨텍스트] 오늘 날짜: {now.strftime('%Y-%m-%d')}, 이번주: {current_week}"
+    )
     if team:
         context_info += f"\n[컨텍스트] 팀 필터: {team}"
     if week:
@@ -1049,20 +1079,28 @@ async def chat_v2(request: ChatV2Request):
 
     result = chat_with_tools(message, team=request.team, week=request.week)
 
-    # tool_results에서 search_mail_content 결과 추출하여 references 생성
+    # tool_results에서 search_mail_content 결과 추출
     references = []
+    search_contexts = []
     for tr in result["tool_results"]:
         if tr["name"] == "search_mail_content":
             try:
                 search_results = json.loads(tr["result"])
                 if isinstance(search_results, list) and search_results:
-                    # 검색 결과에서 참조 출처 추출
-                    references = extract_references(search_results)
+                    search_contexts = search_results
             except (json.JSONDecodeError, TypeError):
                 pass
 
+    # 실제 참고한 문서만 필터링하여 references 생성
+    answer = result["answer"]
+    if search_contexts:
+        clean_answer, used_contexts = parse_used_references(answer, search_contexts)
+        references = extract_references(used_contexts)
+    else:
+        clean_answer = answer
+
     # 표를 개조식으로 변환 (사내 메신저 richnotification 호환)
-    answer_converted = convert_table_to_bullet(result["answer"])
+    answer_converted = convert_table_to_bullet(clean_answer)
 
     # 출처는 references 필드로 분리 (클라이언트에서 별도 처리)
     return ChatV2Response(

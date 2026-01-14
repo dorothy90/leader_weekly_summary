@@ -75,31 +75,44 @@ def get_week_string(dt):
 
 
 def classify_mail_type(subject: str) -> str:
-    """메일 제목으로 유형 분류
+    """메일 제목으로 유형 분류 (binary)
 
     Args:
         subject: 메일 제목
 
     Returns:
         "weekly_report": 주간보고 메일
-        "other": 그 외 메일
+        "daily_report": 주간보고 외 모든 메일 (일일보고 포함)
     """
     if not subject:
-        return "other"
+        return "daily_report"
 
     subject_lower = subject.lower()
 
     # 주간보고 패턴
     weekly_patterns = [
-        "주간보고", "주간 보고", "weekly", "주간업무", "주간 업무",
-        "금주", "차주", "주간현황", "주간 현황", "weekly report",
-        "주간실적", "주간 실적", "주보", "w/r", "wr"
+        "주간보고",
+        "주간 보고",
+        "weekly",
+        "주간업무",
+        "주간 업무",
+        "금주",
+        "차주",
+        "주간현황",
+        "주간 현황",
+        "weekly report",
+        "주간실적",
+        "주간 실적",
+        "주보",
+        "w/r",
+        "wr",
     ]
 
     if any(p in subject_lower for p in weekly_patterns):
         return "weekly_report"
 
-    return "other"
+    # 주간보고 외 모든 메일은 daily_report
+    return "daily_report"
 
 
 def detect_team(subject, sender):
@@ -223,7 +236,9 @@ def save_mail(mail_data, week, team, mail_idx):
     return mail_dir
 
 
-def copy_body_html_to_mail_dir(source_html_path: Path, week: str, team: str, mail_id: str):
+def copy_body_html_to_mail_dir(
+    source_html_path: Path, week: str, team: str, mail_id: str
+):
     """body.html을 mail 폴더에 복사 (RAG API 서빙용)
 
     Args:
