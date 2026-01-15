@@ -4,11 +4,13 @@ RAG Chatbot API Server (OpenSearch 버전)
 - FastAPI 기반
 - OpenSearch 하이브리드 검색 (벡터 + 키워드 가중치 조절) + LLM 답변 생성
 - LangGraph ReAct Agent 기반 Tool Calling 지원
+- MongoDB 기반 멀티턴 대화 히스토리 관리
 """
 
 import os
 import re
 import json
+import asyncio
 from pathlib import Path
 from typing import List, Dict, Optional, Any
 from datetime import datetime
@@ -22,6 +24,7 @@ from openai import OpenAI
 from langchain_openai import ChatOpenAI
 from langchain_core.tools import tool
 from langgraph.prebuilt import create_react_agent
+from motor.motor_asyncio import AsyncIOMotorClient
 
 from dotenv import load_dotenv
 
@@ -55,6 +58,13 @@ EMBEDDING_DIMENSION = 1536
 
 # LLM 설정
 LLM_MODEL = os.getenv("LLM_MODEL", "gpt-oss-120b")
+
+# MongoDB 설정
+MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
+MONGO_DB = os.getenv("MONGO_DB", "weekly_mail_agent")
+HISTORY_TTL_SECONDS = int(os.getenv("HISTORY_TTL_SECONDS", "1800"))  # 30분
+MAX_HISTORY_TURNS = int(os.getenv("MAX_HISTORY_TURNS", "10"))  # 최근 10턴
+MAX_ANSWER_LENGTH = int(os.getenv("MAX_ANSWER_LENGTH", "1000"))  # 답변 압축 길이
 
 # 서버 설정
 HOST = os.getenv("API_HOST", "0.0.0.0")
@@ -525,15 +535,20 @@ AGENT_SYSTEM_PROMPT = """당신은 반도체 주간 업무 보고서 시스템�
 - 메일 내용 검색 요청에 응답합니다.
 - 제공된 도구(tool)를 적절히 활용하세요.
 
-## 검색 규칙 (중요!)
+## 검색 규칙
 search_mail_content 사용 시:
-- 팀명, 제품군(NAND/DRAM), 키워드를 **모두 query에 포함**시키세요.
-- 축약어도 그대로 사용하세요 (예: CL팀, 256단 등).
+- 사용자의 질문을 그대로 query로 사용하세요.
+- 팀명, 제품군(NAND/DRAM), 키워드가 있으면 query에 포함시키세요.
+- **팀명이나 제품군이 명시되지 않아도 키워드만으로 검색을 수행하세요.**
+- 축약어도 그대로 사용하세요 (예: CL팀, 256단, HE, M0C 등).
+- **정보가 부족하다고 판단하지 말고, 일단 검색을 실행하세요.**
 
 예시:
+- "HE에서 발생한 M0C 이슈" → query="HE M0C 이슈"
 - "NAND M0C단 이슈" → query="NAND M0C단 이슈"
 - "CL팀 수율" → query="CL팀 수율"
 - "DRAM 불량 분석" → query="DRAM 불량 분석"
+- "수율 개선" → query="수율 개선"
 
 ## 참고: 예외 팀-제품군 매핑
 다음 팀들은 이름에 NAND/DRAM이 없지만 해당 제품군입니다:
@@ -546,10 +561,11 @@ search_mail_content 사용 시:
 - 주차는 "YYYY-WW" 형식 (예: 2025-48)
 
 ## 답변 원칙
-1. 도구 실행 결과를 바탕으로 명확하게 답변하세요.
-2. 숫자와 팀명을 정확히 포함하세요.
-3. 표 형식이 적절하면 표로 정리하세요.
-4. 결과가 없으면 솔직히 알려주세요.
+1. **질문이 들어오면 먼저 검색/조회를 시도하세요. 추가 정보를 요청하지 마세요.**
+2. 도구 실행 결과를 바탕으로 명확하게 답변하세요.
+3. 숫자와 팀명을 정확히 포함하세요.
+4. 표 형식이 적절하면 표로 정리하세요.
+5. 결과가 없으면 "검색 결과가 없습니다"라고 알려주세요.
 
 ## 도구 사용 가이드
 - 주간보고 통계: count_weekly_reports_by_team
@@ -578,18 +594,23 @@ def get_react_agent():
     return _react_agent
 
 
-def chat_with_tools(
-    user_message: str, team: str = None, week: str = None
+async def chat_with_tools_async(
+    user_message: str,
+    team: str = None,
+    week: str = None,
+    conversation_id: str = None,
 ) -> Dict[str, Any]:
-    """LangGraph ReAct Agent를 사용한 채팅
+    """LangGraph ReAct Agent를 사용한 채팅 (멀티턴 지원)
 
     LLM이 질문을 분석하여 적절한 tool을 선택하고 실행합니다.
     ReAct 패턴으로 multi-step 추론이 가능합니다.
+    conversation_id가 제공되면 이전 대화 히스토리를 포함합니다.
 
     Args:
         user_message: 사용자 질문
         team: 팀 필터 (optional)
         week: 주차 필터 (optional)
+        conversation_id: 대화 세션 ID (멀티턴용)
 
     Returns:
         answer: LLM 답변
@@ -614,16 +635,27 @@ def chat_with_tools(
 
     full_message = user_message + context_info
 
-    # Agent 실행
-    result = agent.invoke({"messages": [{"role": "user", "content": full_message}]})
+    # 대화 히스토리 조회 (멀티턴)
+    history = []
+    if conversation_id:
+        history = await get_history(conversation_id)
+
+    # 메시지 구성 (히스토리 + 현재 질문)
+    messages = history + [{"role": "user", "content": full_message}]
+
+    # Agent 실행 (동기 함수이므로 run_in_executor 사용)
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(
+        None, lambda: agent.invoke({"messages": messages})
+    )
 
     # 결과 파싱
-    messages = result.get("messages", [])
+    response_messages = result.get("messages", [])
     tool_calls_info = []
     tool_results = []
     answer = ""
 
-    for msg in messages:
+    for msg in response_messages:
         # AIMessage에서 tool_calls 추출
         if hasattr(msg, "tool_calls") and msg.tool_calls:
             for tc in msg.tool_calls:
@@ -648,6 +680,7 @@ def chat_with_tools(
         "answer": answer,
         "tool_calls": tool_calls_info,
         "tool_results": tool_results,
+        "full_message": full_message,  # 히스토리 저장용
     }
 
 
@@ -743,7 +776,7 @@ def parse_used_references(answer: str, contexts: List[Dict]) -> tuple:
 
 
 def extract_references(contexts: List[Dict]) -> List[Reference]:
-    """검색 결과에서 참조 출처 추출"""
+    """검색 결과에서 참조 출처 추출 (같은 메일은 1개만)"""
     refs = []
     seen = set()
 
@@ -753,8 +786,8 @@ def extract_references(contexts: List[Dict]) -> List[Reference]:
         mail_id = ctx.get("mail_id", "unknown")
         part_index = ctx.get("part_index")
 
-        # 중복 제거 (같은 메일의 다른 파트는 허용)
-        key = f"{team}_{week}_{mail_id}_{part_index}"
+        # 중복 제거 (같은 메일은 한 번만 표시, part_index 무시)
+        key = f"{team}_{week}_{mail_id}"
         if key in seen:
             continue
         seen.add(key)
@@ -896,17 +929,153 @@ app.mount("/mail", StaticFiles(directory=str(MAIL_DIR)), name="mail")
 
 # 전역 클라이언트
 os_client: Optional[OpenSearchClient] = None
+mongo_client: Optional[AsyncIOMotorClient] = None
+mongo_db = None
+
+
+# ========== MongoDB 대화 히스토리 관리 ==========
+async def init_mongodb():
+    """MongoDB 초기화 및 인덱스 생성"""
+    global mongo_client, mongo_db
+    mongo_client = AsyncIOMotorClient(MONGO_URI)
+    mongo_db = mongo_client[MONGO_DB]
+
+    # conversation_logs: 전체 기록 (영구 보관)
+    # conversation_id + timestamp 복합 인덱스
+    await mongo_db.conversation_logs.create_index(
+        [("conversation_id", 1), ("timestamp", -1)]
+    )
+    await mongo_db.conversation_logs.create_index("user_id")
+    await mongo_db.conversation_logs.create_index("timestamp")
+
+    # conversation_history: LLM용 경량 히스토리 (TTL 30분)
+    await mongo_db.conversation_history.create_index("conversation_id", unique=True)
+    await mongo_db.conversation_history.create_index(
+        "updated_at", expireAfterSeconds=HISTORY_TTL_SECONDS
+    )
+
+    print(f"✅ MongoDB 초기화 완료: {MONGO_URI}/{MONGO_DB}")
+    print(f"   - conversation_logs: 전체 기록 (영구)")
+    print(f"   - conversation_history: LLM용 (TTL {HISTORY_TTL_SECONDS}초)")
+
+
+async def close_mongodb():
+    """MongoDB 연결 종료"""
+    global mongo_client
+    if mongo_client:
+        mongo_client.close()
+        print("🔌 MongoDB 연결 종료")
+
+
+async def save_full_log(
+    conversation_id: str,
+    user_id: str,
+    message: str,
+    team: Optional[str],
+    week: Optional[str],
+    tool_calls: List[Dict],
+    tool_results: List[Dict],
+    answer: str,
+    references: List[Dict],
+) -> None:
+    """전체 대화 기록 저장 (감사/분석용, 영구 보관)"""
+    if not mongo_db:
+        return
+
+    # 현재 턴 번호 계산
+    existing_count = await mongo_db.conversation_logs.count_documents(
+        {"conversation_id": conversation_id}
+    )
+    turn = existing_count + 1
+
+    log_doc = {
+        "conversation_id": conversation_id,
+        "user_id": user_id,
+        "timestamp": datetime.utcnow(),
+        "turn": turn,
+        "request": {
+            "message": message,
+            "team": team,
+            "week": week,
+        },
+        "tool_calls": tool_calls,
+        "tool_results": tool_results,
+        "response": {
+            "answer": answer,
+            "references": references,
+        },
+    }
+
+    await mongo_db.conversation_logs.insert_one(log_doc)
+
+
+async def save_history(
+    conversation_id: str,
+    user_message: str,
+    assistant_answer: str,
+) -> None:
+    """경량 히스토리 저장 (LLM 멀티턴용, 질문/답변만)"""
+    if not mongo_db:
+        return
+
+    # 답변 압축
+    compressed_answer = assistant_answer
+    if len(assistant_answer) > MAX_ANSWER_LENGTH:
+        compressed_answer = assistant_answer[:MAX_ANSWER_LENGTH] + "...(생략)"
+
+    messages_to_add = [
+        {"role": "user", "content": user_message},
+        {"role": "assistant", "content": compressed_answer},
+    ]
+
+    # upsert로 대화 추가 (최근 N턴만 유지)
+    await mongo_db.conversation_history.update_one(
+        {"conversation_id": conversation_id},
+        {
+            "$push": {
+                "messages": {
+                    "$each": messages_to_add,
+                    "$slice": -(MAX_HISTORY_TURNS * 2),  # user+assistant 쌍
+                }
+            },
+            "$set": {"updated_at": datetime.utcnow()},
+            "$setOnInsert": {"created_at": datetime.utcnow()},
+        },
+        upsert=True,
+    )
+
+
+async def get_history(conversation_id: str) -> List[Dict]:
+    """LLM용 대화 히스토리 조회"""
+    if not mongo_db:
+        return []
+
+    doc = await mongo_db.conversation_history.find_one(
+        {"conversation_id": conversation_id}
+    )
+    if doc:
+        return doc.get("messages", [])
+    return []
 
 
 @app.on_event("startup")
 async def startup():
-    """서버 시작 시 OpenSearch 클라이언트 초기화"""
+    """서버 시작 시 OpenSearch + MongoDB 초기화"""
     global os_client
     os_client = OpenSearchClient()
     health = os_client.health_check()
     stats = os_client.get_stats()
     print(f"✅ OpenSearch 초기화 완료: {health}")
     print(f"📊 인덱스 통계: {stats}")
+
+    # MongoDB 초기화
+    await init_mongodb()
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    """서버 종료 시 정리"""
+    await close_mongodb()
 
 
 @app.get("/health")
@@ -1028,6 +1197,9 @@ class ChatV2Request(BaseModel):
 
     user_id: str
     message: str
+    conversation_id: Optional[str] = Field(
+        default=None, description="대화 세션 ID (멀티턴용, 미지정시 싱글턴)"
+    )
     team: Optional[str] = Field(default=None, description="팀 필터")
     week: Optional[str] = Field(default=None, description="주차 필터 (예: 2025-48)")
 
@@ -1057,18 +1229,21 @@ class ChatV2Response(BaseModel):
 
 @app.post("/chat/v2", response_model=ChatV2Response)
 async def chat_v2(request: ChatV2Request):
-    """Tool Calling 기반 채팅 API
+    """Tool Calling 기반 채팅 API (멀티턴 지원)
 
     LLM이 질문을 분석하여 적절한 도구를 선택하고 실행합니다.
+    conversation_id를 제공하면 이전 대화 히스토리를 기반으로 답변합니다.
 
     - 통계 질문 → 집계 함수 자동 호출
     - 내용 검색 → RAG 검색 자동 호출
+    - 멀티턴 대화 → 이전 대화 컨텍스트 유지
 
     예시 질문:
     - "2025-48주차 주간보고 팀별 count 알려줘"
     - "YIELD팀이 보낸 주간보고 외 메일은 몇 개야?"
     - "이번주 주간보고 미제출 팀은?"
     - "수율 개선 이슈 뭐야?"
+    - (후속) "그 중에서 HE 관련만 알려줘" (conversation_id 필요)
     """
     if not os_client:
         raise HTTPException(status_code=503, detail="OpenSearch 초기화 중")
@@ -1077,7 +1252,13 @@ async def chat_v2(request: ChatV2Request):
     if not message:
         raise HTTPException(status_code=400, detail="메시지가 비어있습니다")
 
-    result = chat_with_tools(message, team=request.team, week=request.week)
+    # 비동기 Agent 호출 (멀티턴 히스토리 포함)
+    result = await chat_with_tools_async(
+        message,
+        team=request.team,
+        week=request.week,
+        conversation_id=request.conversation_id,
+    )
 
     # tool_results에서 search_mail_content 결과 추출
     references = []
@@ -1101,6 +1282,28 @@ async def chat_v2(request: ChatV2Request):
 
     # 표를 개조식으로 변환 (사내 메신저 richnotification 호환)
     answer_converted = convert_table_to_bullet(clean_answer)
+
+    # MongoDB에 대화 저장 (conversation_id가 있는 경우)
+    if request.conversation_id:
+        # 전체 기록 저장 (감사/분석용)
+        await save_full_log(
+            conversation_id=request.conversation_id,
+            user_id=request.user_id,
+            message=message,
+            team=request.team,
+            week=request.week,
+            tool_calls=result["tool_calls"],
+            tool_results=result["tool_results"],
+            answer=answer_converted,
+            references=[ref.model_dump() for ref in references],
+        )
+
+        # 경량 히스토리 저장 (LLM 멀티턴용)
+        await save_history(
+            conversation_id=request.conversation_id,
+            user_message=result.get("full_message", message),
+            assistant_answer=answer_converted,
+        )
 
     # 출처는 references 필드로 분리 (클라이언트에서 별도 처리)
     return ChatV2Response(
