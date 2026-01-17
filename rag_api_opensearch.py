@@ -27,6 +27,7 @@ from langgraph.prebuilt import create_react_agent
 from motor.motor_asyncio import AsyncIOMotorClient
 
 from dotenv import load_dotenv
+import tiktoken
 
 # OpenSearch 집계 함수 import
 from opensearch import (
@@ -65,6 +66,14 @@ MONGO_DB = os.getenv("MONGO_DB", "weekly_mail_agent")
 HISTORY_TTL_SECONDS = int(os.getenv("HISTORY_TTL_SECONDS", "1800"))  # 30분
 MAX_HISTORY_TURNS = int(os.getenv("MAX_HISTORY_TURNS", "10"))  # 최근 10턴
 MAX_ANSWER_LENGTH = int(os.getenv("MAX_ANSWER_LENGTH", "1000"))  # 답변 압축 길이
+
+# 토큰 설정 (256K 모델 기준)
+MAX_TOOL_RESULT_TOKENS = int(
+    os.getenv("MAX_TOOL_RESULT_TOKENS", "150000")
+)  # tool 결과용 토큰 예산
+SEARCH_RESULT_LIMIT = int(os.getenv("SEARCH_RESULT_LIMIT", "50"))  # 검색 결과 개수
+MAX_TEXT_PER_DOC = int(os.getenv("MAX_TEXT_PER_DOC", "2000"))  # 문서당 텍스트 길이 제한
+ENCODING_NAME = "cl100k_base"  # GPT-4/3.5 호환 인코딩
 
 # 서버 설정
 HOST = os.getenv("API_HOST", "0.0.0.0")
@@ -158,6 +167,17 @@ class SearchResult(BaseModel):
     total_parts: Optional[int] = None
     vector_score: Optional[float] = None
     keyword_score: Optional[float] = None
+
+
+# ========== 토큰 계산 ==========
+def count_tokens(text: str) -> int:
+    """텍스트의 토큰 수 계산"""
+    try:
+        encoding = tiktoken.get_encoding(ENCODING_NAME)
+        return len(encoding.encode(text))
+    except Exception:
+        # fallback: 대략 4자당 1토큰으로 추정
+        return len(text) // 4
 
 
 # ========== OpenSearch 클라이언트 ==========
@@ -487,19 +507,45 @@ def search_mail_content(query: str, week: Optional[str] = None) -> str:
     try:
         if os_client:
             # team 필터 없이 검색 (팀명은 query에 포함)
-            results = os_client.search(query, team=None, week=week, limit=5)
-            formatted = [
-                {
+            results = os_client.search(
+                query, team=None, week=week, limit=SEARCH_RESULT_LIMIT
+            )
+
+            # 토큰 제한에 맞게 결과 truncate
+            formatted = []
+            used_tokens = 0
+
+            for r in results:
+                # 각 문서 텍스트 길이 제한 (너무 긴 문서는 자름)
+                text = r["text"]
+                if len(text) > MAX_TEXT_PER_DOC:
+                    text = text[:MAX_TEXT_PER_DOC] + "...(truncated)"
+
+                item = {
                     "team": r["team"],
                     "week": r["week"],
                     "mail_id": r["mail_id"],
-                    "text": (
-                        r["text"][:500] + "..." if len(r["text"]) > 500 else r["text"]
-                    ),
+                    "text": text,
                     "score": round(r["score"], 4),
                 }
-                for r in results
-            ]
+
+                # 토큰 수 계산
+                item_json = json.dumps(item, ensure_ascii=False)
+                item_tokens = count_tokens(item_json)
+
+                # 토큰 예산 초과 시 중단
+                if used_tokens + item_tokens > MAX_TOOL_RESULT_TOKENS:
+                    print(
+                        f"⚠️ 토큰 제한 도달: {len(formatted)}개 문서 사용 ({used_tokens} tokens)"
+                    )
+                    break
+
+                formatted.append(item)
+                used_tokens += item_tokens
+
+            print(
+                f"📊 검색 결과: {len(formatted)}/{len(results)}개 문서, {used_tokens} tokens"
+            )
             return json.dumps(formatted, ensure_ascii=False, default=str)
         return json.dumps([], ensure_ascii=False)
     except Exception as e:
@@ -889,6 +935,16 @@ def _parse_table_to_bullet(table_lines: list) -> str:
     return "\n".join(bullet_lines) if bullet_lines else ""
 
 
+def clean_html_breaks(text: str) -> str:
+    """HTML <br> 태그를 줄바꿈으로 변환 (사내 메신저 호환용)
+
+    LLM이 간혹 줄바꿈을 <br> 태그로 출력하는 경우가 있어 후처리합니다.
+    """
+    # <br>, <br/>, <br /> 등 모든 형태의 br 태그를 줄바꿈으로 변환
+    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
+    return text
+
+
 # ========== FastAPI 앱 ==========
 app = FastAPI(
     title="Weekly Mail RAG Chatbot API (OpenSearch + LangGraph)",
@@ -1132,6 +1188,9 @@ async def chat(request: ChatRequest):
     # 5. 답변에 출처 포함
     answer_with_refs = format_answer_with_references(clean_answer, references)
 
+    # 6. HTML <br> 태그를 줄바꿈으로 변환
+    answer_with_refs = clean_html_breaks(answer_with_refs)
+
     return ChatResponse(
         answer=answer_with_refs,
         references=references,
@@ -1282,6 +1341,9 @@ async def chat_v2(request: ChatV2Request):
 
     # 표를 개조식으로 변환 (사내 메신저 richnotification 호환)
     answer_converted = convert_table_to_bullet(clean_answer)
+
+    # HTML <br> 태그를 줄바꿈으로 변환
+    answer_converted = clean_html_breaks(answer_converted)
 
     # MongoDB에 대화 저장 (conversation_id가 있는 경우)
     if request.conversation_id:
