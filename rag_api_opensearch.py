@@ -621,6 +621,9 @@ search_mail_content 사용 시:
 - 전체 요약: get_mail_type_summary
 - 내용 검색: search_mail_content
 - 주차 목록: get_available_weeks
+
+## 반복 검색 제한
+- 내용 검색은 1회만 수행하고, 추가 검색을 반복하지 마세요.
 """
 
 # LangGraph ReAct Agent (지연 초기화)
@@ -692,7 +695,11 @@ async def chat_with_tools_async(
     # Agent 실행 (동기 함수이므로 run_in_executor 사용)
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(
-        None, lambda: agent.invoke({"messages": messages})
+        None,
+        lambda: agent.invoke(
+            {"messages": messages},
+            config={"recursion_limit": 3},
+        ),
     )
 
     # 결과 파싱
