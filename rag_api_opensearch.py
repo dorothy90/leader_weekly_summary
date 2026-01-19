@@ -67,6 +67,13 @@ HISTORY_TTL_SECONDS = int(os.getenv("HISTORY_TTL_SECONDS", "1800"))  # 30분
 MAX_HISTORY_TURNS = int(os.getenv("MAX_HISTORY_TURNS", "10"))  # 최근 10턴
 MAX_ANSWER_LENGTH = int(os.getenv("MAX_ANSWER_LENGTH", "1000"))  # 답변 압축 길이
 
+# 대화 요약 설정
+SUMMARY_THRESHOLD = int(os.getenv("SUMMARY_THRESHOLD", "3"))  # 3턴 초과 시 요약 트리거
+MAX_SUMMARY_TOKENS = int(os.getenv("MAX_SUMMARY_TOKENS", "300"))  # 요약 최대 토큰
+RECENT_TURNS_TO_KEEP = int(
+    os.getenv("RECENT_TURNS_TO_KEEP", "2")
+)  # 요약 없이 유지할 최근 턴 수
+
 # 토큰 설정 (256K 모델 기준)
 MAX_TOOL_RESULT_TOKENS = int(
     os.getenv("MAX_TOOL_RESULT_TOKENS", "150000")
@@ -624,6 +631,17 @@ search_mail_content 사용 시:
 
 ## 반복 검색 제한
 - 내용 검색은 1회만 수행하고, 추가 검색을 반복하지 마세요.
+
+## 멀티턴 대화 규칙
+- **이전 대화 내용을 참고하여 문맥에 맞게 답변하세요.**
+- 후속 질문(예: "그 중에서", "더 자세히", "다른 건?")은 이전 답변과 연결하여 이해하세요.
+- [이전 대화 요약]이 제공되면 해당 맥락을 고려하세요.
+- 사용자가 새로운 주제로 전환하면 새 검색을 수행하세요.
+
+예시:
+- 이전 답변: "Spica에서 발생한 최근 이슈 알려줘"
+- 후속 질문: "향후 계획은?" → Spica에서 발생한 최근 이슈에 대한 향후 계획을 검색
+
 """
 
 # LangGraph ReAct Agent (지연 초기화)
@@ -673,34 +691,83 @@ async def chat_with_tools_async(
     iso_cal = now.isocalendar()
     current_week = f"{iso_cal[0]}-{iso_cal[1]:02d}"
 
-    # 컨텍스트 정보 추가
-    context_info = (
-        f"\n[컨텍스트] 오늘 날짜: {now.strftime('%Y-%m-%d')}, 이번주: {current_week}"
-    )
+    # 컨텍스트 정보 (시스템 메시지용, 1회만 제공)
+    context_info = f"오늘 날짜: {now.strftime('%Y-%m-%d')}, 이번주: {current_week}"
     if team:
-        context_info += f"\n[컨텍스트] 팀 필터: {team}"
+        context_info += f", 팀 필터: {team}"
     if week:
-        context_info += f"\n[컨텍스트] 주차 필터: {week}"
-
-    full_message = user_message + context_info
+        context_info += f", 주차 필터: {week}"
 
     # 대화 히스토리 조회 (멀티턴)
     history = []
     if conversation_id:
         history = await get_history(conversation_id)
 
-    # 메시지 구성 (히스토리 + 현재 질문)
-    messages = history + [{"role": "user", "content": full_message}]
+    # 메시지 구성: [시스템(컨텍스트)] + [히스토리] + [현재 질문(순수 메시지)]
+    messages = (
+        [{"role": "system", "content": f"[컨텍스트] {context_info}"}]
+        + history
+        + [{"role": "user", "content": user_message}]
+    )
+
+    # ===== 디버깅: 전체 메시지 토큰 출력 =====
+    system_tokens = count_tokens(f"[컨텍스트] {context_info}")
+    history_tokens = sum(count_tokens(m.get("content", "")) for m in history)
+    user_tokens = count_tokens(user_message)
+    total_input_tokens = system_tokens + history_tokens + user_tokens
+
+    print(f"🔍 [DEBUG] chat_with_tools_async - 메시지 구성")
+    print(f"   - 시스템 메시지 토큰: {system_tokens}")
+    print(f"   - 히스토리 토큰: {history_tokens} ({len(history)}개 메시지)")
+    print(f"   - 현재 질문 토큰: {user_tokens}")
+    print(f"   - 총 입력 토큰 (tool 제외): {total_input_tokens}")
+    print(f"   - 메시지 구조: {[m['role'] for m in messages]}")
+    # =========================================
 
     # Agent 실행 (동기 함수이므로 run_in_executor 사용)
     loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(
-        None,
-        lambda: agent.invoke(
-            {"messages": messages},
-            config={"recursion_limit": 3},
-        ),
-    )
+    try:
+        print(f"🚀 [DEBUG] agent.invoke 호출 시작...")
+        result = await loop.run_in_executor(
+            None,
+            lambda: agent.invoke(
+                {"messages": messages},
+                config={"recursion_limit": 3},
+            ),
+        )
+        print(f"✅ [DEBUG] agent.invoke 성공")
+    except Exception as e:
+        # ===== 디버깅: 에러 상세 출력 =====
+        print(f"❌ [DEBUG] agent.invoke 실패!")
+        print(f"   - 에러 타입: {type(e).__name__}")
+        print(f"   - 에러 메시지: {e}")
+        print(f"   - 입력 토큰 (추정): {total_input_tokens}")
+        print(f"   - 히스토리 메시지 수: {len(history)}")
+        for i, m in enumerate(history):
+            content = m.get("content", "")
+            content_preview = content[:100] + "..." if len(content) > 100 else content
+            print(
+                f"   - history[{i}] ({m['role']}): {count_tokens(content)} tokens - {content_preview}"
+            )
+        # ==================================
+
+        error_msg = str(e).lower()
+        # 토큰 초과 관련 에러 처리
+        if (
+            "context_length" in error_msg
+            or "token" in error_msg
+            or "too long" in error_msg
+            or "maximum" in error_msg
+            or "500" in str(e)  # 500 에러도 캐치
+        ):
+            print(f"⚠️ 토큰/서버 에러로 판단됨")
+            return {
+                "answer": "대화가 너무 길어 처리할 수 없습니다. 새 대화를 시작해주세요.",
+                "tool_calls": [],
+                "tool_results": [],
+            }
+        # 그 외 에러는 다시 raise
+        raise
 
     # 결과 파싱
     response_messages = result.get("messages", [])
@@ -733,7 +800,6 @@ async def chat_with_tools_async(
         "answer": answer,
         "tool_calls": tool_calls_info,
         "tool_results": tool_results,
-        "full_message": full_message,  # 히스토리 저장용
     }
 
 
@@ -1072,6 +1138,47 @@ async def save_full_log(
     await mongo_db.conversation_logs.insert_one(log_doc)
 
 
+async def summarize_conversation(messages: List[Dict]) -> str:
+    """오래된 대화를 LLM으로 요약
+
+    Args:
+        messages: 요약할 메시지 리스트 [{"role": "user/assistant", "content": "..."}]
+
+    Returns:
+        요약된 텍스트 (MAX_SUMMARY_TOKENS 이내)
+    """
+    if not messages:
+        return ""
+
+    conversation_text = "\n".join([f"{m['role']}: {m['content']}" for m in messages])
+
+    llm = get_llm()
+    prompt = f"""다음 대화를 {MAX_SUMMARY_TOKENS}토큰 이내로 핵심만 요약하세요.
+사용자가 물은 질문과 얻은 답변의 핵심 정보만 포함하세요.
+불필요한 인사말이나 부연 설명은 제외하세요.
+
+대화:
+{conversation_text}
+
+요약:"""
+
+    try:
+        response = await asyncio.to_thread(
+            lambda: llm.invoke([{"role": "user", "content": prompt}])
+        )
+        return response.content.strip()
+    except Exception as e:
+        print(f"⚠️ 대화 요약 실패: {e}")
+        # 요약 실패 시 대화 내용을 간단히 축약
+        fallback = []
+        for m in messages:
+            content = (
+                m["content"][:200] + "..." if len(m["content"]) > 200 else m["content"]
+            )
+            fallback.append(f"{m['role']}: {content}")
+        return "\n".join(fallback)
+
+
 async def save_history(
     conversation_id: str,
     user_message: str,
@@ -1109,16 +1216,82 @@ async def save_history(
 
 
 async def get_history(conversation_id: str) -> List[Dict]:
-    """LLM용 대화 히스토리 조회"""
+    """LLM용 대화 히스토리 조회 (필요시 요약 생성)
+
+    SUMMARY_THRESHOLD 초과 시 오래된 대화를 LLM으로 요약하고,
+    요약 결과를 MongoDB에 캐싱하여 재사용합니다.
+
+    Returns:
+        [{"role": "system", "content": "[이전 대화 요약]..."}] + 최근 메시지
+        또는 threshold 이하면 원본 메시지 그대로
+    """
     if not mongo_db:
         return []
 
     doc = await mongo_db.conversation_history.find_one(
         {"conversation_id": conversation_id}
     )
-    if doc:
-        return doc.get("messages", [])
-    return []
+    if not doc:
+        return []
+
+    messages = doc.get("messages", [])
+    existing_summary = doc.get("summary", "")
+
+    # ===== 디버깅: 히스토리 상태 출력 =====
+    total_tokens = sum(count_tokens(m.get("content", "")) for m in messages)
+    summary_tokens = count_tokens(existing_summary) if existing_summary else 0
+    print(f"🔍 [DEBUG] get_history - conversation_id: {conversation_id}")
+    print(f"   - 메시지 수: {len(messages)}")
+    print(f"   - 턴 수: {len(messages) // 2}")
+    print(f"   - 히스토리 토큰: {total_tokens}")
+    print(f"   - 요약 토큰: {summary_tokens}")
+    print(f"   - 총 히스토리 토큰: {total_tokens + summary_tokens}")
+    # =====================================
+
+    # 턴 수 계산 (user+assistant 쌍 = 1턴)
+    turn_count = len(messages) // 2
+
+    # threshold 이하면 그대로 반환
+    if turn_count <= SUMMARY_THRESHOLD:
+        result = []
+        if existing_summary:
+            result.append(
+                {"role": "system", "content": f"[이전 대화 요약]\n{existing_summary}"}
+            )
+        return result + messages
+
+    # threshold 초과: 요약 필요
+    recent_count = RECENT_TURNS_TO_KEEP * 2  # user+assistant 쌍
+    old_messages = messages[:-recent_count] if recent_count > 0 else messages
+    recent_messages = messages[-recent_count:] if recent_count > 0 else []
+
+    # 오래된 메시지 요약 생성
+    print(f"📝 대화 요약 생성 중... (기존 {len(old_messages)}개 메시지 → 요약)")
+    new_summary_part = await summarize_conversation(old_messages)
+
+    # 기존 요약과 병합
+    if existing_summary:
+        combined_summary = f"{existing_summary}\n\n{new_summary_part}"
+    else:
+        combined_summary = new_summary_part
+
+    # MongoDB 업데이트 (요약 저장 + 오래된 메시지 제거)
+    await mongo_db.conversation_history.update_one(
+        {"conversation_id": conversation_id},
+        {
+            "$set": {
+                "summary": combined_summary,
+                "messages": recent_messages,
+                "updated_at": datetime.utcnow(),
+            }
+        },
+    )
+    print(f"✅ 요약 저장 완료 (최근 {len(recent_messages)}개 메시지 유지)")
+
+    # 요약 + 최근 메시지 반환
+    return [
+        {"role": "system", "content": f"[이전 대화 요약]\n{combined_summary}"}
+    ] + recent_messages
 
 
 @app.on_event("startup")
@@ -1367,10 +1540,10 @@ async def chat_v2(request: ChatV2Request):
             references=[ref.model_dump() for ref in references],
         )
 
-        # 경량 히스토리 저장 (LLM 멀티턴용)
+        # 경량 히스토리 저장 (LLM 멀티턴용, 순수 메시지만 저장)
         await save_history(
             conversation_id=request.conversation_id,
-            user_message=result.get("full_message", message),
+            user_message=message,  # 컨텍스트 제외한 순수 메시지
             assistant_answer=answer_converted,
         )
 
