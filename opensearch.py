@@ -13,11 +13,11 @@ from openai import OpenAI
 OPENSEARCH_HOST = os.getenv("OPENSEARCH_HOST", "localhost")
 OPENSEARCH_PORT = int(os.getenv("OPENSEARCH_PORT", "9200"))
 OPENSEARCH_USER = os.getenv("OPENSEARCH_USER", "admin")
-OPENSEARCH_PASSWORD = os.getenv("OPENSEARCH_PASSWORD", "admin")
-OPENSEARCH_USE_SSL = os.getenv("OPENSEARCH_USE_SSL", "false").lower() == "true"
+OPENSEARCH_PASSWORD = os.getenv("OPENSEARCH_PASSWORD", "rlaeorka1!K")
+OPENSEARCH_USE_SSL = "true"
 
 INDEX_NAME = "weekly_mail"
-EMBEDDING_MODEL = "text-embedding-3-small"
+EMBEDDING_MODEL = "qwen/qwen3-embedding-8b"
 
 
 def get_client() -> OpenSearch:
@@ -33,8 +33,9 @@ def get_client() -> OpenSearch:
 
 def get_embedding_client() -> OpenAI:
     """임베딩 클라이언트"""
-    api_key = os.getenv("OPENAI_API_KEY")
-    return OpenAI(api_key=api_key)
+    api_key = os.getenv("OPENROUTER_API_KEY")
+    base_url = os.getenv("OPENROUTER_BASE_URL")
+    return OpenAI(api_key=api_key, base_url=base_url)
 
 
 def get_embedding(text: str) -> List[float]:

@@ -214,6 +214,10 @@ def _generate_llm_summary(team: str, history_text: str, current_week: str) -> st
 
     system_prompt = """당신은 반도체 공정 팀의 주간 보고서 요약 전문가입니다.
 
+## 주차 형식 (중요!):
+- 형식: YYYY-WW (예: 2026-02 = 2026년 **2주차**, 월(Month)이 아님!)
+- "2026-02"는 "2026년 2월"이 아니라 "2026년 제2주"를 의미합니다.
+
 ## 입력 데이터 구조:
 - **현재 주차 (⭐ 표시)**: 요약 대상 - 이번 주 업무 내용
 - **이전 주차들 (참조용)**: 맥락 파악용 - 현재 주차 업무의 배경 이해용
@@ -231,45 +235,40 @@ def _generate_llm_summary(team: str, history_text: str, current_week: str) -> st
 2. **메일 상단의 Executive Summary/요약 부분이 있다면 이를 주요 보고에 핵심적으로 반영**
 3. 이전 주차 데이터는 **맥락 파악용**으로만 활용
 4. "지난주에 시작한 A가 이번 주 완료됨" 같은 스토리 연결 반영
+5. 본문에 포함된 표(Table, 마크다운 표, HTML 테이블)는 무시하고 텍스트 내용만 참조
 
 ## 출력 형식 (반드시 준수):
 [팀명] Weekly Summary
 
 1. 주요 보고
-- 메일 상단 Executive Summary의 핵심 내용 + 이전 주 맥락을 반영한 이번 주 핵심 스토리 (2-3문장)
+- 메일 상단 Executive Summary의 핵심 내용 + 이전 주 맥락을 반영한 이번 주 핵심 스토리
+- 반드시 3줄 이내로 작성
 
 2. Key Actions (이번 주 기준)
 1) Domain-Tech: 구체적 액션
 2) Domain-Tech: 구체적 액션
-(최대 5개)
-
-3. Issue / Risk
-- Domain-Tech: 이슈 내용 및 영향
-(해당 사항 없으면 "특이사항 없음")
-
-4. 향후 계획
-- Domain-Tech: 예정 업무
-(1-3개)
+(정확히 5개 작성)
 
 ## 요약 원칙:
 - **메일 상단의 Executive Summary/요약 부분을 주요 보고의 핵심으로 활용**
 - 이전 주에서 시작해 현재 주에 진행/완료된 업무는 진척 상황 반영
-- 2주 이상 지속되는 이슈는 Risk로 강조
 - 수치가 있으면 포함
 - 간결하고 명확하게 작성"""
 
     user_prompt = f"""[{team}] 주간 요약을 생성해주세요.
 
-**⭐ 현재 주차 (요약 대상)**: {current_week}
+**⭐ 현재 주차 (요약 대상)**: {current_week} (주차 번호, 월이 아님!)
 
 ---
 {history_text}
 ---
 
 **중요 지시사항:**
-1. {current_week} 주차가 핵심 요약 대상입니다.
+1. {current_week}는 "{current_week.split('-')[0]}년 제{int(current_week.split('-')[1])}주차"입니다 (월이 아님!).
 2. 메일 상단에 Executive Summary, 요약, Summary 등의 내용이 있다면 이를 "주요 보고"에 우선 반영하세요.
 3. 이전 주차들은 맥락 파악용입니다.
+4. 본문의 표(Table)는 무시하세요.
+5. 출력은 "1. 주요 보고 (3줄 이내)"와 "2. Key Actions (5개)" 두 섹션만 작성하세요.
 """
 
     client = OpenAI(
@@ -435,40 +434,6 @@ def generate_html(summaries: Dict[str, str], week: str, timestamp: str) -> str:
         else:
             actions_html = '<tr><td style="padding: 10px 12px; color: #a0aec0; font-size: 13px;">내용 없음</td></tr>'
 
-        # Risks HTML
-        if parsed["risks"]:
-            risk_text = " ".join(parsed["risks"])
-            if "특이사항 없음" in risk_text or "없음" == risk_text.strip():
-                risks_html = f"""<tr>
-                    <td style="padding: 12px 16px; background-color: #f0fff4; border-left: 3px solid #68d391; font-size: 13px; color: #276749; line-height: 1.5;">
-                        특이사항 없음
-                    </td>
-                </tr>"""
-            else:
-                risks_html = f"""<tr>
-                    <td style="padding: 12px 16px; background-color: #fff5f5; border-left: 3px solid #fc8181; font-size: 13px; color: #c53030; line-height: 1.5;">
-                        {risk_text}
-                    </td>
-                </tr>"""
-        else:
-            risks_html = f"""<tr>
-                <td style="padding: 12px 16px; background-color: #f0fff4; border-left: 3px solid #68d391; font-size: 13px; color: #276749; line-height: 1.5;">
-                    특이사항 없음
-                </td>
-            </tr>"""
-
-        # Plans HTML
-        plans_html = ""
-        if parsed["plans"]:
-            for plan in parsed["plans"][:3]:
-                plans_html += f"""<tr>
-                    <td style="padding: 8px 12px; background-color: #ebf8ff; border-bottom: 1px solid #bee3f8; font-size: 13px; color: #2c5282; line-height: 1.5;">
-                        → {plan}
-                    </td>
-                </tr>"""
-        else:
-            plans_html = '<tr><td style="padding: 10px 12px; color: #a0aec0; font-size: 13px;">내용 없음</td></tr>'
-
         html += f"""
                     <!-- {team} Card -->
                     <tr>
@@ -501,7 +466,7 @@ def generate_html(summaries: Dict[str, str], week: str, timestamp: str) -> str:
 
                                 <!-- Key Actions -->
                                 <tr>
-                                    <td style="padding: 12px 20px 8px 20px;">
+                                    <td style="padding: 12px 20px 16px 20px;">
                                         <table width="100%" cellpadding="0" cellspacing="0" border="0">
                                             <tr>
                                                 <td style="font-size: 12px; font-weight: bold; color: #4a5568; text-transform: uppercase; padding-bottom: 8px;">
@@ -509,34 +474,6 @@ def generate_html(summaries: Dict[str, str], week: str, timestamp: str) -> str:
                                                 </td>
                                             </tr>
                                             {actions_html}
-                                        </table>
-                                    </td>
-                                </tr>
-
-                                <!-- Issue / Risk -->
-                                <tr>
-                                    <td style="padding: 12px 20px 8px 20px;">
-                                        <table width="100%" cellpadding="0" cellspacing="0" border="0">
-                                            <tr>
-                                                <td style="font-size: 12px; font-weight: bold; color: #4a5568; text-transform: uppercase; padding-bottom: 8px;">
-                                                    Issue / Risk
-                                                </td>
-                                            </tr>
-                                            {risks_html}
-                                        </table>
-                                    </td>
-                                </tr>
-
-                                <!-- 향후 계획 -->
-                                <tr>
-                                    <td style="padding: 12px 20px 16px 20px;">
-                                        <table width="100%" cellpadding="0" cellspacing="0" border="0">
-                                            <tr>
-                                                <td style="font-size: 12px; font-weight: bold; color: #4a5568; text-transform: uppercase; padding-bottom: 8px;">
-                                                    향후 계획
-                                                </td>
-                                            </tr>
-                                            {plans_html}
                                         </table>
                                     </td>
                                 </tr>

@@ -12,7 +12,7 @@ import re
 import json
 import asyncio
 from pathlib import Path
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Annotated, Sequence, TypedDict, Literal
 from datetime import datetime
 from urllib.parse import quote
 
@@ -23,7 +23,19 @@ from opensearchpy import OpenSearch
 from openai import OpenAI
 from langchain_openai import ChatOpenAI
 from langchain_core.tools import tool
-from langgraph.prebuilt import create_react_agent
+from langchain_core.messages import (
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    AIMessage,
+    ToolMessage,
+)
+from langgraph.prebuilt import tools_condition
+from langgraph.prebuilt import ToolNode
+from langgraph.graph import END, START, StateGraph
+from langgraph.graph.message import add_messages
+from langgraph.checkpoint.memory import MemorySaver
+from langchain_core.runnables import RunnableConfig
 from motor.motor_asyncio import AsyncIOMotorClient
 
 from dotenv import load_dotenv
@@ -47,12 +59,11 @@ load_dotenv()
 OPENSEARCH_HOST = os.getenv("OPENSEARCH_HOST", "localhost")
 OPENSEARCH_PORT = int(os.getenv("OPENSEARCH_PORT", "9200"))
 OPENSEARCH_USER = os.getenv("OPENSEARCH_USER", "admin")
-OPENSEARCH_PASSWORD = os.getenv("OPENSEARCH_PASSWORD", "admin")
-OPENSEARCH_USE_SSL = os.getenv("OPENSEARCH_USE_SSL", "false").lower() == "true"
+OPENSEARCH_PASSWORD = os.getenv("OPENSEARCH_PASSWORD", "rlaeorka1!K")
+OPENSEARCH_USE_SSL = "true"
 INDEX_NAME = os.getenv("OPENSEARCH_INDEX", "weekly_mail")
 
 # 임베딩 설정
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "")
 EMBEDDING_MODEL = "qwen/qwen3-embedding-8b"
@@ -82,6 +93,11 @@ MAX_TOOL_RESULT_TOKENS = int(
 SEARCH_RESULT_LIMIT = int(os.getenv("SEARCH_RESULT_LIMIT", "50"))  # 검색 결과 개수
 MAX_TEXT_PER_DOC = int(os.getenv("MAX_TEXT_PER_DOC", "2000"))  # 문서당 텍스트 길이 제한
 ENCODING_NAME = "cl100k_base"  # GPT-4/3.5 호환 인코딩
+MAX_SEARCH_CALLS = int(
+    os.getenv("MAX_SEARCH_CALLS", "2")
+)  # search_mail_content 최대 호출
+MAX_REWRITE_COUNT = int(os.getenv("MAX_REWRITE_COUNT", "1"))  # query rewrite 최대 횟수
+GRAPH_RECURSION_LIMIT = int(os.getenv("GRAPH_RECURSION_LIMIT", "15"))
 
 # 서버 설정
 HOST = os.getenv("API_HOST", "0.0.0.0")
@@ -205,8 +221,9 @@ class OpenSearchClient:
 
     def _get_embedding_client(self) -> OpenAI:
         """OpenAI 임베딩 클라이언트"""
-        api_key = OPENAI_API_KEY or OPENROUTER_API_KEY
-        return OpenAI(api_key=api_key)
+        api_key = OPENROUTER_API_KEY
+        base_url = OPENROUTER_BASE_URL
+        return OpenAI(api_key=api_key, base_url=base_url)
 
     def _get_embedding(self, text: str) -> List[float]:
         """텍스트를 임베딩 벡터로 변환"""
@@ -419,7 +436,7 @@ def get_llm():
     return ChatOpenAI(
         model=LLM_MODEL,
         api_key=OPENROUTER_API_KEY,
-        base_url="https://openrouter.ai/api/v1",
+        base_url=OPENROUTER_BASE_URL,
         temperature=0.3,
         default_headers={
             "HTTP-Referer": "https://weekly-mail-agent.local",
@@ -527,7 +544,7 @@ def search_mail_content(query: str, week: Optional[str] = None) -> str:
                 # 각 문서 텍스트 길이 제한 (너무 긴 문서는 자름)
                 text = r["text"]
                 if len(text) > MAX_TEXT_PER_DOC:
-                    text = text
+                    text = text[:MAX_TEXT_PER_DOC] + "...(truncated)"
 
                 item = {
                     "team": r["team"],
@@ -631,7 +648,7 @@ search_mail_content 사용 시:
 - 주차 목록: get_available_weeks
 
 ## 반복 검색 제한
-- 내용 검색은 1회만 수행하고, 추가 검색을 반복하지 마세요.
+- 내용 검색은 최대 2회(재작성 1회 포함)만 수행하고, 추가 검색을 반복하지 마세요.
 
 ## 멀티턴 대화 규칙
 - **이전 대화 내용을 참고하여 문맥에 맞게 답변하세요.**
@@ -645,21 +662,183 @@ search_mail_content 사용 시:
 
 """
 
-# LangGraph ReAct Agent (지연 초기화)
-_react_agent = None
+# Agentic RAG LangGraph (지연 초기화)
+_agentic_graph = None
 
 
-def get_react_agent():
-    """LangGraph ReAct Agent 가져오기 (싱글톤)"""
-    global _react_agent
-    if _react_agent is None:
-        llm = get_llm()
-        _react_agent = create_react_agent(
-            model=llm,
-            tools=AGENT_TOOLS,
-            prompt=AGENT_SYSTEM_PROMPT,
+class AgentState(TypedDict):
+    """Agentic RAG 상태"""
+
+    messages: Annotated[Sequence[BaseMessage], add_messages]
+    search_count: int
+    rewrite_count: int
+    last_query: str
+    blocked: bool
+
+
+def _get_last_tool_message(messages: Sequence[BaseMessage]) -> Optional[ToolMessage]:
+    for msg in reversed(messages):
+        if isinstance(msg, ToolMessage):
+            return msg
+    return None
+
+
+def _parse_search_results(tool_msg: Optional[ToolMessage]) -> List[Dict]:
+    if tool_msg is None or not tool_msg.content:
+        return []
+    try:
+        data = json.loads(tool_msg.content)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def _agent_node(state: AgentState) -> Dict[str, Any]:
+    messages = state["messages"]
+    model = get_llm().bind_tools(AGENT_TOOLS)
+    response = model.invoke(messages)
+    return {"messages": [response]}
+
+
+def _tool_guard(state: AgentState) -> Dict[str, Any]:
+    last_message = state["messages"][-1]
+    tool_calls = getattr(last_message, "tool_calls", []) or []
+    search_calls = [tc for tc in tool_calls if tc.get("name") == "search_mail_content"]
+
+    search_count = state.get("search_count", 0)
+    blocked = False
+
+    if search_calls:
+        if search_count >= MAX_SEARCH_CALLS:
+            blocked = True
+        else:
+            search_count += 1
+
+    return {"search_count": search_count, "blocked": blocked}
+
+
+def _route_after_guard(state: AgentState) -> Literal["retrieve", "blocked"]:
+    return "blocked" if state.get("blocked") else "retrieve"
+
+
+def _route_after_tool(state: AgentState) -> Literal["grade", "agent"]:
+    last_tool = _get_last_tool_message(state["messages"])
+    if last_tool and last_tool.name == "search_mail_content":
+        return "grade"
+    return "agent"
+
+
+def _grade_node(state: AgentState) -> Dict[str, Any]:
+    return {}
+
+
+def _grade_documents(state: AgentState) -> Literal["generate", "rewrite"]:
+    last_tool = _get_last_tool_message(state["messages"])
+    results = _parse_search_results(last_tool)
+    if results:
+        return "generate"
+    if state.get("rewrite_count", 0) >= MAX_REWRITE_COUNT:
+        return "generate"
+    return "rewrite"
+
+
+def _rewrite_node(state: AgentState) -> Dict[str, Any]:
+    question = state.get("last_query") or state["messages"][0].content
+    prompt = f"""사용자 질문을 검색에 적합하도록 핵심 키워드 중심으로 재작성하세요.
+불필요한 수식어는 줄이고, 팀명/제품군/키워드를 유지하세요.
+
+질문:
+{question}
+
+재작성:"""
+    response = get_llm().invoke([HumanMessage(content=prompt)])
+    rewritten = response.content.strip()
+    return {
+        "messages": [HumanMessage(content=rewritten)],
+        "rewrite_count": state.get("rewrite_count", 0) + 1,
+        "last_query": rewritten,
+    }
+
+
+def _generate_node(state: AgentState) -> Dict[str, Any]:
+    last_tool = _get_last_tool_message(state["messages"])
+    contexts = _parse_search_results(last_tool)
+    question = state.get("last_query") or state["messages"][0].content
+    answer = generate_answer(question, contexts, 0.7, 0.3)
+    return {"messages": [AIMessage(content=answer)]}
+
+
+def _blocked_response_node(state: AgentState) -> Dict[str, Any]:
+    return {
+        "messages": [
+            AIMessage(
+                content="검색 결과가 충분치 않아 추가 검색을 중단했습니다. 질문을 더 구체적으로 알려주세요."
+            )
+        ]
+    }
+
+
+def get_agentic_graph():
+    """Agentic RAG 그래프 생성 (싱글톤)"""
+    global _agentic_graph
+    if _agentic_graph is None:
+        workflow = StateGraph(AgentState)
+        workflow.add_node("agent", _agent_node)
+        workflow.add_node("tool_guard", _tool_guard)
+        workflow.add_node("retrieve", ToolNode(AGENT_TOOLS))
+        workflow.add_node("grade", _grade_node)
+        workflow.add_node("rewrite", _rewrite_node)
+        workflow.add_node("generate", _generate_node)
+        workflow.add_node("blocked", _blocked_response_node)
+
+        workflow.add_edge(START, "agent")
+        workflow.add_conditional_edges(
+            "agent",
+            tools_condition,
+            {
+                "tools": "tool_guard",
+                END: END,
+            },
         )
-    return _react_agent
+        workflow.add_conditional_edges(
+            "tool_guard",
+            _route_after_guard,
+            {
+                "retrieve": "retrieve",
+                "blocked": "blocked",
+            },
+        )
+        workflow.add_conditional_edges(
+            "retrieve",
+            _route_after_tool,
+            {
+                "grade": "grade",
+                "agent": "agent",
+            },
+        )
+        workflow.add_conditional_edges("grade", _grade_documents)
+        workflow.add_edge("rewrite", "agent")
+        workflow.add_edge("generate", END)
+        workflow.add_edge("blocked", END)
+
+        _agentic_graph = workflow.compile(checkpointer=MemorySaver())
+    return _agentic_graph
+
+
+def _convert_history_to_messages(history: List[Dict[str, Any]]) -> List[BaseMessage]:
+    converted = []
+    for item in history:
+        role = item.get("role")
+        content = item.get("content", "")
+        if role == "user":
+            converted.append(HumanMessage(content=content))
+        elif role == "assistant":
+            converted.append(AIMessage(content=content))
+        elif role == "system":
+            converted.append(SystemMessage(content=content))
+        else:
+            converted.append(AIMessage(content=content))
+    return converted
 
 
 async def chat_with_tools_async(
@@ -668,24 +847,8 @@ async def chat_with_tools_async(
     week: str = None,
     conversation_id: str = None,
 ) -> Dict[str, Any]:
-    """LangGraph ReAct Agent를 사용한 채팅 (멀티턴 지원)
-
-    LLM이 질문을 분석하여 적절한 tool을 선택하고 실행합니다.
-    ReAct 패턴으로 multi-step 추론이 가능합니다.
-    conversation_id가 제공되면 이전 대화 히스토리를 포함합니다.
-
-    Args:
-        user_message: 사용자 질문
-        team: 팀 필터 (optional)
-        week: 주차 필터 (optional)
-        conversation_id: 대화 세션 ID (멀티턴용)
-
-    Returns:
-        answer: LLM 답변
-        tool_calls: 호출된 tool 정보
-        tool_results: tool 실행 결과
-    """
-    agent = get_react_agent()
+    """Agentic RAG 그래프 기반 채팅 (멀티턴 지원)"""
+    graph = get_agentic_graph()
 
     # 현재 날짜 및 주차 계산
     now = datetime.now()
@@ -704,15 +867,21 @@ async def chat_with_tools_async(
     if conversation_id:
         history = await get_history(conversation_id)
 
-    # 메시지 구성: [시스템(컨텍스트)] + [히스토리] + [현재 질문(순수 메시지)]
-    messages = (
-        [{"role": "system", "content": f"[컨텍스트] {context_info}"}]
-        + history
-        + [{"role": "user", "content": user_message}]
+    # 메시지 구성: [시스템(가이드)] + [시스템(컨텍스트)] + [히스토리] + [현재 질문]
+    history_messages = _convert_history_to_messages(history)
+    messages: List[BaseMessage] = (
+        [
+            SystemMessage(content=AGENT_SYSTEM_PROMPT),
+            SystemMessage(content=f"[컨텍스트] {context_info}"),
+        ]
+        + history_messages
+        + [HumanMessage(content=user_message)]
     )
 
     # ===== 디버깅: 전체 메시지 토큰 출력 =====
-    system_tokens = count_tokens(f"[컨텍스트] {context_info}")
+    system_tokens = count_tokens(AGENT_SYSTEM_PROMPT) + count_tokens(
+        f"[컨텍스트] {context_info}"
+    )
     history_tokens = sum(count_tokens(m.get("content", "")) for m in history)
     user_tokens = count_tokens(user_message)
     total_input_tokens = system_tokens + history_tokens + user_tokens
@@ -722,24 +891,34 @@ async def chat_with_tools_async(
     print(f"   - 히스토리 토큰: {history_tokens} ({len(history)}개 메시지)")
     print(f"   - 현재 질문 토큰: {user_tokens}")
     print(f"   - 총 입력 토큰 (tool 제외): {total_input_tokens}")
-    print(f"   - 메시지 구조: {[m['role'] for m in messages]}")
+    print(f"   - 메시지 구조: {[m.type for m in messages]}")
     # =========================================
 
-    # Agent 실행 (동기 함수이므로 run_in_executor 사용)
+    # Graph 실행 (동기 함수이므로 run_in_executor 사용)
     loop = asyncio.get_event_loop()
     try:
-        print(f"🚀 [DEBUG] agent.invoke 호출 시작...")
+        print(f"🚀 [DEBUG] graph.invoke 호출 시작...")
+        config = RunnableConfig(
+            recursion_limit=GRAPH_RECURSION_LIMIT,
+            configurable={"thread_id": conversation_id or "single"},
+        )
         result = await loop.run_in_executor(
             None,
-            lambda: agent.invoke(
-                {"messages": messages},
-                config={"recursion_limit": 3},
+            lambda: graph.invoke(
+                {
+                    "messages": messages,
+                    "search_count": 0,
+                    "rewrite_count": 0,
+                    "last_query": user_message,
+                    "blocked": False,
+                },
+                config=config,
             ),
         )
-        print(f"✅ [DEBUG] agent.invoke 성공")
+        print(f"✅ [DEBUG] graph.invoke 성공")
     except Exception as e:
         # ===== 디버깅: 에러 상세 출력 =====
-        print(f"❌ [DEBUG] agent.invoke 실패!")
+        print(f"❌ [DEBUG] graph.invoke 실패!")
         print(f"   - 에러 타입: {type(e).__name__}")
         print(f"   - 에러 메시지: {e}")
         print(f"   - 입력 토큰 (추정): {total_input_tokens}")
@@ -759,7 +938,7 @@ async def chat_with_tools_async(
             or "token" in error_msg
             or "too long" in error_msg
             or "maximum" in error_msg
-            or "500" in str(e)  # 500 에러도 캐치
+            or "500" in str(e)
         ):
             print(f"⚠️ 토큰/서버 에러로 판단됨")
             return {
@@ -767,7 +946,6 @@ async def chat_with_tools_async(
                 "tool_calls": [],
                 "tool_results": [],
             }
-        # 그 외 에러는 다시 raise
         raise
 
     # 결과 파싱
@@ -777,21 +955,14 @@ async def chat_with_tools_async(
     answer = ""
 
     for msg in response_messages:
-        # AIMessage에서 tool_calls 추출
-        if hasattr(msg, "tool_calls") and msg.tool_calls:
+        if isinstance(msg, AIMessage) and msg.tool_calls:
             for tc in msg.tool_calls:
                 tool_calls_info.append(
                     {"name": tc.get("name", ""), "arguments": tc.get("args", {})}
                 )
-
-        # ToolMessage에서 결과 추출
-        if hasattr(msg, "type") and msg.type == "tool":
-            tool_results.append(
-                {"name": getattr(msg, "name", "unknown"), "result": msg.content}
-            )
-
-        # 마지막 AIMessage가 최종 답변
-        if hasattr(msg, "type") and msg.type == "ai" and msg.content:
+        if isinstance(msg, ToolMessage):
+            tool_results.append({"name": msg.name, "result": msg.content})
+        if isinstance(msg, AIMessage) and msg.content:
             answer = msg.content
 
     if not answer:

@@ -14,18 +14,22 @@ from typing import List, Dict, Any, Optional
 from opensearchpy import OpenSearch, helpers
 from openai import OpenAI
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 # ========== 설정 ==========
 # OpenSearch 설정
 OPENSEARCH_HOST = os.getenv("OPENSEARCH_HOST", "localhost")
 OPENSEARCH_PORT = int(os.getenv("OPENSEARCH_PORT", "9200"))
 OPENSEARCH_USER = os.getenv("OPENSEARCH_USER", "admin")
-OPENSEARCH_PASSWORD = os.getenv("OPENSEARCH_PASSWORD", "admin")
-OPENSEARCH_USE_SSL = os.getenv("OPENSEARCH_USE_SSL", "false").lower() == "true"
+OPENSEARCH_PASSWORD = os.getenv("OPENSEARCH_PASSWORD", "rlaeorka1!K")
+OPENSEARCH_USE_SSL = "true"
 
 # 임베딩 설정
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "your_api_key")
-EMBEDDING_MODEL = "text-embedding-3-small"  # OpenAI 임베딩 모델
-EMBEDDING_DIMENSION = 1536  # text-embedding-3-small 차원
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+EMBEDDING_MODEL = "qwen/qwen3-embedding-8b"  # OpenAI 임베딩 모델
+EMBEDDING_DIMENSION = 4096  # text-embedding-3-small 차원
 
 # 인덱스 설정
 INDEX_NAME = "weekly_mail"
@@ -53,8 +57,9 @@ def get_opensearch_client() -> OpenSearch:
 def get_embedding_client() -> OpenAI:
     """OpenAI 임베딩 클라이언트 (OpenRouter 또는 OpenAI 직접 사용)"""
     # OpenAI API 직접 사용 (임베딩은 OpenRouter에서 지원 안 될 수 있음)
-    api_key = os.getenv("OPENAI_API_KEY", OPENROUTER_API_KEY)
-    return OpenAI(api_key=api_key)
+    api_key = os.getenv("OPENROUTER_API_KEY")
+    base_url = os.getenv("OPENROUTER_BASE_URL")
+    return OpenAI(api_key=api_key, base_url=base_url)
 
 
 def get_embedding(text: str, client: OpenAI) -> List[float]:
@@ -212,7 +217,7 @@ def create_index(client: OpenSearch, index_name: str = INDEX_NAME):
                     "method": {
                         "name": "hnsw",
                         "space_type": "cosinesimil",
-                        "engine": "nmslib",
+                        "engine": "faiss",
                         "parameters": {"ef_construction": 128, "m": 16},
                     },
                 },
@@ -687,7 +692,7 @@ def run_search(
 if __name__ == "__main__":
     # ========== 실행 설정 ==========
     # 임베딩 설정
-    RECREATE_INDEX = False  # True: 인덱스 재생성
+    RECREATE_INDEX = True  # True: 인덱스 재생성
 
     # 검색 설정 (SEARCH_QUERY가 None이 아니면 검색 실행)
     SEARCH_QUERY = None  # 검색어 (예: "수율 개선")
@@ -707,3 +712,4 @@ if __name__ == "__main__":
         )
     else:
         process_all(recreate_index=RECREATE_INDEX)
+
