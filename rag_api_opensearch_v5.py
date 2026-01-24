@@ -1,12 +1,9 @@
 """
-RAG Chatbot API Server (OpenSearch 버전) - v3 Naive RAG + LLM Router
+RAG Chatbot API Server (OpenSearch 버전) - v5 Naive RAG + LangGraph 스트리밍
 - FastAPI 기반 REST API 서버
 - OpenSearch 하이브리드 검색 (벡터 + 키워드)
 - LangGraph Naive RAG + LLM Router 구조
-  - LLM 기반 질문 유형 분류 (search/statistics/general)
-  - 검색: OpenSearch 직접 호출
-  - 통계: LLM + Tool Binding
-  - 일반: 직접 LLM 응답
+- **신규**: LangGraph astream_events를 사용한 실시간 토큰 스트리밍
 - MongoDB 기반 멀티턴 대화 히스토리 관리
 """
 
@@ -15,12 +12,24 @@ import re
 import json
 import asyncio
 from pathlib import Path
-from typing import List, Dict, Optional, Any, Annotated, Sequence, Literal, TypedDict
+from typing import (
+    List,
+    Dict,
+    Optional,
+    Any,
+    Annotated,
+    Sequence,
+    Literal,
+    TypedDict,
+    Callable,
+    AsyncGenerator,
+)
 from datetime import datetime, UTC
 from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import StreamingResponse
 from contextlib import asynccontextmanager
 from pydantic import BaseModel, Field
 from opensearchpy import OpenSearch
@@ -98,6 +107,9 @@ ENCODING_NAME = "cl100k_base"
 MAX_SEARCH_CALLS = int(os.getenv("MAX_SEARCH_CALLS", "2"))
 MAX_REWRITE_COUNT = int(os.getenv("MAX_REWRITE_COUNT", "1"))
 GRAPH_RECURSION_LIMIT = int(os.getenv("GRAPH_RECURSION_LIMIT", "15"))
+
+# 스트리밍 설정 - 문단 단위로만 끊기
+STREAM_BUFFER_ENDINGS = ("\n\n",)  # 문단 끝에서만 플러시
 
 # 서버 설정
 HOST = os.getenv("API_HOST", "0.0.0.0")
@@ -304,13 +316,18 @@ class OpenSearchClient:
 
 
 # ========== LLM 클라이언트 ==========
-def get_llm():
-    """LLM 클라이언트"""
+def get_llm(streaming: bool = False):
+    """LLM 클라이언트
+
+    Args:
+        streaming: 스트리밍 모드 활성화 여부
+    """
     return ChatOpenAI(
         model=LLM_MODEL,
         api_key=OPENROUTER_API_KEY,
         base_url=OPENROUTER_BASE_URL,
         temperature=0,
+        streaming=streaming,
         default_headers={
             "HTTP-Referer": "https://weekly-mail-agent.local",
             "X-Title": "Weekly Mail RAG Chatbot",
@@ -886,10 +903,11 @@ def llm_answer_node(state: GraphState) -> Dict[str, Any]:
 
 # ===== 그래프 빌드 =====
 _naive_rag_graph = None
+_preprocessing_graph = None
 
 
 def get_naive_rag_graph():
-    """Naive RAG + LLM Router 그래프 (싱글톤)"""
+    """Naive RAG + LLM Router 그래프 (싱글톤) - 일반 응답용"""
     global _naive_rag_graph
     if _naive_rag_graph is not None:
         return _naive_rag_graph
@@ -928,6 +946,59 @@ def get_naive_rag_graph():
     return _naive_rag_graph
 
 
+def _route_for_preprocessing(
+    state: GraphState,
+) -> Literal["retrieve", "statistics", "end_preprocessing"]:
+    """전처리 그래프용 라우팅: llm_answer 대신 end로"""
+    route = state.get("route", "general")
+    if route == "search":
+        return "retrieve"
+    elif route == "statistics":
+        return "statistics"
+    else:
+        return "end_preprocessing"
+
+
+def get_preprocessing_graph():
+    """전처리 전용 그래프 (스트리밍용) - router + retrieve/statistics만 실행"""
+    global _preprocessing_graph
+    if _preprocessing_graph is not None:
+        return _preprocessing_graph
+
+    workflow = StateGraph(GraphState)
+
+    # 노드 추가 (llm_answer 제외)
+    workflow.add_node("router", router_node)
+    workflow.add_node("retrieve", retrieve_document)
+    workflow.add_node("statistics", statistics_node)
+    workflow.add_node("end_preprocessing", lambda state: state)  # 패스스루 노드
+
+    # 엣지 연결
+    workflow.add_edge(START, "router")
+
+    # router → 3분기 (retrieve/statistics/end)
+    workflow.add_conditional_edges(
+        "router",
+        _route_for_preprocessing,
+        {
+            "retrieve": "retrieve",
+            "statistics": "statistics",
+            "end_preprocessing": "end_preprocessing",
+        },
+    )
+
+    # retrieve, statistics → end
+    workflow.add_edge("retrieve", "end_preprocessing")
+    workflow.add_edge("statistics", "end_preprocessing")
+
+    # end_preprocessing → END
+    workflow.add_edge("end_preprocessing", END)
+
+    _preprocessing_graph = workflow.compile(checkpointer=MemorySaver())
+    print("✅ 전처리 그래프 컴파일 완료 (스트리밍용)")
+    return _preprocessing_graph
+
+
 # ========== Chat 함수 ==========
 def _convert_history_to_messages(history: List[Dict]) -> List[BaseMessage]:
     """히스토리를 LangChain 메시지로 변환"""
@@ -950,7 +1021,7 @@ async def chat_with_agent(
     week: Optional[str] = None,
     conversation_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Naive RAG + LLM Router 기반 채팅"""
+    """Naive RAG + LLM Router 기반 채팅 (일반 응답)"""
     import time
 
     t_start = time.time()
@@ -1032,6 +1103,195 @@ async def chat_with_agent(
         "tool_calls": tool_calls_info,
         "tool_results": tool_results,
     }
+
+
+# ========== 스트리밍 Chat 함수 (v5 신규) ==========
+async def chat_with_agent_streaming(
+    user_message: str,
+    team: Optional[str] = None,
+    week: Optional[str] = None,
+    conversation_id: Optional[str] = None,
+    on_chunk: Optional[Callable[[str], None]] = None,
+) -> AsyncGenerator[Dict[str, Any], None]:
+    """진짜 토큰 스트리밍 채팅
+
+    1단계: 전처리 그래프 실행 (router + retrieve/statistics)
+    2단계: LLM 직접 스트리밍 호출 (astream)
+
+    Args:
+        user_message: 사용자 메시지
+        team: 팀 필터
+        week: 주차 필터
+        conversation_id: 대화 세션 ID
+        on_chunk: 청크 콜백 함수 (선택사항)
+
+    Yields:
+        Dict with:
+            - type: "preprocessing" | "token" | "done" | "error"
+            - data: 해당 타입의 데이터
+    """
+    import time
+
+    t_start = time.time()
+    print(f"🚀 [chat_with_agent_streaming] 시작: {user_message[:50]}...")
+
+    # 대화 히스토리 조회
+    history = []
+    if conversation_id:
+        history = await get_history(conversation_id)
+    history_messages = _convert_history_to_messages(history)
+
+    full_answer = ""
+    buffer = ""
+    tool_results = []
+    chunk_index = 0
+    context = ""
+    route = ""
+
+    try:
+        # ===== 1단계: 전처리 그래프 실행 (router + retrieve/statistics) =====
+        yield {"type": "preprocessing", "data": {"status": "start", "step": "routing"}}
+
+        preprocessing_graph = get_preprocessing_graph()
+        config = RunnableConfig(
+            recursion_limit=GRAPH_RECURSION_LIMIT,
+            configurable={"thread_id": f"{conversation_id or 'single'}_preprocess"},
+        )
+
+        input_state = {
+            "question": user_message,
+            "context": "",
+            "answer": "",
+            "messages": history_messages,
+            "route": "",
+        }
+
+        # 전처리 그래프 실행 (동기적으로 완료)
+        loop = asyncio.get_event_loop()
+        preprocess_result = await loop.run_in_executor(
+            None,
+            lambda: preprocessing_graph.invoke(input_state, config=config),
+        )
+
+        context = preprocess_result.get("context", "")
+        route = preprocess_result.get("route", "general")
+        preprocess_messages = preprocess_result.get("messages", [])
+
+        # Tool 결과 추출
+        for msg in preprocess_messages:
+            if isinstance(msg, ToolMessage):
+                tool_results.append({"name": msg.name, "result": msg.content})
+
+        yield {
+            "type": "preprocessing",
+            "data": {
+                "status": "done",
+                "route": route,
+                "context_length": len(context),
+                "tool_results_count": len(tool_results),
+            },
+        }
+
+        print(
+            f"📊 [Preprocessing] route={route}, context={len(context)}자, tools={len(tool_results)}개"
+        )
+
+        # ===== 2단계: LLM 직접 스트리밍 =====
+        yield {"type": "llm", "data": {"status": "start"}}
+
+        # 프롬프트 구성
+        if context:
+            user_prompt = f"""질문: {user_message}
+
+참고 정보:
+{context}
+
+위 정보를 바탕으로 질문에 답변해주세요."""
+        else:
+            user_prompt = f"""질문: {user_message}
+
+일반적인 대화로 응답해주세요."""
+
+        # LLM 메시지 구성
+        llm_messages = [SystemMessage(content=ANSWER_SYSTEM_PROMPT)]
+
+        # 히스토리 추가
+        for msg in history_messages:
+            if isinstance(msg, HumanMessage):
+                llm_messages.append(HumanMessage(content=msg.content))
+            elif isinstance(msg, AIMessage):
+                llm_messages.append(AIMessage(content=msg.content))
+            elif isinstance(msg, SystemMessage):
+                llm_messages.append(SystemMessage(content=msg.content))
+
+        # 현재 질문 추가
+        llm_messages.append(HumanMessage(content=user_prompt))
+
+        # 스트리밍 LLM 사용
+        streaming_llm = get_llm(streaming=True)
+
+        # LLM 직접 스트리밍 (astream 사용)
+        async for chunk in streaming_llm.astream(llm_messages):
+            if hasattr(chunk, "content") and chunk.content:
+                token = chunk.content
+                buffer += token
+                full_answer += token
+
+                # 문단 끝에서만 플러시 (\n\n)
+                should_flush = any(
+                    buffer.endswith(ending) for ending in STREAM_BUFFER_ENDINGS
+                )
+
+                if should_flush:
+                    yield {
+                        "type": "token",
+                        "index": chunk_index,
+                        "data": buffer,
+                    }
+
+                    # 콜백 호출 (외부 chatbot 전송용)
+                    if on_chunk:
+                        on_chunk(buffer)
+
+                    chunk_index += 1
+                    buffer = ""
+
+        # 남은 버퍼 플러시
+        if buffer:
+            yield {
+                "type": "token",
+                "index": chunk_index,
+                "data": buffer,
+            }
+            if on_chunk:
+                on_chunk(buffer)
+
+        elapsed = (time.time() - t_start) * 1000
+        print(
+            f"✅ [chat_with_agent_streaming] 완료: {elapsed:.0f}ms, {chunk_index + 1}개 청크"
+        )
+
+        # 완료 신호
+        yield {
+            "type": "done",
+            "data": {
+                "full_answer": full_answer,
+                "tool_calls": [],
+                "tool_results": tool_results,
+                "route": route,
+                "elapsed_ms": elapsed,
+            },
+        }
+
+    except Exception as e:
+        print(f"❌ [chat_with_agent_streaming] 실패: {e}")
+        import traceback
+
+        traceback.print_exc()
+        yield {
+            "type": "error",
+            "data": {"message": str(e)},
+        }
 
 
 # ========== 출처 처리 ==========
@@ -1329,21 +1589,35 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Weekly Mail RAG Chatbot API (Naive RAG + LLM Router v3)",
-    description="""주간 메일 기반 Q&A API - LangGraph Naive RAG + LLM Router
+    title="Weekly Mail RAG Chatbot API (Naive RAG + 실시간 토큰 스트리밍 v5)",
+    description="""주간 메일 기반 Q&A API - LangGraph Naive RAG + LLM Router + 진짜 토큰 스트리밍
 
 ## 주요 기능
 - LLM 기반 질문 유형 분류 (search/statistics/general)
 - OpenSearch 하이브리드 검색
 - 통계 Tool Binding
 - 멀티턴 대화 지원
+- **신규**: LLM 직접 스트리밍 (ChatGPT처럼 실시간 토큰 출력!)
 
 ## API
-- POST /chat/v2 - 채팅
+- POST /chat/v2 - 일반 채팅 (전체 응답)
+- POST /chat/v2/stream - 실시간 스트리밍 채팅 (SSE, 토큰 단위)
 - GET /stats/* - 통계 조회
 - GET /health - 헬스체크
+
+## 스트리밍 동작 방식
+1. **전처리**: router → retrieve/statistics 실행 (context 수집)
+2. **LLM 스트리밍**: 토큰 단위로 실시간 SSE 전송
+
+## 스트리밍 이벤트 타입
+- `preprocessing`: 전처리 단계 상태
+- `llm`: LLM 스트리밍 시작
+- `token`: LLM 토큰 스트리밍 (실시간!)
+- `done`: 스트리밍 완료
+- `references`: 참조 출처
+- `error`: 에러 발생
 """,
-    version="3.1.0",
+    version="5.1.0",
     lifespan=lifespan,
 )
 
@@ -1364,7 +1638,7 @@ async def health():
 
 @app.post("/chat/v2", response_model=ChatV2Response)
 async def chat_v2(request: ChatV2Request):
-    """Naive RAG + LLM Router 채팅 API"""
+    """Naive RAG + LLM Router 채팅 API (일반 응답)"""
     if not os_client:
         raise HTTPException(status_code=503, detail="OpenSearch 초기화 중")
 
@@ -1428,6 +1702,190 @@ async def chat_v2(request: ChatV2Request):
         tool_results=[ToolResultInfo(**tr) for tr in result["tool_results"]],
         references=references,
     )
+
+
+@app.post("/chat/v2/stream")
+async def chat_v2_stream(request: ChatV2Request):
+    """실시간 토큰 스트리밍 채팅 API (SSE)
+
+    2단계 처리:
+    1. 전처리: router + retrieve/statistics 실행
+    2. LLM 스트리밍: 토큰 단위로 실시간 전송
+
+    이벤트 타입:
+    - preprocessing: 전처리 단계 (routing, context 수집)
+    - llm: LLM 스트리밍 시작
+    - token: LLM 생성 토큰 (버퍼링되어 전송) ← 실시간!
+    - done: 스트리밍 완료 (전체 답변 포함)
+    - references: 참조 출처 정보
+    - error: 에러 발생
+    """
+    if not os_client:
+        raise HTTPException(status_code=503, detail="OpenSearch 초기화 중")
+
+    message = request.message.strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="메시지가 비어있습니다")
+
+    async def generate() -> AsyncGenerator[str, None]:
+        full_answer = ""
+        tool_results = []
+
+        try:
+            async for event in chat_with_agent_streaming(
+                message,
+                team=request.team,
+                week=request.week,
+                conversation_id=request.conversation_id,
+            ):
+                event_type = event.get("type", "")
+
+                # 토큰 수집
+                if event_type == "token":
+                    full_answer += event.get("data", "")
+
+                # 완료 시 데이터 수집
+                elif event_type == "done":
+                    done_data = event.get("data", {})
+                    full_answer = done_data.get("full_answer", full_answer)
+                    tool_results = done_data.get("tool_results", tool_results)
+
+                # SSE 이벤트 전송 (모든 이벤트 즉시 전송)
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+            # 출처 추출 및 MongoDB 저장
+            references = []
+            search_contexts = []
+            for tr in tool_results:
+                if tr.get("name") == "search_mail_content":
+                    try:
+                        search_results = json.loads(tr.get("result", "[]"))
+                        if isinstance(search_results, list):
+                            search_contexts = search_results
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+
+            if search_contexts:
+                clean_answer, used_contexts = parse_used_references(
+                    full_answer, search_contexts
+                )
+                references = extract_references(used_contexts)
+            else:
+                clean_answer = full_answer
+
+            # 후처리
+            answer_converted = convert_table_to_bullet(clean_answer)
+            answer_converted = clean_html_breaks(answer_converted)
+
+            # 참조 정보 전송
+            if references:
+                refs_event = {
+                    "type": "references",
+                    "data": [ref.model_dump() for ref in references],
+                }
+                yield f"data: {json.dumps(refs_event, ensure_ascii=False)}\n\n"
+
+            # MongoDB 저장
+            if request.conversation_id:
+                await save_full_log(
+                    conversation_id=request.conversation_id,
+                    user_id=request.user_id,
+                    message=message,
+                    team=request.team,
+                    week=request.week,
+                    tool_calls=[],
+                    tool_results=tool_results,
+                    answer=answer_converted,
+                    references=[ref.model_dump() for ref in references],
+                )
+                await save_history(
+                    conversation_id=request.conversation_id,
+                    user_message=message,
+                    assistant_answer=answer_converted,
+                )
+
+        except Exception as e:
+            error_event = {"type": "error", "data": {"message": str(e)}}
+            yield f"data: {json.dumps(error_event, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+# ========== 스트리밍 헬퍼 함수 (외부 chatbot용) ==========
+async def stream_to_chatbot(
+    user_message: str,
+    send_func: Callable[[str], None],
+    conversation_id: Optional[str] = None,
+    team: Optional[str] = None,
+    week: Optional[str] = None,
+) -> Dict[str, Any]:
+    """LangGraph 스트리밍을 사용하여 외부 chatbot에 실시간 전송
+
+    사용 예시:
+    ```python
+    # 기존 코드 (한 번에 전송)
+    # result = await chat_with_agent(message, ...)
+    # send(chatbot, result["answer"])
+
+    # v5 변경 후 (실시간 스트리밍)
+    result = await stream_to_chatbot(
+        message,
+        send_func=lambda chunk: send(chatbot, chunk),
+        conversation_id=request.conversation_id,
+    )
+    ```
+
+    Args:
+        user_message: 사용자 메시지
+        send_func: 챗봇에 메시지를 보내는 함수 (동기 함수)
+        conversation_id: 대화 세션 ID
+        team: 팀 필터
+        week: 주차 필터
+
+    Returns:
+        Dict with full_answer, tool_calls, tool_results
+    """
+    print(f"📤 [stream_to_chatbot] 스트리밍 시작: {user_message[:50]}...")
+
+    full_answer = ""
+    tool_calls_info = []
+    tool_results = []
+    chunk_count = 0
+
+    async for event in chat_with_agent_streaming(
+        user_message,
+        team=team,
+        week=week,
+        conversation_id=conversation_id,
+        on_chunk=send_func,  # 콜백으로 전달
+    ):
+        event_type = event.get("type", "")
+
+        if event_type == "token":
+            chunk_count += 1
+            full_answer += event.get("data", "")
+
+        elif event_type == "done":
+            done_data = event.get("data", {})
+            full_answer = done_data.get("full_answer", full_answer)
+            tool_calls_info = done_data.get("tool_calls", [])
+            tool_results = done_data.get("tool_results", [])
+
+    print(f"✅ [stream_to_chatbot] 완료: {chunk_count}개 청크 전송")
+
+    return {
+        "answer": full_answer,
+        "tool_calls": tool_calls_info,
+        "tool_results": tool_results,
+    }
 
 
 # ========== 통계 API ==========
@@ -1503,7 +1961,7 @@ if __name__ == "__main__":
     import uvicorn
 
     print("=" * 50)
-    print("RAG Chatbot API Server (Naive RAG + LLM Router v3)")
+    print("RAG Chatbot API Server (Naive RAG + LangGraph 스트리밍 v5)")
     print("=" * 50)
     print(f"  Host: {HOST}")
     print(f"  Port: {PORT}")
@@ -1511,6 +1969,7 @@ if __name__ == "__main__":
     print(f"  OpenSearch: {OPENSEARCH_HOST}:{OPENSEARCH_PORT}")
     print(f"  Index: {INDEX_NAME}")
     print("  Graph: START -> router -> (retrieve|statistics|llm_answer) -> END")
+    print("  Streaming: 문단 단위 (\\n\\n)")
     print("=" * 50)
 
     uvicorn.run(app, host=HOST, port=PORT)

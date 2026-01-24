@@ -1,12 +1,9 @@
 """
-RAG Chatbot API Server (OpenSearch 버전) - v3 Naive RAG + LLM Router
+RAG Chatbot API Server (OpenSearch 버전) - v4 Naive RAG + 문단별 전송
 - FastAPI 기반 REST API 서버
 - OpenSearch 하이브리드 검색 (벡터 + 키워드)
 - LangGraph Naive RAG + LLM Router 구조
-  - LLM 기반 질문 유형 분류 (search/statistics/general)
-  - 검색: OpenSearch 직접 호출
-  - 통계: LLM + Tool Binding
-  - 일반: 직접 LLM 응답
+- **신규**: 답변을 문단별로 나눠서 순차 전송 (SSE 스트리밍)
 - MongoDB 기반 멀티턴 대화 히스토리 관리
 """
 
@@ -15,12 +12,24 @@ import re
 import json
 import asyncio
 from pathlib import Path
-from typing import List, Dict, Optional, Any, Annotated, Sequence, Literal, TypedDict
+from typing import (
+    List,
+    Dict,
+    Optional,
+    Any,
+    Annotated,
+    Sequence,
+    Literal,
+    TypedDict,
+    Callable,
+    AsyncGenerator,
+)
 from datetime import datetime, UTC
 from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import StreamingResponse
 from contextlib import asynccontextmanager
 from pydantic import BaseModel, Field
 from opensearchpy import OpenSearch
@@ -99,6 +108,9 @@ MAX_SEARCH_CALLS = int(os.getenv("MAX_SEARCH_CALLS", "2"))
 MAX_REWRITE_COUNT = int(os.getenv("MAX_REWRITE_COUNT", "1"))
 GRAPH_RECURSION_LIMIT = int(os.getenv("GRAPH_RECURSION_LIMIT", "15"))
 
+# 문단별 전송 설정
+PARAGRAPH_DELAY = float(os.getenv("PARAGRAPH_DELAY", "0.3"))  # 문단 간 딜레이 (초)
+
 # 서버 설정
 HOST = os.getenv("API_HOST", "0.0.0.0")
 PORT = int(os.getenv("API_PORT", "8002"))
@@ -176,6 +188,93 @@ def count_tokens(text: str) -> int:
         return len(encoding.encode(text))
     except Exception:
         return len(text) // 4
+
+
+# ========== 문단 분리 유틸리티 (v4 신규) ==========
+def split_into_paragraphs(text: str) -> List[str]:
+    """텍스트를 문단별로 분리
+
+    분리 기준:
+    - 빈 줄 2개 이상
+    - 마크다운 헤더 (##, ###)
+    - 번호 목록 시작 (1., 2., ...)
+    """
+    if not text:
+        return []
+
+    # 먼저 빈 줄 기준으로 분리
+    paragraphs = re.split(r"\n\n+", text.strip())
+
+    result = []
+    for p in paragraphs:
+        p = p.strip()
+        if not p:
+            continue
+
+        # 마크다운 헤더가 포함된 경우 추가 분리
+        if re.search(r"^#{1,3}\s+", p, re.MULTILINE):
+            # 헤더 기준으로 분리
+            sub_parts = re.split(r"(?=^#{1,3}\s+)", p, flags=re.MULTILINE)
+            for sp in sub_parts:
+                sp = sp.strip()
+                if sp:
+                    result.append(sp)
+        else:
+            result.append(p)
+
+    return result
+
+
+def split_into_sentences(text: str) -> List[str]:
+    """텍스트를 문장 단위로 분리 (한국어 친화적)"""
+    # 한국어 문장 종결어미 + 마침표/물음표/느낌표
+    pattern = r"(?<=[.!?다요음니까])\s+"
+    sentences = re.split(pattern, text)
+    return [s.strip() for s in sentences if s.strip()]
+
+
+async def send_in_paragraphs(
+    text: str, send_callback: Callable[[str], None], delay: float = PARAGRAPH_DELAY
+) -> None:
+    """문단별로 나눠서 순차 전송
+
+    Args:
+        text: 전송할 전체 텍스트
+        send_callback: 각 문단을 전송하는 콜백 함수
+        delay: 문단 간 딜레이 (초)
+    """
+    paragraphs = split_into_paragraphs(text)
+
+    for i, paragraph in enumerate(paragraphs):
+        send_callback(paragraph)
+
+        # 마지막이 아니면 잠시 대기 (너무 빠르게 보내지 않도록)
+        if i < len(paragraphs) - 1:
+            await asyncio.sleep(delay)
+
+
+async def send_chunked(
+    text: str,
+    send_callback: Callable[[str], None],
+    chunk_size: int = 3,
+    delay: float = 0.2,
+) -> None:
+    """n개의 문장씩 묶어서 전송
+
+    Args:
+        text: 전송할 전체 텍스트
+        send_callback: 각 청크를 전송하는 콜백 함수
+        chunk_size: 한 번에 보낼 문장 수
+        delay: 청크 간 딜레이 (초)
+    """
+    sentences = split_into_sentences(text)
+
+    for i in range(0, len(sentences), chunk_size):
+        chunk = " ".join(sentences[i : i + chunk_size])
+        send_callback(chunk)
+
+        if i + chunk_size < len(sentences):
+            await asyncio.sleep(delay)
 
 
 # ========== OpenSearch 클라이언트 ==========
@@ -1329,21 +1428,23 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Weekly Mail RAG Chatbot API (Naive RAG + LLM Router v3)",
-    description="""주간 메일 기반 Q&A API - LangGraph Naive RAG + LLM Router
+    title="Weekly Mail RAG Chatbot API (Naive RAG + 문단별 전송 v4)",
+    description="""주간 메일 기반 Q&A API - LangGraph Naive RAG + LLM Router + 문단별 스트리밍
 
 ## 주요 기능
 - LLM 기반 질문 유형 분류 (search/statistics/general)
 - OpenSearch 하이브리드 검색
 - 통계 Tool Binding
 - 멀티턴 대화 지원
+- **신규**: 문단별 순차 전송 (SSE 스트리밍)
 
 ## API
-- POST /chat/v2 - 채팅
+- POST /chat/v2 - 일반 채팅 (전체 응답)
+- POST /chat/v2/stream - 문단별 스트리밍 채팅 (SSE)
 - GET /stats/* - 통계 조회
 - GET /health - 헬스체크
 """,
-    version="3.1.0",
+    version="4.0.0",
     lifespan=lifespan,
 )
 
@@ -1364,7 +1465,7 @@ async def health():
 
 @app.post("/chat/v2", response_model=ChatV2Response)
 async def chat_v2(request: ChatV2Request):
-    """Naive RAG + LLM Router 채팅 API"""
+    """Naive RAG + LLM Router 채팅 API (일반 응답)"""
     if not os_client:
         raise HTTPException(status_code=503, detail="OpenSearch 초기화 중")
 
@@ -1428,6 +1529,153 @@ async def chat_v2(request: ChatV2Request):
         tool_results=[ToolResultInfo(**tr) for tr in result["tool_results"]],
         references=references,
     )
+
+
+@app.post("/chat/v2/stream")
+async def chat_v2_stream(request: ChatV2Request):
+    """문단별 스트리밍 채팅 API (SSE)
+
+    답변을 문단별로 나눠서 Server-Sent Events로 전송합니다.
+    각 이벤트는 JSON 형식으로 전송됩니다:
+    - type: "paragraph" | "references" | "done" | "error"
+    - data: 문단 내용 또는 참조 정보
+    """
+    if not os_client:
+        raise HTTPException(status_code=503, detail="OpenSearch 초기화 중")
+
+    message = request.message.strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="메시지가 비어있습니다")
+
+    async def generate() -> AsyncGenerator[str, None]:
+        try:
+            # Agent 호출
+            result = await chat_with_agent(
+                message,
+                team=request.team,
+                week=request.week,
+                conversation_id=request.conversation_id,
+            )
+
+            # 출처 추출
+            references = []
+            search_contexts = []
+            for tr in result["tool_results"]:
+                if tr["name"] == "search_mail_content":
+                    try:
+                        search_results = json.loads(tr["result"])
+                        if isinstance(search_results, list):
+                            search_contexts = search_results
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+
+            answer = result["answer"]
+            if search_contexts:
+                clean_answer, used_contexts = parse_used_references(
+                    answer, search_contexts
+                )
+                references = extract_references(used_contexts)
+            else:
+                clean_answer = answer
+
+            # 후처리
+            answer_converted = convert_table_to_bullet(clean_answer)
+            answer_converted = clean_html_breaks(answer_converted)
+
+            # 문단별로 분리해서 전송
+            paragraphs = split_into_paragraphs(answer_converted)
+
+            for i, paragraph in enumerate(paragraphs):
+                event_data = {
+                    "type": "paragraph",
+                    "index": i,
+                    "total": len(paragraphs),
+                    "data": paragraph,
+                }
+                yield f"data: {json.dumps(event_data, ensure_ascii=False)}\n\n"
+
+                # 마지막이 아니면 딜레이
+                if i < len(paragraphs) - 1:
+                    await asyncio.sleep(PARAGRAPH_DELAY)
+
+            # 참조 정보 전송
+            if references:
+                refs_data = {
+                    "type": "references",
+                    "data": [ref.model_dump() for ref in references],
+                }
+                yield f"data: {json.dumps(refs_data, ensure_ascii=False)}\n\n"
+
+            # 완료 신호
+            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+
+            # MongoDB 저장
+            if request.conversation_id:
+                await save_full_log(
+                    conversation_id=request.conversation_id,
+                    user_id=request.user_id,
+                    message=message,
+                    team=request.team,
+                    week=request.week,
+                    tool_calls=result["tool_calls"],
+                    tool_results=result["tool_results"],
+                    answer=answer_converted,
+                    references=[ref.model_dump() for ref in references],
+                )
+                await save_history(
+                    conversation_id=request.conversation_id,
+                    user_message=message,
+                    assistant_answer=answer_converted,
+                )
+
+        except Exception as e:
+            error_data = {"type": "error", "message": str(e)}
+            yield f"data: {json.dumps(error_data, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+# ========== 문단별 전송 헬퍼 함수 (외부 chatbot용) ==========
+async def send_answer_in_paragraphs(
+    answer: str, send_func: Callable[[str], None], delay: float = PARAGRAPH_DELAY
+) -> None:
+    """완성된 답변을 문단별로 나눠서 외부 chatbot에 전송
+
+    사용 예시:
+    ```python
+    # 기존 코드
+    # send(chatbot, answer_converted)
+
+    # v4 변경 후
+    await send_answer_in_paragraphs(answer_converted, lambda p: send(chatbot, p))
+    ```
+
+    Args:
+        answer: 전송할 전체 답변
+        send_func: 챗봇에 메시지를 보내는 함수 (동기 함수)
+        delay: 문단 간 딜레이 (초)
+    """
+    paragraphs = split_into_paragraphs(answer)
+
+    print(f"📤 [send_answer_in_paragraphs] {len(paragraphs)}개 문단으로 분리")
+
+    for i, paragraph in enumerate(paragraphs):
+        print(f"📤 [{i+1}/{len(paragraphs)}] 문단 전송 ({len(paragraph)}자)")
+        send_func(paragraph)
+
+        # 마지막이 아니면 딜레이
+        if i < len(paragraphs) - 1:
+            await asyncio.sleep(delay)
+
+    print(f"✅ [send_answer_in_paragraphs] 전송 완료")
 
 
 # ========== 통계 API ==========
@@ -1503,7 +1751,7 @@ if __name__ == "__main__":
     import uvicorn
 
     print("=" * 50)
-    print("RAG Chatbot API Server (Naive RAG + LLM Router v3)")
+    print("RAG Chatbot API Server (Naive RAG + 문단별 전송 v4)")
     print("=" * 50)
     print(f"  Host: {HOST}")
     print(f"  Port: {PORT}")
@@ -1511,6 +1759,7 @@ if __name__ == "__main__":
     print(f"  OpenSearch: {OPENSEARCH_HOST}:{OPENSEARCH_PORT}")
     print(f"  Index: {INDEX_NAME}")
     print("  Graph: START -> router -> (retrieve|statistics|llm_answer) -> END")
+    print(f"  Paragraph Delay: {PARAGRAPH_DELAY}s")
     print("=" * 50)
 
     uvicorn.run(app, host=HOST, port=PORT)

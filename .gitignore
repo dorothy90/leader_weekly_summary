@@ -196,3 +196,6 @@ generate_sample_data.py
 __pycache__/opensearch.cpython-313.pyc
 .gitignore
 __pycache__/rag_api_opensearch.cpython-313.pyc
+data
+generate_sample_weeks.py
+__pycache__/rag_api_opensearch_v3.cpython-313.pyc
