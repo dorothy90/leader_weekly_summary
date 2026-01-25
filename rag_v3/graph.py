@@ -1,31 +1,18 @@
 """
-RAG Chatbot API Server (OpenSearch 버전) - v3 Naive RAG + LLM Router
-- FastAPI 기반 REST API 서버
-- OpenSearch 하이브리드 검색 (벡터 + 키워드)
-- LangGraph Naive RAG + LLM Router 구조
-  - LLM 기반 질문 유형 분류 (search/statistics/general)
-  - 검색: OpenSearch 직접 호출
-  - 통계: LLM + Tool Binding
-  - 일반: 직접 LLM 응답
-- MongoDB 기반 멀티턴 대화 히스토리 관리
+graph.py - 비즈니스 로직 계층
+- 통계 Tools
+- GraphState, 프롬프트
+- 노드 함수들 (router, retrieve, statistics, llm_answer)
+- 그래프 빌드
+- chat_with_agent()
 """
 
-import os
-import re
 import json
 import asyncio
-from pathlib import Path
-from typing import List, Dict, Optional, Any, Annotated, Sequence, Literal, TypedDict
-from datetime import datetime, UTC
-from urllib.parse import quote
+import re
+from typing import List, Dict, Optional, Any, Annotated, Literal, TypedDict
 
-from fastapi import FastAPI, HTTPException
-from fastapi.staticfiles import StaticFiles
-from contextlib import asynccontextmanager
 from pydantic import BaseModel, Field
-from opensearchpy import OpenSearch
-from openai import OpenAI
-from langchain_openai import ChatOpenAI
 from langchain_core.tools import tool
 from langchain_core.messages import (
     BaseMessage,
@@ -34,17 +21,10 @@ from langchain_core.messages import (
     AIMessage,
     ToolMessage,
 )
-from langchain_core.prompts import PromptTemplate
-
-# ToolNode는 더 이상 사용하지 않음 (Naive RAG 구조)
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.runnables import RunnableConfig
-from motor.motor_asyncio import AsyncIOMotorClient
-
-from dotenv import load_dotenv
-import tiktoken
 
 # OpenSearch 집계 함수 import
 from opensearch import (
@@ -56,269 +36,25 @@ from opensearch import (
     get_unique_weeks as _get_unique_weeks,
 )
 
-load_dotenv()
+from .core import (
+    get_llm,
+    count_tokens,
+    get_history,
+    MAX_TOOL_RESULT_TOKENS,
+    SEARCH_RESULT_LIMIT,
+    MAX_TEXT_PER_DOC,
+    GRAPH_RECURSION_LIMIT,
+    MAX_LLM_HISTORY_TURNS,
+)
 
-# ========== 설정 ==========
-# OpenSearch 설정
-OPENSEARCH_HOST = os.getenv("OPENSEARCH_HOST", "localhost")
-OPENSEARCH_PORT = int(os.getenv("OPENSEARCH_PORT", "9200"))
-OPENSEARCH_USER = os.getenv("OPENSEARCH_USER", "admin")
-OPENSEARCH_PASSWORD = os.getenv("OPENSEARCH_PASSWORD", "rlaeorka1!K")
-OPENSEARCH_USE_SSL = os.getenv("OPENSEARCH_USE_SSL", "true").lower() == "true"
-INDEX_NAME = os.getenv("OPENSEARCH_INDEX", "weekly_mail")
-
-# 임베딩 설정
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
-OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "")
-EMBEDDING_MODEL = "qwen/qwen3-embedding-8b"
-
-# LLM 설정
-LLM_MODEL = os.getenv("LLM_MODEL", "gpt-oss-120b")
-# LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o-mini")
-
-# MongoDB 설정
-MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
-MONGO_DB = os.getenv("MONGO_DB", "weekly_mail_agent")
-HISTORY_TTL_SECONDS = int(os.getenv("HISTORY_TTL_SECONDS", "1800"))
-MAX_HISTORY_TURNS = int(os.getenv("MAX_HISTORY_TURNS", "10"))
-MAX_ANSWER_LENGTH = int(os.getenv("MAX_ANSWER_LENGTH", "1000"))
-
-# LLM 히스토리 설정
-MAX_LLM_HISTORY_TURNS = int(os.getenv("MAX_LLM_HISTORY_TURNS", "3"))
-
-# 토큰/검색 설정
-MAX_TOOL_RESULT_TOKENS = int(os.getenv("MAX_TOOL_RESULT_TOKENS", "150000"))
-SEARCH_RESULT_LIMIT = int(os.getenv("SEARCH_RESULT_LIMIT", "50"))
-MAX_TEXT_PER_DOC = int(os.getenv("MAX_TEXT_PER_DOC", "2000"))
-ENCODING_NAME = "cl100k_base"
-
-# LangGraph 설정
-GRAPH_RECURSION_LIMIT = int(os.getenv("GRAPH_RECURSION_LIMIT", "15"))
-
-# 서버 설정
-HOST = os.getenv("API_HOST", "0.0.0.0")
-PORT = int(os.getenv("API_PORT", "8002"))
-API_BASE_URL = os.getenv("API_BASE_URL", f"http://localhost:{PORT}")
-
-# 디렉토리
-MAIL_DIR = Path("mail")
-
-# 팀 목록
-TEAMS = [
-    "CS팀",
-    "DT팀",
-    "EQUIP팀",
-    "FA팀",
-    "PE팀",
-    "PI팀",
-    "PROCESS팀",
-    "QA팀",
-    "TEST팀",
-    "YIELD팀",
-]
+# OpenSearch 클라이언트 (main.py에서 주입)
+os_client = None
 
 
-# ========== Pydantic 스키마 ==========
-class Reference(BaseModel):
-    """참조 출처"""
-
-    team: str
-    week: str
-    mail_id: str
-    url: str
-    score: float
-    part_index: Optional[int] = None
-    total_parts: Optional[int] = None
-
-
-class ChatV2Request(BaseModel):
-    """채팅 요청"""
-
-    user_id: str
-    message: str
-    conversation_id: Optional[str] = Field(default=None, description="대화 세션 ID")
-    team: Optional[str] = Field(default=None, description="팀 필터")
-    week: Optional[str] = Field(default=None, description="주차 필터 (예: 2025-48)")
-
-
-class ToolCallInfo(BaseModel):
-    """Tool 호출 정보"""
-
-    name: str
-    arguments: Dict[str, Any]
-
-
-class ToolResultInfo(BaseModel):
-    """Tool 실행 결과"""
-
-    name: str
-    result: Any
-
-
-class ChatV2Response(BaseModel):
-    """채팅 응답"""
-
-    answer: str
-    tool_calls: List[ToolCallInfo]
-    tool_results: List[ToolResultInfo]
-    references: List[Reference] = Field(default=[], description="참조 출처 목록")
-
-
-# ========== 유틸리티 ==========
-def count_tokens(text: str) -> int:
-    """텍스트의 토큰 수 계산"""
-    try:
-        encoding = tiktoken.get_encoding(ENCODING_NAME)
-        return len(encoding.encode(text))
-    except Exception:
-        return len(text) // 4
-
-
-# ========== OpenSearch 클라이언트 ==========
-class OpenSearchClient:
-    """OpenSearch 클라이언트"""
-
-    def __init__(self):
-        self.client = OpenSearch(
-            hosts=[{"host": OPENSEARCH_HOST, "port": OPENSEARCH_PORT}],
-            http_auth=(OPENSEARCH_USER, OPENSEARCH_PASSWORD),
-            use_ssl=OPENSEARCH_USE_SSL,
-            verify_certs=False,
-            ssl_show_warn=False,
-        )
-        self.embedding_client = OpenAI(
-            api_key=OPENROUTER_API_KEY, base_url=OPENROUTER_BASE_URL
-        )
-        self.index_name = INDEX_NAME
-
-    def _get_embedding(self, text: str) -> List[float]:
-        """텍스트를 임베딩 벡터로 변환"""
-        text = text[:8000] if len(text) > 8000 else text
-        response = self.embedding_client.embeddings.create(
-            model=EMBEDDING_MODEL,
-            input=text,
-        )
-        return response.data[0].embedding
-
-    def search(
-        self,
-        query: str,
-        team: Optional[str] = None,
-        week: Optional[str] = None,
-        mail_type: Optional[str] = None,
-        limit: int = 5,
-        vector_weight: float = 0.7,
-        keyword_weight: float = 0.3,
-    ) -> List[Dict]:
-        """하이브리드 검색
-
-        Args:
-            mail_type: 메일 유형 필터 ("weekly_report" / "daily_report" / None=전체)
-        """
-        # 가중치 정규화
-        total = vector_weight + keyword_weight
-        if total > 0:
-            vector_weight, keyword_weight = (
-                vector_weight / total,
-                keyword_weight / total,
-            )
-        else:
-            vector_weight, keyword_weight = 0.7, 0.3
-
-        query_embedding = self._get_embedding(query)
-
-        filters = []
-        if team:
-            filters.append({"term": {"team": team}})
-        if week:
-            filters.append({"term": {"week": week}})
-        if mail_type:
-            filters.append({"term": {"mail_type": mail_type}})
-
-        knn_boost = vector_weight * 10
-        bm25_boost = keyword_weight
-
-        search_body = {
-            "size": limit,
-            "query": {
-                "bool": {
-                    "should": [
-                        {
-                            "knn": {
-                                "embedding": {
-                                    "vector": query_embedding,
-                                    "k": limit,
-                                    "boost": knn_boost,
-                                }
-                            }
-                        },
-                        {
-                            "match": {
-                                "text": {
-                                    "query": query,
-                                    "analyzer": "korean",
-                                    "boost": bm25_boost,
-                                }
-                            }
-                        },
-                    ],
-                    "filter": filters if filters else [],
-                    "minimum_should_match": 1,
-                }
-            },
-        }
-
-        response = self.client.search(index=self.index_name, body=search_body)
-
-        results = []
-        for hit in response["hits"]["hits"]:
-            source = hit["_source"]
-            results.append(
-                {
-                    "score": hit["_score"],
-                    "text": source.get("text", ""),
-                    "team": source.get("team", "unknown"),
-                    "week": source.get("week", "unknown"),
-                    "mail_id": source.get("mail_id", "unknown"),
-                    "html_path": source.get("html_path", ""),
-                    "part_index": source.get("part_index"),
-                    "total_parts": source.get("total_parts"),
-                }
-            )
-        return results
-
-    def get_stats(self) -> Dict:
-        try:
-            count = self.client.count(index=self.index_name)
-            return {"total_documents": count["count"], "index": self.index_name}
-        except Exception as e:
-            return {"error": str(e)}
-
-    def health_check(self) -> Dict:
-        try:
-            info = self.client.info()
-            return {
-                "status": "ok",
-                "distribution": info["version"]["distribution"],
-                "version": info["version"]["number"],
-            }
-        except Exception as e:
-            return {"status": "error", "error": str(e)}
-
-
-# ========== LLM 클라이언트 ==========
-def get_llm():
-    """LLM 클라이언트"""
-    return ChatOpenAI(
-        model=LLM_MODEL,
-        api_key=OPENROUTER_API_KEY,
-        base_url=OPENROUTER_BASE_URL,
-        temperature=0,
-        default_headers={
-            "HTTP-Referer": "https://weekly-mail-agent.local",
-            "X-Title": "Weekly Mail RAG Chatbot",
-        },
-    )
+def set_os_client(client):
+    """OpenSearch 클라이언트 설정 (main.py에서 호출)"""
+    global os_client
+    os_client = client
 
 
 # ========== LangGraph Tools ==========
@@ -437,7 +173,7 @@ class RouteDecision(BaseModel):
     reason: str = Field(description="분류 이유 (디버깅용)")
 
 
-# 라우터 프롬프트
+# ===== 프롬프트 =====
 ROUTER_PROMPT = """사용자 질문을 분류하세요.
 
 ## 분류 기준
@@ -457,8 +193,6 @@ ROUTER_PROMPT = """사용자 질문을 분류하세요.
 
 JSON 형식으로 답변하세요."""
 
-
-# 답변 생성 프롬프트
 ANSWER_SYSTEM_PROMPT = """당신은 반도체 주간 업무 보고서 시스템의 AI 어시스턴트입니다.
 
 ## 답변 원칙
@@ -470,6 +204,31 @@ ANSWER_SYSTEM_PROMPT = """당신은 반도체 주간 업무 보고서 시스템�
 ## 출처 표시 (검색 결과가 있을 때)
 - 답변에 사용한 정보는 [문서 1], [문서 2] 형식으로 출처를 표시하세요.
 - 답변 마지막에 "참고: [문서 1], [문서 3]" 형태로 사용한 문서를 요약하세요."""
+
+STATISTICS_SYSTEM_PROMPT = """당신은 통계 조회 도우미입니다. 사용자 질문에 맞는 함수를 반드시 호출하세요.
+
+## 사용 가능한 함수
+- get_missing_teams: 주간보고 **미제출 팀** 조회 (week 파라미터 필수!)
+- count_weekly_reports_by_team: 주간보고 제출 수 조회 (팀별)
+- count_daily_reports_by_team: 일일보고 제출 수 조회 (팀별)
+- count_other_mails_by_team: 기타 메일 수 조회
+- get_mail_type_summary: 전체 메일 현황 요약
+- get_available_weeks: 데이터가 있는 주차 목록
+
+## 예시 (반드시 따라하세요)
+- "47주차 주보 미제출 팀 알려줘" → get_missing_teams(week="2025-47")
+- "48주차 주보 미제출팀 알려줘" → get_missing_teams(week="2025-48")
+- "48주차 주보 안보낸 팀알려줘" → get_missing_teams(week="2025-48")
+- "48주차 주보 안 보낸 팀" → get_missing_teams(week="2025-48")
+- "49주차 미제출 팀" → get_missing_teams(week="2025-49")
+- "제출 현황 알려줘" → count_weekly_reports_by_team()
+- "몇 개 팀이 제출했어?" → count_weekly_reports_by_team()
+
+## 규칙
+1. "미제출", "미제출팀", "안 낸", "안낸", "안보낸", "안 보낸" 키워드가 있으면 **반드시** get_missing_teams를 호출하세요.
+2. week 파라미터는 "2025-48" 형식으로 지정하세요 (48주차 → 2025-48).
+3. 주차가 명시되어 있으면 해당 주차를 week 파라미터로 전달하세요.
+"""
 
 
 # ===== 노드 함수들 =====
@@ -669,32 +428,6 @@ def retrieve_document(state: GraphState) -> Dict[str, Any]:
         return {"context": ""}
 
 
-STATISTICS_SYSTEM_PROMPT = """당신은 통계 조회 도우미입니다. 사용자 질문에 맞는 함수를 반드시 호출하세요.
-
-## 사용 가능한 함수
-- get_missing_teams: 주간보고 **미제출 팀** 조회 (week 파라미터 필수!)
-- count_weekly_reports_by_team: 주간보고 제출 수 조회 (팀별)
-- count_daily_reports_by_team: 일일보고 제출 수 조회 (팀별)
-- count_other_mails_by_team: 기타 메일 수 조회
-- get_mail_type_summary: 전체 메일 현황 요약
-- get_available_weeks: 데이터가 있는 주차 목록
-
-## 예시 (반드시 따라하세요)
-- "47주차 주보 미제출 팀 알려줘" → get_missing_teams(week="2025-47")
-- "48주차 주보 미제출팀 알려줘" → get_missing_teams(week="2025-48")
-- "48주차 주보 안보낸 팀알려줘" → get_missing_teams(week="2025-48")
-- "48주차 주보 안 보낸 팀" → get_missing_teams(week="2025-48")
-- "49주차 미제출 팀" → get_missing_teams(week="2025-49")
-- "제출 현황 알려줘" → count_weekly_reports_by_team()
-- "몇 개 팀이 제출했어?" → count_weekly_reports_by_team()
-
-## 규칙
-1. "미제출", "미제출팀", "안 낸", "안낸", "안보낸", "안 보낸" 키워드가 있으면 **반드시** get_missing_teams를 호출하세요.
-2. week 파라미터는 "2025-48" 형식으로 지정하세요 (48주차 → 2025-48).
-3. 주차가 명시되어 있으면 해당 주차를 week 파라미터로 전달하세요.
-"""
-
-
 def statistics_node(state: GraphState) -> Dict[str, Any]:
     """Statistics 노드: LLM + Tool Binding으로 통계 함수 호출"""
     import time as _time
@@ -747,8 +480,6 @@ def statistics_node(state: GraphState) -> Dict[str, Any]:
             missing_keywords = ["미제출", "안 낸", "안낸", "안보낸", "안 보낸"]
             if any(kw in question for kw in missing_keywords):
                 # 주차 추출 (예: "48주차" → "2025-48")
-                import re
-
                 week_match = re.search(r"(\d{1,2})주차", question)
                 if week_match:
                     week_num = int(week_match.group(1))
@@ -1032,421 +763,3 @@ async def chat_with_agent(
         "tool_calls": tool_calls_info,
         "tool_results": tool_results,
     }
-
-
-# ========== 출처 처리 ==========
-def parse_used_references(answer: str, contexts: List[Dict]) -> tuple:
-    """LLM 답변에서 실제 참고한 문서만 추출"""
-    pattern = r"\[문서\s*(\d+)\]"
-    matches = re.findall(pattern, answer)
-
-    if not matches:
-        return answer, []
-
-    used_indices = set(int(m) - 1 for m in matches if int(m) - 1 < len(contexts))
-    used_contexts = [ctx for i, ctx in enumerate(contexts) if i in used_indices]
-
-    clean_answer = re.sub(
-        r"\n*참고:\s*(\[문서\s*\d+\],?\s*)+\.?$", "", answer, flags=re.MULTILINE
-    ).strip()
-
-    return clean_answer, used_contexts
-
-
-def extract_references(contexts: List[Dict]) -> List[Reference]:
-    """검색 결과에서 참조 출처 추출"""
-    refs = []
-    seen = set()
-
-    for ctx in contexts:
-        team = ctx.get("team", "unknown")
-        week = ctx.get("week", "unknown")
-        mail_id = ctx.get("mail_id", "unknown")
-
-        key = f"{team}_{week}_{mail_id}"
-        if key in seen:
-            continue
-        seen.add(key)
-
-        filename = f"{week}_{team}_{mail_id}.html"
-        url = f"{API_BASE_URL}/mail/{quote(filename, safe='')}"
-        refs.append(
-            Reference(
-                team=team,
-                week=week,
-                mail_id=mail_id,
-                url=url,
-                score=ctx.get("score", 0),
-                part_index=ctx.get("part_index"),
-                total_parts=ctx.get("total_parts"),
-            )
-        )
-
-    return refs
-
-
-def convert_table_to_bullet(text: str) -> str:
-    """마크다운 표를 개조식으로 변환"""
-    lines = text.split("\n")
-    result = []
-    table_lines = []
-    in_table = False
-
-    for line in lines:
-        if line.strip().startswith("|") and "|" in line[1:]:
-            in_table = True
-            table_lines.append(line)
-        else:
-            if in_table and table_lines:
-                result.append(_parse_table_to_bullet(table_lines))
-                table_lines = []
-                in_table = False
-            result.append(line)
-
-    if table_lines:
-        result.append(_parse_table_to_bullet(table_lines))
-
-    return "\n".join(result)
-
-
-def _parse_table_to_bullet(table_lines: list) -> str:
-    """표를 개조식으로 변환"""
-    rows = []
-    headers = []
-
-    for line in table_lines:
-        if re.match(r"^\|[\s\-:\|]+\|?$", line.strip()):
-            continue
-        cells = [c.strip() for c in line.split("|") if c.strip()]
-        if not headers:
-            headers = cells
-        else:
-            rows.append(cells)
-
-    bullet_lines = []
-    for row in rows:
-        if len(headers) == len(row) and len(row) >= 2:
-            item = f"• {row[0]}"
-            details = [f"{headers[j]}: {row[j]}" for j in range(1, len(row)) if row[j]]
-            if details:
-                item += f" ({', '.join(details)})"
-            bullet_lines.append(item)
-        elif row:
-            bullet_lines.append(f"• {' | '.join(row)}")
-
-    return "\n".join(bullet_lines) if bullet_lines else ""
-
-
-def clean_html_breaks(text: str) -> str:
-    """HTML <br> 태그를 줄바꿈으로 변환"""
-    return re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
-
-
-# ========== MongoDB ==========
-mongo_client: Optional[AsyncIOMotorClient] = None
-mongo_db = None
-
-
-async def init_mongodb():
-    """MongoDB 초기화"""
-    global mongo_client, mongo_db
-    mongo_client = AsyncIOMotorClient(MONGO_URI)
-    mongo_db = mongo_client[MONGO_DB]
-
-    await mongo_db.conversation_logs.create_index(
-        [("conversation_id", 1), ("timestamp", -1)]
-    )
-    await mongo_db.conversation_logs.create_index("user_id")
-    await mongo_db.conversation_history.create_index("conversation_id", unique=True)
-    await mongo_db.conversation_history.create_index(
-        "updated_at", expireAfterSeconds=HISTORY_TTL_SECONDS
-    )
-
-    print(f"✅ MongoDB 초기화: {MONGO_URI}/{MONGO_DB}")
-
-
-async def close_mongodb():
-    """MongoDB 종료"""
-    global mongo_client
-    if mongo_client:
-        mongo_client.close()
-        print("🔌 MongoDB 연결 종료")
-
-
-async def save_full_log(
-    conversation_id: str,
-    user_id: str,
-    message: str,
-    team: Optional[str],
-    week: Optional[str],
-    tool_calls: List[Dict],
-    tool_results: List[Dict],
-    answer: str,
-    references: List[Dict],
-) -> None:
-    """전체 대화 기록 저장"""
-    if mongo_db is None:
-        return
-
-    existing_count = await mongo_db.conversation_logs.count_documents(
-        {"conversation_id": conversation_id}
-    )
-
-    log_doc = {
-        "conversation_id": conversation_id,
-        "user_id": user_id,
-        "timestamp": datetime.now(UTC),
-        "turn": existing_count + 1,
-        "request": {"message": message, "team": team, "week": week},
-        "tool_calls": tool_calls,
-        "tool_results": tool_results,
-        "response": {"answer": answer, "references": references},
-    }
-
-    await mongo_db.conversation_logs.insert_one(log_doc)
-
-
-async def save_history(
-    conversation_id: str, user_message: str, assistant_answer: str
-) -> None:
-    """히스토리 저장"""
-    if mongo_db is None:
-        return
-
-    messages_to_add = [
-        {"role": "user", "content": user_message},
-        {"role": "assistant", "content": assistant_answer},
-    ]
-
-    await mongo_db.conversation_history.update_one(
-        {"conversation_id": conversation_id},
-        {
-            "$push": {
-                "messages": {
-                    "$each": messages_to_add,
-                    "$slice": -(MAX_HISTORY_TURNS * 2),
-                }
-            },
-            "$set": {"updated_at": datetime.now(UTC)},
-            "$setOnInsert": {"created_at": datetime.now(UTC)},
-        },
-        upsert=True,
-    )
-
-
-async def get_history(conversation_id: str) -> List[Dict]:
-    """대화 히스토리 조회"""
-    if mongo_db is None:
-        return []
-
-    doc = await mongo_db.conversation_history.find_one(
-        {"conversation_id": conversation_id}
-    )
-    if not doc:
-        return []
-
-    return doc.get("messages", [])
-
-
-# ========== FastAPI ==========
-os_client: Optional[OpenSearchClient] = None
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """서버 시작/종료 시 초기화"""
-    global os_client
-    os_client = OpenSearchClient()
-    print(f"✅ OpenSearch: {os_client.health_check()}")
-    print(f"📊 인덱스: {os_client.get_stats()}")
-    await init_mongodb()
-    yield
-    await close_mongodb()
-
-
-app = FastAPI(
-    title="Weekly Mail RAG Chatbot API (Naive RAG + LLM Router v3)",
-    description="""주간 메일 기반 Q&A API - LangGraph Naive RAG + LLM Router
-
-## 주요 기능
-- LLM 기반 질문 유형 분류 (search/statistics/general)
-- OpenSearch 하이브리드 검색
-- 통계 Tool Binding
-- 멀티턴 대화 지원
-
-## API
-- POST /chat/v2 - 채팅
-- GET /stats/* - 통계 조회
-- GET /health - 헬스체크
-""",
-    version="3.1.0",
-    lifespan=lifespan,
-)
-
-MAIL_DIR.mkdir(exist_ok=True)
-app.mount("/mail", StaticFiles(directory=str(MAIL_DIR)), name="mail")
-
-
-@app.get("/health")
-async def health():
-    """헬스체크"""
-    return {
-        "status": "ok",
-        "timestamp": datetime.now().isoformat(),
-        "opensearch": os_client.health_check() if os_client else None,
-        "db_stats": os_client.get_stats() if os_client else None,
-    }
-
-
-@app.post("/chat/v2", response_model=ChatV2Response)
-async def chat_v2(request: ChatV2Request):
-    """Naive RAG + LLM Router 채팅 API"""
-    if not os_client:
-        raise HTTPException(status_code=503, detail="OpenSearch 초기화 중")
-
-    message = request.message.strip()
-    if not message:
-        raise HTTPException(status_code=400, detail="메시지가 비어있습니다")
-
-    # Agent 호출
-    result = await chat_with_agent(
-        message,
-        team=request.team,
-        week=request.week,
-        conversation_id=request.conversation_id,
-    )
-
-    # 출처 추출
-    references = []
-    search_contexts = []
-    for tr in result["tool_results"]:
-        if tr["name"] == "retrieve":
-            try:
-                search_results = json.loads(tr["result"])
-                if isinstance(search_results, list):
-                    search_contexts = search_results
-            except (json.JSONDecodeError, TypeError):
-                pass
-    print(f"search_contexts: {search_contexts}")
-    answer = result["answer"]
-    if search_contexts:
-        clean_answer, used_contexts = parse_used_references(answer, search_contexts)
-        references = extract_references(used_contexts)
-    else:
-        clean_answer = answer
-
-    # 후처리
-    answer_converted = convert_table_to_bullet(clean_answer)
-    answer_converted = clean_html_breaks(answer_converted)
-
-    # MongoDB 저장
-    if request.conversation_id:
-        await save_full_log(
-            conversation_id=request.conversation_id,
-            user_id=request.user_id,
-            message=message,
-            team=request.team,
-            week=request.week,
-            tool_calls=result["tool_calls"],
-            tool_results=result["tool_results"],
-            answer=answer_converted,
-            references=[ref.model_dump() for ref in references],
-        )
-        await save_history(
-            conversation_id=request.conversation_id,
-            user_message=message,
-            assistant_answer=answer_converted,
-        )
-
-    return ChatV2Response(
-        answer=answer_converted,
-        tool_calls=[ToolCallInfo(**tc) for tc in result["tool_calls"]],
-        tool_results=[ToolResultInfo(**tr) for tr in result["tool_results"]],
-        references=references,
-    )
-
-
-# ========== 통계 API ==========
-@app.get("/stats/weekly-reports")
-async def stats_weekly_reports(week: Optional[str] = None):
-    """주간보고 팀별 통계"""
-    try:
-        counts = _count_weekly_reports_by_team(week=week)
-        return {
-            "type": "weekly_report",
-            "week": week or "all",
-            "by_team": counts,
-            "total": sum(counts.values()),
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/stats/other-mails")
-async def stats_other_mails(week: Optional[str] = None, team: Optional[str] = None):
-    """주간보고 외 메일 통계"""
-    try:
-        counts = _count_other_mails_by_team(week=week, team=team)
-        return {
-            "type": "other",
-            "week": week or "all",
-            "team": team or "all",
-            "by_team": counts,
-            "total": sum(counts.values()),
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/stats/missing-teams")
-async def stats_missing_teams(week: str):
-    """주간보고 미제출 팀"""
-    try:
-        missing = _get_missing_teams(week=week)
-        return {"week": week, "missing_teams": missing, "count": len(missing)}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/stats/summary")
-async def stats_summary(week: Optional[str] = None):
-    """전체 메일 현황 요약"""
-    try:
-        summary = _get_mail_type_summary(week=week)
-        return summary
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/weeks")
-async def get_weeks():
-    """데이터가 있는 주차 목록"""
-    try:
-        weeks = _get_unique_weeks()
-        return {"weeks": weeks, "count": len(weeks)}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/teams")
-async def get_teams():
-    """팀 목록"""
-    return {"teams": TEAMS}
-
-
-# ========== 실행 ==========
-if __name__ == "__main__":
-    import uvicorn
-
-    print("=" * 50)
-    print("RAG Chatbot API Server (Naive RAG + LLM Router v3)")
-    print("=" * 50)
-    print(f"  Host: {HOST}")
-    print(f"  Port: {PORT}")
-    print(f"  Docs: http://localhost:{PORT}/docs")
-    print(f"  OpenSearch: {OPENSEARCH_HOST}:{OPENSEARCH_PORT}")
-    print(f"  Index: {INDEX_NAME}")
-    print("  Graph: START -> router -> (retrieve|statistics|llm_answer) -> END")
-    print("=" * 50)
-
-    uvicorn.run(app, host=HOST, port=PORT)
