@@ -83,14 +83,12 @@ HISTORY_TTL_SECONDS = int(os.getenv("HISTORY_TTL_SECONDS", "1800"))
 MAX_HISTORY_TURNS = int(os.getenv("MAX_HISTORY_TURNS", "10"))
 MAX_ANSWER_LENGTH = int(os.getenv("MAX_ANSWER_LENGTH", "1000"))
 
-# 대화 요약 설정
-SUMMARY_THRESHOLD = int(os.getenv("SUMMARY_THRESHOLD", "3"))
-MAX_SUMMARY_TOKENS = int(os.getenv("MAX_SUMMARY_TOKENS", "300"))
-RECENT_TURNS_TO_KEEP = int(os.getenv("RECENT_TURNS_TO_KEEP", "2"))
+# LLM 히스토리 설정
+MAX_LLM_HISTORY_TURNS = int(os.getenv("MAX_LLM_HISTORY_TURNS", "3"))
 
 # 토큰/검색 설정
 MAX_TOOL_RESULT_TOKENS = int(os.getenv("MAX_TOOL_RESULT_TOKENS", "150000"))
-SEARCH_RESULT_LIMIT = int(os.getenv("SEARCH_RESULT_LIMIT", "5"))
+SEARCH_RESULT_LIMIT = int(os.getenv("SEARCH_RESULT_LIMIT", "50"))
 MAX_TEXT_PER_DOC = int(os.getenv("MAX_TEXT_PER_DOC", "2000"))
 ENCODING_NAME = "cl100k_base"
 
@@ -647,7 +645,7 @@ def retrieve_document(state: GraphState) -> Dict[str, Any]:
             return {"context": ""}
 
         context_text = ""
-        for i, ctx in enumerate(formatted[:10], 1):
+        for i, ctx in enumerate(formatted, 1):
             context_text += f"\n[문서 {i}]\n"
             context_text += f"팀: {ctx.get('team', 'unknown')}\n"
             context_text += f"주차: {ctx.get('week', 'unknown')}\n"
@@ -842,14 +840,19 @@ def llm_answer_node(state: GraphState) -> Dict[str, Any]:
         # 메시지 구성: 시스템 프롬프트 + 히스토리 + 현재 질문
         llm_messages = [{"role": "system", "content": ANSWER_SYSTEM_PROMPT}]
 
-        # 히스토리 추가 (멀티턴 대화 지원)
-        for msg in history_messages:
+        # 히스토리 추가 (최근 N턴만)
+        conversation_only = [
+            msg
+            for msg in history_messages
+            if isinstance(msg, (HumanMessage, AIMessage))
+        ]
+        recent_messages = conversation_only[-(MAX_LLM_HISTORY_TURNS * 2) :]
+
+        for msg in recent_messages:
             if isinstance(msg, HumanMessage):
                 llm_messages.append({"role": "user", "content": msg.content})
             elif isinstance(msg, AIMessage):
                 llm_messages.append({"role": "assistant", "content": msg.content})
-            elif isinstance(msg, SystemMessage):
-                llm_messages.append({"role": "system", "content": msg.content})
 
         # 현재 질문 추가
         llm_messages.append({"role": "user", "content": user_prompt})
@@ -1209,19 +1212,13 @@ async def save_full_log(
 async def save_history(
     conversation_id: str, user_message: str, assistant_answer: str
 ) -> None:
-    """경량 히스토리 저장"""
+    """히스토리 저장"""
     if mongo_db is None:
         return
 
-    compressed = (
-        assistant_answer[:MAX_ANSWER_LENGTH] + "...(생략)"
-        if len(assistant_answer) > MAX_ANSWER_LENGTH
-        else assistant_answer
-    )
-
     messages_to_add = [
         {"role": "user", "content": user_message},
-        {"role": "assistant", "content": compressed},
+        {"role": "assistant", "content": assistant_answer},
     ]
 
     await mongo_db.conversation_history.update_one(
@@ -1240,29 +1237,6 @@ async def save_history(
     )
 
 
-async def summarize_conversation(messages: List[Dict]) -> str:
-    """대화 요약"""
-    if not messages:
-        return ""
-
-    conversation_text = "\n".join([f"{m['role']}: {m['content']}" for m in messages])
-    prompt = f"""다음 대화를 {MAX_SUMMARY_TOKENS}토큰 이내로 핵심만 요약하세요.
-
-대화:
-{conversation_text}
-
-요약:"""
-
-    try:
-        response = await asyncio.to_thread(
-            lambda: get_llm().invoke([{"role": "user", "content": prompt}])
-        )
-        return response.content.strip()
-    except Exception as e:
-        print(f"⚠️ 요약 실패: {e}")
-        return "\n".join([f"{m['role']}: {m['content'][:200]}..." for m in messages])
-
-
 async def get_history(conversation_id: str) -> List[Dict]:
     """대화 히스토리 조회"""
     if mongo_db is None:
@@ -1274,42 +1248,7 @@ async def get_history(conversation_id: str) -> List[Dict]:
     if not doc:
         return []
 
-    messages = doc.get("messages", [])
-    existing_summary = doc.get("summary", "")
-    turn_count = len(messages) // 2
-
-    if turn_count <= SUMMARY_THRESHOLD:
-        result = []
-        if existing_summary:
-            result.append(
-                {"role": "system", "content": f"[이전 대화 요약]\n{existing_summary}"}
-            )
-        return result + messages
-
-    # 요약 필요
-    recent_count = RECENT_TURNS_TO_KEEP * 2
-    old_messages = messages[:-recent_count] if recent_count > 0 else messages
-    recent_messages = messages[-recent_count:] if recent_count > 0 else []
-
-    new_summary = await summarize_conversation(old_messages)
-    combined_summary = (
-        f"{existing_summary}\n\n{new_summary}" if existing_summary else new_summary
-    )
-
-    await mongo_db.conversation_history.update_one(
-        {"conversation_id": conversation_id},
-        {
-            "$set": {
-                "summary": combined_summary,
-                "messages": recent_messages,
-                "updated_at": datetime.now(UTC),
-            }
-        },
-    )
-
-    return [
-        {"role": "system", "content": f"[이전 대화 요약]\n{combined_summary}"}
-    ] + recent_messages
+    return doc.get("messages", [])
 
 
 # ========== FastAPI ==========
