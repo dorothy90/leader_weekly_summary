@@ -480,7 +480,34 @@ def router_node(state: GraphState) -> Dict[str, Any]:
     _t_start = _time.time()
 
     question = state["question"]
+    history_messages = state.get("messages", [])
     print(f"🔀 [Router] 질문 분류 시작: {question[:50]}...")
+
+    # 최근 히스토리를 문자열로 변환 (최근 2~3턴만)
+    history_text = ""
+    conversation_only = [
+        msg for msg in history_messages if isinstance(msg, (HumanMessage, AIMessage))
+    ]
+    recent_history = conversation_only[-(MAX_LLM_HISTORY_TURNS * 2) :]
+
+    if recent_history:
+        history_lines = []
+        for msg in recent_history:
+            if isinstance(msg, HumanMessage):
+                history_lines.append(f"사용자: {msg.content}")
+            elif isinstance(msg, AIMessage):
+                # 답변은 길 수 있으므로 앞부분만
+                content = (
+                    msg.content[:200] + "..." if len(msg.content) > 200 else msg.content
+                )
+                history_lines.append(f"어시스턴트: {content}")
+        history_text = "\n".join(history_lines)
+        print(f"🔀 [Router] 히스토리 {len(recent_history)}개 메시지 포함")
+
+    # 히스토리 섹션 구성
+    history_section = (
+        f"\n## 이전 대화 히스토리\n{history_text}\n" if history_text else ""
+    )
 
     # LLM이 route와 mail_type을 함께 판단
     simple_prompt = f"""사용자 질문을 분석하세요.
@@ -491,24 +518,40 @@ mail_type: [daily/weekly/all]
 
 ## route 분류 기준
 - statistics: 제출/미제출 현황, 팀 수, 개수 등 **수치/통계** 질문
-- search: 메일 **내용** 검색 (이슈, 분석, 개선 사항 등)
-- general: 인사, 감사, 도움말 등 일반 대화
+- search: 메일 **내용** 검색이 필요한 질문
+  - 이슈, 분석, 개선 사항, 진행 상황 등
+  - **반도체 공정/장비/기술 용어** (예: pulsed, dep, ALD, CVD, etch, cleaning, 수율, defect, particle 등)
+  - 특정 팀, 프로젝트, 업무 관련 질문
+  - 잘 모르는 전문 용어가 포함된 질문 → search로 분류
+- general: 인사, 감사, 도움말, 시스템 사용법 등 **명확한 일반 대화만**
+
+## 중요: 판단이 애매하면 search로 분류하세요!
+- 반도체/공정/기술 관련 단어가 보이면 무조건 search
+- 영어 약어나 전문 용어가 있으면 search
+- 확실히 일반 대화가 아니면 search
 
 ## mail_type 분류 기준
 - daily: 일일보고/데일리 메일만 검색할 때
 - weekly: 주간보고/주보만 검색할 때
 - all: 둘 다 검색하거나 구분이 불명확할 때
 
+## 중요: 대화 맥락 고려
+- 이전 대화가 있으면 현재 질문이 후속 질문인지 확인하세요.
+- "3주차는?", "그럼 다음주는?", "다른 팀은?" 같은 짧은 질문은 이전 대화의 맥락을 이어받습니다.
+- 이전에 통계(statistics)를 물어봤다면 후속 질문도 statistics입니다.
+- 이전에 내용 검색(search)을 했다면 후속 질문도 search입니다.
+
 ## 예시
 - "47주차 주보 미제출 팀 알려줘" → route: statistics, mail_type: weekly
+- "pulsed w dep 관련 내용" → route: search, mail_type: all
+- "ALD 공정 이슈" → route: search, mail_type: all
 - "데일리 메일 이슈 알려줘" → route: search, mail_type: daily
-- "오늘 주보 검색해줘" → route: search, mail_type: weekly (주보=주간보고)
-- "일일보고 분석해줘" → route: search, mail_type: daily
 - "PROCESS팀 수율 이슈 알려줘" → route: search, mail_type: all
 - "이번주 개선 사항 뭐야?" → route: search, mail_type: weekly
 - "안녕" → route: general, mail_type: all
-
-질문: {question}
+- "고마워" → route: general, mail_type: all
+{history_section}
+현재 질문: {question}
 
 출력:"""
 
@@ -603,50 +646,40 @@ def retrieve_document(state: GraphState) -> Dict[str, Any]:
         _search_elapsed = (_time.time() - _t_search_start) * 1000
         print(f"⏱️ [Retrieve] OpenSearch 검색: {_search_elapsed:.0f}ms")
 
-        # 검색 결과 포맷팅
-        formatted = []
-        used_tokens = 0
-
-        for r in results:
-            text = r["text"]
-            if len(text) > MAX_TEXT_PER_DOC:
-                text = text
-
-            item = {
+        # 검색 결과 포맷팅 (토큰 카운팅 제거 - 속도 개선)
+        formatted = [
+            {
                 "team": r["team"],
                 "week": r["week"],
                 "mail_id": r["mail_id"],
-                "text": text,
+                "text": (
+                    r["text"][:MAX_TEXT_PER_DOC]
+                    if len(r["text"]) > MAX_TEXT_PER_DOC
+                    else r["text"]
+                ),
                 "score": round(r["score"], 4),
             }
+            for r in results
+        ]
 
-            item_json = json.dumps(item, ensure_ascii=False)
-            item_tokens = count_tokens(item_json)
+        print(f"📊 [Retrieve] 검색 완료: {len(formatted)}개 문서")
 
-            if used_tokens + item_tokens > MAX_TOOL_RESULT_TOKENS:
-                print(f"⚠️ [Retrieve] 토큰 제한 도달: {len(formatted)}개 문서")
-                break
-
-            formatted.append(item)
-            used_tokens += item_tokens
-
-        print(
-            f"📊 [Retrieve] 검색 완료: {len(formatted)}/{len(results)}개 문서, {used_tokens} tokens"
-        )
-
-        # 컨텍스트 문자열 생성
+        # 컨텍스트 문자열 생성 (문자열 연결 최적화)
         if not formatted:
             _total_elapsed = (_time.time() - _t_start) * 1000
             print(f"⏱️ [Retrieve] 총 소요시간: {_total_elapsed:.0f}ms")
             return {"context": ""}
 
-        context_text = ""
+        context_parts = []
         for i, ctx in enumerate(formatted, 1):
-            context_text += f"\n[문서 {i}]\n"
-            context_text += f"팀: {ctx.get('team', 'unknown')}\n"
-            context_text += f"주차: {ctx.get('week', 'unknown')}\n"
-            context_text += f"내용:\n{ctx.get('text', '')}\n"
-            context_text += "-" * 40
+            context_parts.append(
+                f"\n[문서 {i}]\n"
+                f"팀: {ctx.get('team', 'unknown')}\n"
+                f"주차: {ctx.get('week', 'unknown')}\n"
+                f"내용:\n{ctx.get('text', '')}\n"
+                f"{'-' * 40}"
+            )
+        context_text = "".join(context_parts)
 
         # 검색 결과 JSON도 저장 (출처 추출용)
         _total_elapsed = (_time.time() - _t_start) * 1000
@@ -856,7 +889,7 @@ def llm_answer_node(state: GraphState) -> Dict[str, Any]:
         print(f"💬 [LLM Answer] LLM 메시지 수: {len(llm_messages)}")
 
         _t_llm_start = _time.time()
-        response = llm.invoke(llm_messages)
+        response = llm.invoke(llm_messages, timeout=60)
         _llm_elapsed = (_time.time() - _t_llm_start) * 1000
         print(f"⏱️ [LLM Answer] LLM 호출: {_llm_elapsed:.0f}ms")
 
