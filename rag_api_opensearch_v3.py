@@ -735,9 +735,42 @@ def statistics_node(state: GraphState) -> Dict[str, Any]:
     _t_start = _time.time()
 
     question = state["question"]
+    history_messages = state.get("messages", [])
     print(f"📊 [Statistics] 통계 조회 시작: {question[:50]}...")
 
     tool_results = []
+
+    # 히스토리 추출 (최근 대화만)
+    history_text = ""
+    conversation_only = [
+        msg for msg in history_messages if isinstance(msg, (HumanMessage, AIMessage))
+    ]
+    recent_history = conversation_only[-(MAX_LLM_HISTORY_TURNS * 2) :]
+
+    if recent_history:
+        history_lines = []
+        for msg in recent_history:
+            if isinstance(msg, HumanMessage):
+                history_lines.append(f"사용자: {msg.content}")
+            elif isinstance(msg, AIMessage):
+                content = (
+                    msg.content[:200] + "..." if len(msg.content) > 200 else msg.content
+                )
+                history_lines.append(f"어시스턴트: {content}")
+        history_text = "\n".join(history_lines)
+        print(f"📊 [Statistics] 히스토리 {len(recent_history)}개 메시지 포함")
+
+    # 히스토리 포함한 프롬프트 구성
+    if history_text:
+        user_content = f"""## 이전 대화
+{history_text}
+
+## 현재 질문
+{question}
+
+이전 대화의 맥락을 고려하여 적절한 함수를 호출하세요."""
+    else:
+        user_content = question
 
     try:
         # LLM에 통계 tool 바인딩
@@ -746,7 +779,7 @@ def statistics_node(state: GraphState) -> Dict[str, Any]:
         response = llm.invoke(
             [
                 SystemMessage(content=STATISTICS_SYSTEM_PROMPT),
-                HumanMessage(content=question),
+                HumanMessage(content=user_content),
             ]
         )
         _llm_elapsed = (_time.time() - _t_llm_start) * 1000
@@ -1360,7 +1393,6 @@ async def chat_v2(request: ChatV2Request):
                     search_contexts = search_results
             except (json.JSONDecodeError, TypeError):
                 pass
-    print(f"search_contexts: {search_contexts}")
     answer = result["answer"]
     if search_contexts:
         clean_answer, used_contexts = parse_used_references(answer, search_contexts)
