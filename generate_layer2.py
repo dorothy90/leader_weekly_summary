@@ -382,8 +382,15 @@ def generate_html(summaries: Dict[str, str], week: str, timestamp: str) -> str:
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Layer2 팀별 요약 - {week}</title>
+    <style>
+        body {{ margin: 0; padding: 0; }}
+        table {{ border-collapse: collapse; }}
+        body, table, td, th, p, span, div {{
+            font-family: 'Malgun Gothic', '맑은 고딕', 'Apple SD Gothic Neo', 'Segoe UI', Arial, sans-serif !important;
+        }}
+    </style>
 </head>
-<body style="margin: 0; padding: 0; background-color: #f5f5f5; font-family: 'Malgun Gothic', '맑은 고딕', Arial, sans-serif;">
+<body style="margin: 0; padding: 0; background-color: #f5f5f5; font-family: 'Malgun Gothic','맑은 고딕','Apple SD Gothic Neo','Segoe UI',Arial,sans-serif;">
     <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: #f5f5f5;">
         <tr>
             <td align="center" style="padding: 20px 10px;">
