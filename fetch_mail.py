@@ -9,6 +9,7 @@ import re
 import json
 import base64
 import shutil
+import hashlib
 from pathlib import Path
 from datetime import datetime, timedelta
 from urllib.parse import quote
@@ -141,10 +142,51 @@ def detect_team(subject, sender):
     return "UNKNOWN"
 
 
-def save_mail(mail_data, week, team, mail_idx):
-    """메일 데이터를 로컬에 저장"""
-    # 폴더 생성: data/YYYY-WW/TEAM/mail_001/
-    mail_dir = DATA_DIR / week / team / f"mail_{mail_idx:03d}"
+def get_unique_mail_id(mail_data: dict) -> str:
+    """메일의 고유 식별자 생성
+
+    형식: mail_MMDD_HHMMSS_xxxxxxxx
+    - 날짜시간: 가독성 (언제 온 메일인지 알 수 있음)
+    - 해시 8자리: 고유성 보장 (같은 메일 중복 방지)
+
+    Args:
+        mail_data: 메일 데이터 딕셔너리
+
+    Returns:
+        고유한 mail_id 문자열 (예: mail_0125_143022_a1b2c3d4)
+    """
+    # 수신 시간
+    received = mail_data.get("received")
+    if received:
+        time_part = received.strftime("%m%d_%H%M%S")
+    else:
+        time_part = datetime.now().strftime("%m%d_%H%M%S")
+
+    # message_id 기반 해시 (중복 방지)
+    message_id = mail_data.get("message_id", "")
+    if message_id:
+        short_hash = hashlib.md5(message_id.encode()).hexdigest()[:8]
+    else:
+        # fallback: 제목+발신자+시간 조합
+        unique_str = (
+            f"{mail_data.get('subject', '')}{mail_data.get('sender', '')}{time_part}"
+        )
+        short_hash = hashlib.md5(unique_str.encode()).hexdigest()[:8]
+
+    return f"mail_{time_part}_{short_hash}"
+
+
+def save_mail(mail_data, week, team, mail_id: str):
+    """메일 데이터를 로컬에 저장
+
+    Args:
+        mail_data: 메일 데이터 딕셔너리
+        week: 주차 (예: 2025-48)
+        team: 팀명 (예: FA팀)
+        mail_id: 고유 메일 ID (예: mail_0125_143022_a1b2c3d4)
+    """
+    # 폴더 생성: data/YYYY-WW/TEAM/mail_0125_143022_a1b2c3d4/
+    mail_dir = DATA_DIR / week / team / mail_id
     mail_dir.mkdir(parents=True, exist_ok=True)
 
     # 1. 텍스트 본문 저장
@@ -229,7 +271,6 @@ def save_mail(mail_data, week, team, mail_idx):
     )
 
     # 6. mail 폴더에 body.html 복사 (RAG API 서빙용)
-    mail_id = f"mail_{mail_idx:03d}"
     copy_body_html_to_mail_dir(html_path, week, team, mail_id)
 
     print(f"   💾 저장: {mail_dir}")
@@ -367,25 +408,29 @@ def main():
     print("💾 로컬에 저장 중...")
     print("=" * 50)
 
-    # 주차/팀별로 인덱스 관리
-    mail_counters = {}  # (week, team) -> count
+    # 저장된 메일 통계
+    saved_mails = []  # (week, team, mail_id) 튜플 리스트
 
     for mail in mails:
         week = mail["week"]
         team = mail["team"]
-        key = (week, team)
+        mail_data = mail["data"]
 
-        mail_counters[key] = mail_counters.get(key, 0) + 1
-        idx = mail_counters[key]
+        # 고유한 mail_id 생성 (날짜시간 + 해시)
+        mail_id = get_unique_mail_id(mail_data)
 
-        save_mail(mail["data"], week, team, idx)
+        save_mail(mail_data, week, team, mail_id)
+        saved_mails.append((week, team, mail_id))
 
     print("\n" + "=" * 50)
     print(f"✅ 총 {len(mails)}개 메일 저장 완료")
     print(f"📁 저장 위치: {DATA_DIR.absolute()}")
     print("=" * 50)
 
-    # 요약 출력
+    # 요약 출력 (주차/팀별 카운트)
+    from collections import Counter
+
+    mail_counters = Counter((week, team) for week, team, _ in saved_mails)
     print("\n📊 수집 요약:")
     for (week, team), count in sorted(mail_counters.items()):
         print(f"   {week} / {team}: {count}개")

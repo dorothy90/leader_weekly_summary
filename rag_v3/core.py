@@ -498,3 +498,4 @@ async def get_history(conversation_id: str) -> List[Dict]:
         return []
 
     return doc.get("messages", [])
+
