@@ -28,4 +28,3 @@ uvicorn==0.27.0
 # Streamlit UI
 streamlit>=1.28.0
 requests>=2.31.0
-
