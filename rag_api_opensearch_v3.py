@@ -895,6 +895,16 @@ def llm_answer_node(state: GraphState) -> Dict[str, Any]:
         f"💬 [LLM Answer] Context 길이: {len(context)}, History: {len(history_messages)}"
     )
 
+    # 현재 날짜/시간 정보
+    now = datetime.now()
+    date_info = (
+        f"\n\n## 현재 날짜/시간 정보\n"
+        f"- 오늘 날짜: {now.strftime('%Y년 %m월 %d일')}\n"
+        f"- 요일: {['월','화','수','목','금','토','일'][now.weekday()]}요일\n"
+        f"- 현재 시각: {now.strftime('%H시 %M분')}\n"
+        f"- ISO 주차: {now.strftime('%G-%V')}"
+    )
+
     # 프롬프트 구성
     if context:
         user_prompt = f"""질문: {question}
@@ -911,8 +921,9 @@ def llm_answer_node(state: GraphState) -> Dict[str, Any]:
     try:
         llm = get_llm()
 
-        # 메시지 구성: 시스템 프롬프트 + 히스토리 + 현재 질문
-        llm_messages = [{"role": "system", "content": ANSWER_SYSTEM_PROMPT}]
+        # 메시지 구성: 시스템 프롬프트 + 날짜 정보 + 히스토리 + 현재 질문
+        system_prompt_with_date = ANSWER_SYSTEM_PROMPT + date_info
+        llm_messages = [{"role": "system", "content": system_prompt_with_date}]
 
         # 히스토리 추가 (최근 N턴만)
         conversation_only = [
@@ -1000,7 +1011,8 @@ def get_naive_rag_graph():
     # llm_answer → END
     workflow.add_edge("llm_answer", END)
 
-    _naive_rag_graph = workflow.compile(checkpointer=MemorySaver())
+    _naive_rag_graph = workflow.compile()
+    # _naive_rag_graph = workflow.compile(checkpointer=MemorySaver())
     print("✅ Naive RAG + LLM Router 그래프 컴파일 완료")
     return _naive_rag_graph
 

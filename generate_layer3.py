@@ -338,7 +338,7 @@ def calculate_trend(current_summary: str, previous_summary: str) -> str:
 반드시 "up", "down", "stable" 중 하나만 출력하세요. 다른 설명 없이 단어 하나만 출력."""
 
     prev_text = previous_summary if previous_summary and previous_summary != "데이터 없음" else "데이터 없음"
-    
+
     user_prompt = f"""이전 주: {prev_text}
 현재 주: {current_summary}
 
@@ -358,9 +358,9 @@ def calculate_trend(current_summary: str, previous_summary: str) -> str:
             temperature=0.1,
             max_tokens=10,
         )
-        
+
         result = response.choices[0].message.content.strip().lower()
-        
+
         if "up" in result:
             return "up"
         elif "down" in result:
