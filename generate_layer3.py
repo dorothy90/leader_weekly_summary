@@ -2,16 +2,13 @@
 Layer3: Executive Dashboard 생성
 - 팀별 Executive Summary 추출 및 100자 요약
 - 도메인별 그룹핑 (COMMON, DRAM, NAND)
-- 트렌드 인디케이터 (이전 주 대비)
-- 주간 변화 하이라이트 ([NEW], [ISSUE], [완료])
 """
 
 import json
 import re
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 from datetime import datetime
-from collections import defaultdict
 from dotenv import load_dotenv
 import os
 from openai import OpenAI
@@ -31,7 +28,6 @@ MODEL = "gpt-oss-120b"
 CONFIG = {
     "week": "2025-48",  # 대상 주차
     "teams": None,  # None이면 전체 팀, ["FA팀"] 처럼 지정 가능
-    "weeks_back": 2,  # 트렌드 분석용 (현재 + 이전 1주)
     "output_format": "both",  # "html", "md", "both"
     "db_source": "opensearch",  # "file" 또는 "opensearch"
 }
@@ -50,12 +46,28 @@ TEAMS = [
     "YIELD팀",
 ]
 
-# 도메인 순서 및 색상
-DOMAIN_ORDER = ["DRAM", "NAND", "COMMON"]
+# 그룹 순서 및 색상
+DOMAIN_ORDER = ["DRAM - PTE", "DRAM - SRT", "NAND - PTE", "NAND - SRT", "직속"]
 DOMAIN_COLORS = {
-    "COMMON": "#6fa8dc",  # 연한 파랑
-    "DRAM": "#81c784",  # 연한 초록
-    "NAND": "#ffb74d",  # 연한 주황
+    "DRAM - PTE": "#81c784",  # 연한 초록
+    "DRAM - SRT": "#a5d6a7",  # 밝은 초록
+    "NAND - PTE": "#ffb74d",  # 연한 주황
+    "NAND - SRT": "#ffcc80",  # 밝은 주황
+    "직속": "#6fa8dc",  # 연한 파랑
+}
+
+# 팀 → 그룹 매핑 (실제 조직 구조에 맞게 수정 필요)
+TEAM_GROUP_MAP = {
+    "FA팀": "DRAM - PTE",
+    "PE팀": "DRAM - PTE",
+    "YIELD팀": "DRAM - SRT",
+    "PROCESS팀": "DRAM - SRT",
+    "TEST팀": "NAND - PTE",
+    "EQUIP팀": "NAND - PTE",
+    "PI팀": "NAND - SRT",
+    "QA팀": "NAND - SRT",
+    "CS팀": "직속",
+    "DT팀": "직속",
 }
 
 # Executive Summary 추출 키워드
@@ -74,34 +86,6 @@ EXEC_SUMMARY_KEYWORDS = [
     "Overview",
     "overview",
 ]
-
-
-
-# ========== 유틸리티 함수 ==========
-def get_previous_weeks(current_week: str, count: int = 2) -> List[str]:
-    """현재 주차 기준 이전 N주 목록 반환 (현재 주 포함)
-
-    Args:
-        current_week: "2025-48" 형식
-        count: 가져올 주 수 (기본 2주 - 현재 + 이전 1주)
-
-    Returns:
-        ["2025-47", "2025-48"] (오래된 순)
-    """
-    year, week = map(int, current_week.split("-"))
-    weeks = []
-
-    for i in range(count - 1, -1, -1):
-        w = week - i
-        y = year
-
-        while w < 1:
-            y -= 1
-            w += 52
-
-        weeks.append(f"{y}-{w:02d}")
-
-    return weeks
 
 
 # ========== 데이터 로드 ==========
@@ -142,30 +126,6 @@ def load_team_mail_from_opensearch(team: str, week: str) -> str:
     return ""
 
 
-def load_team_chunks(team: str, week: str) -> List[Dict]:
-    """팀의 해당 주차 청크 데이터 로드 (도메인 정보 포함)
-
-    Returns:
-        청크 리스트
-    """
-    week_dir = DATA_DIR / week / team
-    chunks = []
-
-    if week_dir.exists():
-        for mail_dir in week_dir.iterdir():
-            if mail_dir.is_dir():
-                chunks_file = mail_dir / "chunks.json"
-                if chunks_file.exists():
-                    try:
-                        with open(chunks_file, "r", encoding="utf-8") as f:
-                            mail_chunks = json.load(f)
-                            chunks.extend(mail_chunks)
-                    except Exception:
-                        pass
-
-    return chunks
-
-
 # ========== Executive Summary 추출 ==========
 def extract_executive_summary(text: str) -> str:
     """메일 텍스트에서 Executive Summary 섹션 추출
@@ -199,7 +159,11 @@ def extract_executive_summary(text: str) -> str:
                     ):
                         break
                     # 빈 줄이 2개 연속이면 섹션 종료
-                    if not next_line and j + 1 < len(lines) and not lines[j + 1].strip():
+                    if (
+                        not next_line
+                        and j + 1 < len(lines)
+                        and not lines[j + 1].strip()
+                    ):
                         break
 
                     if next_line:
@@ -271,8 +235,6 @@ def generate_one_line_summary(team: str, exec_summary: str, current_week: str) -
 - 90~120자(공백 포함) 권장. 핵심이 잘리면 80~140자까지 허용.
 
 ## 하이라이트 태그 (해당 시에만 문장 앞에 추가):
-- [NEW]: 이번 주 새로 시작된 업무/프로젝트가 명시된 경우
-- [ISSUE]: 문제/이슈/장애가 발생했다고 명시된 경우
 - [완료]: 주요 업무가 완료되었다고 명시된 경우
 - 태그는 최대 1개만 사용, 해당 없으면 태그 없이 작성
 
@@ -311,7 +273,7 @@ def generate_one_line_summary(team: str, exec_summary: str, current_week: str) -
         summary = response.choices[0].message.content.strip()
 
         # 따옴표 제거
-        summary = summary.strip('"\'')
+        summary = summary.strip("\"'")
 
         return summary
     except Exception as e:
@@ -319,107 +281,14 @@ def generate_one_line_summary(team: str, exec_summary: str, current_week: str) -
         return exec_summary[:100] + "..." if len(exec_summary) > 100 else exec_summary
 
 
-# ========== 트렌드 분석 ==========
-def calculate_trend(current_summary: str, previous_summary: str) -> str:
-    """이전 주 대비 트렌드 판단 (LLM 기반)
-
-    Args:
-        current_summary: 현재 주 요약
-        previous_summary: 이전 주 요약
-
-    Returns:
-        "up", "down", "stable"
-    """
-    if not current_summary or current_summary == "데이터 없음":
-        return "stable"
-
-    system_prompt = """이전 주와 현재 주의 업무 요약을 비교하여 트렌드를 판단하세요.
-
-## 판단 기준:
-- up: 업무 완료, 목표 달성, 수치 개선, 이슈 해결 등 긍정적 변화가 있는 경우
-- down: 새로운 이슈 발생, 지연, 문제 악화, 장애 발생 등 부정적 변화가 있는 경우
-- stable: 특이사항 없음, 기존 업무 진행중 유지, 명확한 변화가 없는 경우
-
-## 중요:
-- 이전 주 데이터가 없으면 현재 주 내용만으로 판단
-- 현재 주에 [완료], 달성, 개선 등이 있으면 up
-- 현재 주에 [ISSUE], 문제, 지연 등이 있으면 down
-- 판단이 어려우면 stable
-
-## 출력:
-반드시 "up", "down", "stable" 중 하나만 출력하세요. 다른 설명 없이 단어 하나만 출력."""
-
-    prev_text = previous_summary if previous_summary and previous_summary != "데이터 없음" else "데이터 없음"
-
-    user_prompt = f"""이전 주: {prev_text}
-현재 주: {current_summary}
-
-트렌드:"""
-
-    try:
-        client = OpenAI(
-            api_key=API_KEY,
-            base_url=BASE_URL,
-        )
-        response = client.chat.completions.create(
-            model=MODEL,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0.1,
-            max_tokens=10,
-        )
-
-        result = response.choices[0].message.content.strip().lower()
-
-        if "up" in result:
-            return "up"
-        elif "down" in result:
-            return "down"
-        return "stable"
-    except Exception as e:
-        print(f"   ⚠️ 트렌드 분석 LLM 오류: {e}")
-        return "stable"
-
-
-def get_trend_icon(trend: str) -> str:
-    """트렌드를 아이콘으로 변환"""
-    icons = {
-        "up": "⬆️",
-        "down": "⬇️",
-        "stable": "➡️",
-    }
-    return icons.get(trend, "➡️")
-
-
 # ========== 도메인별 그룹핑 ==========
 def get_team_primary_domain(team: str, week: str) -> str:
-    """팀의 주요 도메인 추출 (청크 데이터 기반)
+    """팀의 그룹 반환 (매핑 기반)
 
     Returns:
-        주요 도메인 ("DRAM", "NAND", "COMMON")
+        그룹명 ("DRAM - PTE", "DRAM - SRT", "NAND - PTE", "NAND - SRT", "직속")
     """
-    chunks = load_team_chunks(team, week)
-
-    if not chunks:
-        return "COMMON"
-
-    # 도메인별 카운팅
-    domain_counts = defaultdict(int)
-    for chunk in chunks:
-        domain = chunk.get("domain", "COMMON")
-        domain_counts[domain] += 1
-
-    # 가장 많은 도메인 반환 (COMMON 제외 우선)
-    if domain_counts:
-        # COMMON이 아닌 도메인 중 최다
-        non_common = {k: v for k, v in domain_counts.items() if k != "COMMON"}
-        if non_common:
-            return max(non_common, key=non_common.get)
-        return "COMMON"
-
-    return "COMMON"
+    return TEAM_GROUP_MAP.get(team, "직속")
 
 
 def group_teams_by_domain(
@@ -428,11 +297,11 @@ def group_teams_by_domain(
     """팀 데이터를 도메인별로 그룹핑
 
     Args:
-        teams_data: {팀명: {"summary": ..., "trend": ..., "exec_summary": ...}}
+        teams_data: {팀명: {"summary": ..., "exec_summary": ...}}
         week: 대상 주차
 
     Returns:
-        {도메인: [{"team": ..., "summary": ..., "trend": ...}, ...]}
+        {도메인: [{"team": ..., "summary": ...}, ...]}
     """
     grouped = {domain: [] for domain in DOMAIN_ORDER}
 
@@ -441,13 +310,12 @@ def group_teams_by_domain(
 
         # 유효한 도메인인지 확인
         if domain not in DOMAIN_ORDER:
-            domain = "COMMON"
+            domain = "직속"
 
         grouped[domain].append(
             {
                 "team": team,
                 "summary": data.get("summary", ""),
-                "trend": data.get("trend", "stable"),
                 "exec_summary": data.get("exec_summary", ""),
             }
         )
@@ -528,7 +396,6 @@ def generate_html(
                                         <table width="100%" cellpadding="0" cellspacing="0" border="0">
                                             <tr style="background-color: #f7fafc;">
                                                 <td style="padding: 10px 16px; font-size: 11px; font-weight: bold; color: #4a5568; width: 80px; border-bottom: 2px solid #e2e8f0;">팀</td>
-                                                <td style="padding: 10px 12px; font-size: 11px; font-weight: bold; color: #4a5568; width: 50px; text-align: center; border-bottom: 2px solid #e2e8f0;">Trend</td>
                                                 <td style="padding: 10px 16px; font-size: 11px; font-weight: bold; color: #4a5568; border-bottom: 2px solid #e2e8f0;">Executive Summary</td>
                                             </tr>
 """
@@ -536,21 +403,15 @@ def generate_html(
         for team_data in teams:
             team = team_data["team"]
             summary = team_data["summary"]
-            trend_icon = get_trend_icon(team_data["trend"])
 
             # 하이라이트 태그 스타일링
             summary_html = summary
-            if summary.startswith("[NEW]"):
-                summary_html = f'<span style="background-color: #c6f6d5; color: #22543d; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: bold;">NEW</span> {summary[5:].strip()}'
-            elif summary.startswith("[ISSUE]"):
-                summary_html = f'<span style="background-color: #fed7d7; color: #822727; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: bold;">ISSUE</span> {summary[7:].strip()}'
-            elif summary.startswith("[완료]"):
+            if summary.startswith("[완료]"):
                 summary_html = f'<span style="background-color: #bee3f8; color: #2a4365; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: bold;">완료</span> {summary[4:].strip()}'
 
             html += f"""
                                             <tr>
                                                 <td style="padding: 12px 16px; font-size: 13px; color: #2d3748; font-weight: bold; border-bottom: 1px solid #e2e8f0; vertical-align: top;">{team}</td>
-                                                <td style="padding: 12px 12px; font-size: 16px; text-align: center; border-bottom: 1px solid #e2e8f0; vertical-align: top;">{trend_icon}</td>
                                                 <td style="padding: 12px 16px; font-size: 13px; color: #2d3748; line-height: 1.5; border-bottom: 1px solid #e2e8f0;">{summary_html}</td>
                                             </tr>
 """
@@ -597,15 +458,14 @@ def generate_markdown(
             continue
 
         md += f"## {domain}\n\n"
-        md += "| 팀 | Trend | Executive Summary |\n"
-        md += "|-----|-------|-------------------|\n"
+        md += "| 팀 | Executive Summary |\n"
+        md += "|-----|-------------------|\n"
 
         for team_data in teams:
             team = team_data["team"]
             summary = team_data["summary"].replace("|", "\\|")
-            trend_icon = get_trend_icon(team_data["trend"])
 
-            md += f"| {team} | {trend_icon} | {summary} |\n"
+            md += f"| {team} | {summary} |\n"
 
         md += "\n---\n\n"
 
@@ -616,7 +476,6 @@ def generate_markdown(
 def generate_layer3(
     week: str,
     teams: Optional[List[str]] = None,
-    weeks_back: int = 2,
     output_format: str = "both",
     db_source: str = "file",
 ) -> Dict:
@@ -625,7 +484,6 @@ def generate_layer3(
     Args:
         week: 대상 주차 (예: "2025-48")
         teams: 대상 팀 목록 (None이면 전체 팀)
-        weeks_back: 트렌드 분석용 주 수 (기본 2주)
         output_format: "html", "md", "both"
         db_source: 데이터 소스 ("file" 또는 "opensearch")
 
@@ -643,12 +501,7 @@ def generate_layer3(
     if teams is None:
         teams = TEAMS
 
-    weeks = get_previous_weeks(week, weeks_back)
-    current_week = weeks[-1]
-    previous_week = weeks[-2] if len(weeks) > 1 else None
-
-    print(f"📅 대상 주차: {current_week}")
-    print(f"📊 트렌드 비교: {previous_week or '없음'}")
+    print(f"📅 대상 주차: {week}")
     print(f"👥 대상 팀: {len(teams)}개")
     print(f"💾 데이터 소스: {db_source}")
     print()
@@ -660,38 +513,20 @@ def generate_layer3(
 
         # 1. 현재 주 메일 로드
         if db_source == "opensearch":
-            current_mail = load_team_mail_from_opensearch(team, current_week)
+            current_mail = load_team_mail_from_opensearch(team, week)
         else:
-            current_mail = load_team_mail(team, current_week)
+            current_mail = load_team_mail(team, week)
 
         # 2. Executive Summary 추출
         exec_summary = extract_executive_summary(current_mail)
         print(f"   - Executive Summary: {len(exec_summary)}자")
 
         # 3. LLM 100자 요약 생성
-        summary = generate_one_line_summary(team, exec_summary, current_week)
+        summary = generate_one_line_summary(team, exec_summary, week)
         print(f"   - 요약: {summary[:50]}...")
-
-        # 4. 이전 주 데이터 로드 (트렌드 분석용)
-        previous_summary = ""
-        if previous_week:
-            if db_source == "opensearch":
-                prev_mail = load_team_mail_from_opensearch(team, previous_week)
-            else:
-                prev_mail = load_team_mail(team, previous_week)
-            prev_exec = extract_executive_summary(prev_mail)
-            if prev_exec:
-                previous_summary = generate_one_line_summary(
-                    team, prev_exec, previous_week
-                )
-
-        # 5. 트렌드 계산
-        trend = calculate_trend(summary, previous_summary)
-        print(f"   - 트렌드: {get_trend_icon(trend)}")
 
         teams_data[team] = {
             "summary": summary,
-            "trend": trend,
             "exec_summary": exec_summary,
         }
 
@@ -699,10 +534,10 @@ def generate_layer3(
 
     print()
 
-    # 6. 도메인별 그룹핑
-    grouped_data = group_teams_by_domain(teams_data, current_week)
+    # 4. 도메인별 그룹핑
+    grouped_data = group_teams_by_domain(teams_data, week)
 
-    # 7. 출력 파일 생성
+    # 5. 출력 파일 생성
     OUTPUT_DIR.mkdir(exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     timestamp_display = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -743,7 +578,6 @@ if __name__ == "__main__":
     generate_layer3(
         week=CONFIG["week"],
         teams=CONFIG["teams"],
-        weeks_back=CONFIG["weeks_back"],
         output_format=CONFIG["output_format"],
         db_source=CONFIG["db_source"],
     )
