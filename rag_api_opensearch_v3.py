@@ -426,6 +426,7 @@ class GraphState(TypedDict):
     messages: Annotated[list, add_messages]  # 대화 히스토리
     route: str  # 라우팅 결과 (search/statistics/general)
     mail_type: Optional[str]  # 메일 유형 필터 (weekly_report/daily_report/None)
+    week: Optional[str]  # 주차 필터 (예: "2025-30", Router가 추출)
 
 
 class RouteDecision(BaseModel):
@@ -479,9 +480,30 @@ ANSWER_SYSTEM_PROMPT = """당신은 반도체 주간 업무 보고서 시스템�
 - 출처가 불명확하거나 여러 문서를 종합한 내용은 출처를 붙이지 마세요.
 - 답변 마지막에 "참고: [문서 1], [문서 3]" 형태로 사용한 문서를 명시하세요.
 
-## 답변 형식
+## 답변 형식 (필수 준수)
 - 간결하고 명확하게 작성하세요.
-- 핵심 정보를 먼저 제시하고, 세부 내용을 이어서 설명하세요."""
+- 핵심 정보를 먼저 제시하고, 세부 내용을 이어서 설명하세요.
+
+## 서식 규칙 (반드시 지켜야 함)
+- 마크다운 문법을 사용하지 마세요: #헤딩, ```코드블록```, |표|, [링크](url), *기울임* 금지
+- HTML 태그도 사용하지 마세요.
+- 아래 서식만 허용됩니다:
+
+### 사용 가능한 서식
+- 굵게: **텍스트** (핵심 키워드, 팀명 강조에 사용)
+- 섹션 제목: (( 텍스트 )) (파란색 섹션 제목에 사용, 반드시 (( 와 텍스트 사이에 띄어쓰기)
+- 목록: • 또는 1. 2. 3.
+- 하위 항목: 들여쓰기 + -
+
+### 제목/소제목 형식
+- 섹션 제목은 반드시 (( 텍스트 )) 형태로 별도의 줄에 작성하세요.
+- 제목 앞에 •(불릿)을 붙이지 마세요.
+- 제목 위에는 빈 줄을 하나 넣어 구분하세요.
+
+### 기타
+- 표(table)는 사용하지 말고 반드시 개조식(•)으로 작성하세요.
+- 코드나 기술 용어는 따옴표로 감싸세요: "defect_count"
+- 구분선(────)은 남용하지 마세요."""
 
 
 # ===== 노드 함수들 =====
@@ -524,9 +546,10 @@ def router_node(state: GraphState) -> Dict[str, Any]:
     # LLM이 route와 mail_type을 함께 판단
     simple_prompt = f"""사용자 질문을 분석하세요.
 
-## 출력 형식 (반드시 이 형식으로 두 줄 출력)
+## 출력 형식 (반드시 이 형식으로 세 줄 출력)
 route: [search/statistics/general]
 mail_type: [daily/weekly/all]
+week: [2025-XX/none]
 
 ## route 분류 기준
 - statistics: 제출/미제출 현황, 팀 수, 개수 등 **수치/통계** 질문
@@ -547,6 +570,13 @@ mail_type: [daily/weekly/all]
 - weekly: 주간보고/주보만 검색할 때
 - all: 둘 다 검색하거나 구분이 불명확할 때
 
+## week 분류 기준
+- 사용자가 특정 주차를 언급하면 "2025-XX" 형식으로 출력
+  예) "30주차 보고" → week: 2025-30
+  예) "48주차 DT팀" → week: 2025-48
+  예) "이번주" → 현재 주차로 변환 (현재 날짜 기준)
+- 주차 언급이 없으면 → week: none
+
 ## 중요: 대화 맥락 고려
 - 이전 대화가 있으면 현재 질문이 후속 질문인지 확인하세요.
 - "3주차는?", "그럼 다음주는?", "다른 팀은?" 같은 짧은 질문은 이전 대화의 맥락을 이어받습니다.
@@ -554,14 +584,15 @@ mail_type: [daily/weekly/all]
 - 이전에 내용 검색(search)을 했다면 후속 질문도 search입니다.
 
 ## 예시
-- "47주차 주보 미제출 팀 알려줘" → route: statistics, mail_type: weekly
-- "pulsed w dep 관련 내용" → route: search, mail_type: all
-- "ALD 공정 이슈" → route: search, mail_type: all
-- "데일리 메일 이슈 알려줘" → route: search, mail_type: daily
-- "PROCESS팀 수율 이슈 알려줘" → route: search, mail_type: all
-- "이번주 개선 사항 뭐야?" → route: search, mail_type: weekly
-- "안녕" → route: general, mail_type: all
-- "고마워" → route: general, mail_type: all
+- "47주차 주보 미제출 팀 알려줘" → route: statistics, mail_type: weekly, week: 2025-47
+- "30주차 DT팀 보고 내용" → route: search, mail_type: weekly, week: 2025-30
+- "pulsed w dep 관련 내용" → route: search, mail_type: all, week: none
+- "ALD 공정 이슈" → route: search, mail_type: all, week: none
+- "데일리 메일 이슈 알려줘" → route: search, mail_type: daily, week: none
+- "PROCESS팀 수율 이슈 알려줘" → route: search, mail_type: all, week: none
+- "이번주 개선 사항 뭐야?" → route: search, mail_type: weekly, week: none
+- "안녕" → route: general, mail_type: all, week: none
+- "고마워" → route: general, mail_type: all, week: none
 {history_section}
 현재 질문: {question}
 
@@ -569,6 +600,7 @@ mail_type: [daily/weekly/all]
 
     route = "general"
     mail_type = None  # None이면 전체 검색
+    week = None  # None이면 주차 필터 없음
 
     try:
         llm = get_llm()
@@ -604,8 +636,19 @@ mail_type: [daily/weekly/all]
                     mail_type = "weekly_report"
                 # "all"이면 None 유지 (전체 검색)
 
+        # week 파싱
+        if "week:" in answer:
+            week_line = [l for l in answer.split("\n") if "week:" in l]
+            if week_line:
+                week_part = week_line[0].split("week:")[-1].strip()
+                # "2025-30" 형식 매칭
+                week_match = re.search(r'(\d{4}-\d{1,2})', week_part)
+                if week_match:
+                    week = week_match.group(1)
+                # "none"이면 None 유지
+
         _elapsed = (_time.time() - _t_start) * 1000
-        print(f"🔀 [Router] 분류 결과: route={route}, mail_type={mail_type}")
+        print(f"🔀 [Router] 분류 결과: route={route}, mail_type={mail_type}, week={week}")
         print(f"   LLM 응답: {answer[:80]}...")
         print(f"   ⏱️ {_elapsed:.0f}ms")
 
@@ -613,8 +656,9 @@ mail_type: [daily/weekly/all]
         print(f"⚠️ [Router] 분류 실패, 기본값 사용: {e}")
         route = "general"
         mail_type = None
+        week = None
 
-    return {"route": route, "mail_type": mail_type}
+    return {"route": route, "mail_type": mail_type, "week": week}
 
 
 def route_question(
@@ -638,9 +682,12 @@ def retrieve_document(state: GraphState) -> Dict[str, Any]:
 
     question = state["question"]
     mail_type = state.get("mail_type")  # 메일 유형 필터
+    week = state.get("week")  # 주차 필터 (Router가 추출)
     print(f"🔍 [Retrieve] 검색 시작: {question[:50]}...")
     if mail_type:
         print(f"📧 [Retrieve] 메일 유형 필터: {mail_type}")
+    if week:
+        print(f"📅 [Retrieve] 주차 필터: {week}")
 
     if not os_client:
         print("⚠️ [Retrieve] OpenSearch 클라이언트 없음")
@@ -651,7 +698,7 @@ def retrieve_document(state: GraphState) -> Dict[str, Any]:
         results = os_client.search(
             question,
             team=None,
-            week=None,
+            week=week,
             mail_type=mail_type,
             limit=SEARCH_RESULT_LIMIT,
         )
@@ -906,13 +953,42 @@ def llm_answer_node(state: GraphState) -> Dict[str, Any]:
     )
 
     # 프롬프트 구성
-    if context:
+    route = state.get("route", "general")
+
+    if route == "search" and context:
         user_prompt = f"""질문: {question}
 
 참고 정보:
 {context}
 
-위 정보를 바탕으로 질문에 답변해주세요."""
+위 정보를 바탕으로 아래 구조에 맞춰 답변해주세요.
+
+## 답변 구조 (반드시 이 순서와 형식을 따르세요)
+
+(( 요약 ))
+질문에 대한 핵심 답변을 3~5줄로 요약하세요.
+
+(( 상세 설명 ))
+요약에서 언급한 내용을 구체적으로 설명하세요.
+• 개조식(•)으로 항목별 정리
+• 팀명, 수치 등 핵심 키워드는 **굵게** 표시
+• 각 항목에 출처 [문서 N] 표시
+
+(( 핵심 결론 ))
+전체 내용을 1~2줄로 마무리하세요.
+
+## 주의
+- 섹션 제목은 반드시 (( 요약 )), (( 상세 설명 )), (( 핵심 결론 )) 형태로 작성하세요.
+- (( 와 텍스트 사이에 띄어쓰기를 반드시 넣으세요.
+- 섹션 제목 앞에 •(불릿)을 붙이지 마세요."""
+    elif context:
+        user_prompt = f"""질문: {question}
+
+참고 정보:
+{context}
+
+위 정보를 바탕으로 질문에 답변해주세요.
+섹션 제목은 (( 제목 )) 형태로 작성하세요. (( 와 텍스트 사이에 띄어쓰기를 넣으세요."""
     else:
         user_prompt = f"""질문: {question}
 
@@ -1232,6 +1308,89 @@ def clean_html_breaks(text: str) -> str:
     return re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
 
 
+def format_for_konan_chatbot(text: str) -> str:
+    """마크다운/HTML을 코난 챗봇용 서식으로 변환
+
+    코난 챗봇 지원 서식:
+      **텍스트** → 굵은 글씨
+      (( 텍스트 )) → 파란 글씨 (섹션 제목용)
+    변환 대상: 헤딩, 코드블록, 인라인코드, 기울임, 취소선, 링크, 이미지,
+              인용문, 수평선, 표, HTML 태그
+    """
+    # (( )) 패턴은 다른 regex에 의해 수정되지 않으므로 별도 보호 없이 유지
+
+    # 1) 코드블록 (```...```) → 들여쓰기
+    def _codeblock_replace(m):
+        code = m.group(1).strip()
+        indented = "\n".join("    " + line for line in code.split("\n"))
+        return f"\n{indented}\n"
+
+    text = re.sub(r"```\w*\n?([\s\S]*?)```", _codeblock_replace, text)
+
+    # 2) 인라인 코드 (`...`) → 따옴표
+    text = re.sub(r"`([^`]+)`", r'"\1"', text)
+
+    # 3) 헤딩 (#{1,6} 제목) → (( 제목 )) 파란색 섹션 제목
+    def _heading_replace(m):
+        title = m.group(2).strip()
+        return f"\n(( {title} ))\n"
+
+    text = re.sub(r"^(#{1,6})\s+(.+)$", _heading_replace, text, flags=re.MULTILINE)
+
+    # 4) __굵게__ → **굵게** 통일 (코난 챗봇 지원 형식)
+    text = re.sub(r"__(.+?)__", r"**\1**", text)
+
+    # 5) 기울임 (*text*, _text_) → 그냥 텍스트
+    #    주의: **bold** 내부의 *는 건드리지 않음
+    text = re.sub(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)", r"\1", text)
+    text = re.sub(r"(?<!_)_(?!_)(.+?)(?<!_)_(?!_)", r"\1", text)
+
+    # 6) 취소선 (~~text~~) → 텍스트
+    text = re.sub(r"~~(.+?)~~", r"\1", text)
+
+    # 7) 링크 [텍스트](URL) → 텍스트
+    text = re.sub(r"\[([^\]]+)\]\([^\)]+\)", r"\1", text)
+
+    # 8) 이미지 ![alt](url) → 제거
+    text = re.sub(r"!\[([^\]]*)\]\([^\)]+\)", "", text)
+
+    # 9) 인용문 (> ...) → 들여쓰기
+    text = re.sub(r"^>\s?(.*)$", r"  \1", text, flags=re.MULTILINE)
+
+    # 10) 수평선 (---, ***, ___) → 구분선
+    text = re.sub(r"^[-*_]{3,}\s*$", "─" * 20, text, flags=re.MULTILINE)
+
+    # 11) 마크다운 표 → 개조식 (기존 함수 활용)
+    text = convert_table_to_bullet(text)
+
+    # 12) HTML 태그 처리
+    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"<b>(.*?)</b>", r"**\1**", text, flags=re.IGNORECASE)
+    text = re.sub(r"<strong>(.*?)</strong>", r"**\1**", text, flags=re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", "", text)
+
+    # 13) 불릿+볼드 결합 패턴 → 소제목으로 분리
+    #     "• **제목**" 또는 "- **제목**" (줄 전체가 불릿+볼드만) → (( 제목 ))
+    text = re.sub(
+        r"^[•\-\*]\s*\*\*(.+?)\*\*\s*$",
+        r"\n(( \1 ))",
+        text,
+        flags=re.MULTILINE,
+    )
+
+    # 14) (( 섹션 )) 앞뒤에 빈 줄 보장 (가독성)
+    text = re.sub(r"([^\n])\n\(\(", r"\1\n\n((", text)
+    text = re.sub(r"\)\)\n([^\n])", r"))\n\n\1", text)
+
+    # 15) 구분선이 제목과 같은 줄에 붙는 경우 분리
+    text = re.sub(r"(─+)\s*\(\(", r"\1\n\n((", text)
+
+    # 16) 연속 빈 줄 정리 (최대 2줄)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+
+    return text.strip()
+
+
 # ========== MongoDB ==========
 mongo_client: Optional[AsyncIOMotorClient] = None
 mongo_db = None
@@ -1424,9 +1583,8 @@ async def chat_v2(request: ChatV2Request):
     else:
         clean_answer = answer
 
-    # 후처리
-    answer_converted = convert_table_to_bullet(clean_answer)
-    answer_converted = clean_html_breaks(answer_converted)
+    # 후처리: 마크다운/HTML → 코난 챗봇 plain text (굵게만 사용)
+    answer_converted = format_for_konan_chatbot(clean_answer)
 
     # MongoDB 저장
     if request.conversation_id:
