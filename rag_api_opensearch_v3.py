@@ -204,7 +204,7 @@ class OpenSearchClient:
         self,
         query: str,
         team: Optional[str] = None,
-        week: Optional[str] = None,
+        week=None,
         mail_type: Optional[str] = None,
         limit: int = 5,
         vector_weight: float = 0.7,
@@ -213,6 +213,7 @@ class OpenSearchClient:
         """하이브리드 검색
 
         Args:
+            week: 주차 필터 - str("2025-30"), List[str](["2025-5","2025-6"]), 또는 None(전체)
             mail_type: 메일 유형 필터 ("weekly_report" / "daily_report" / None=전체)
         """
         # 가중치 정규화
@@ -231,7 +232,10 @@ class OpenSearchClient:
         if team:
             filters.append({"term": {"team": team}})
         if week:
-            filters.append({"term": {"week": week}})
+            if isinstance(week, list):
+                filters.append({"terms": {"week": week}})  # 복수 주차 필터
+            else:
+                filters.append({"term": {"week": week}})   # 단일 주차 필터 (하위호환)
         if mail_type:
             filters.append({"term": {"mail_type": mail_type}})
 
@@ -421,12 +425,13 @@ class GraphState(TypedDict):
     """Naive RAG 상태"""
 
     question: str  # 사용자 질문
+    search_query: str  # 컨텍스트 반영된 독립 검색 쿼리 (Router가 생성)
     context: str  # 검색/통계 결과 (컨텍스트)
     answer: str  # 최종 답변
     messages: Annotated[list, add_messages]  # 대화 히스토리
     route: str  # 라우팅 결과 (search/statistics/general)
     mail_type: Optional[str]  # 메일 유형 필터 (weekly_report/daily_report/None)
-    week: Optional[str]  # 주차 필터 (예: "2025-30", Router가 추출)
+    week: Optional[List[str]]  # 주차 필터 (단일 ["2025-30"] 또는 복수 ["2025-5","2025-6","2025-7"])
 
 
 class RouteDecision(BaseModel):
@@ -506,6 +511,40 @@ ANSWER_SYSTEM_PROMPT = """당신은 반도체 주간 업무 보고서 시스템�
 - 구분선(────)은 남용하지 마세요."""
 
 
+# ===== 유틸리티: 주차 정보 =====
+def _get_week_info() -> str:
+    """현재 날짜 기반 주차 정보 문자열 생성 (Router 프롬프트에 주입)"""
+    now = datetime.now()
+    iso_year, iso_week, _ = now.isocalendar()
+    current_week = f"{iso_year}-{iso_week:02d}"
+    if iso_week > 1:
+        prev_week = f"{iso_year}-{(iso_week - 1):02d}"
+    else:
+        prev_week = f"{iso_year - 1}-52"
+    next_week = f"{iso_year}-{(iso_week + 1):02d}"
+
+    # 최근 N주 리스트 계산 (현재 주 포함, 과거 방향)
+    recent_weeks = []
+    for i in range(4):
+        w = iso_week - i
+        y = iso_year
+        if w < 1:
+            w += 52
+            y -= 1
+        recent_weeks.append(f"{y}-{w:02d}")
+
+    weekday_names = ["월", "화", "수", "목", "금", "토", "일"]
+    return (
+        f"- 오늘 날짜: {now.strftime('%Y-%m-%d')} ({weekday_names[now.weekday()]}요일)\n"
+        f"- 이번주 = {current_week}\n"
+        f"- 저번주/지난주 = {prev_week}\n"
+        f"- 다음주 = {next_week}\n"
+        f"- 최근 2주 = {','.join(recent_weeks[:2])}\n"
+        f"- 최근 3주 = {','.join(recent_weeks[:3])}\n"
+        f"- 최근 4주 = {','.join(recent_weeks[:4])}"
+    )
+
+
 # ===== 노드 함수들 =====
 def router_node(state: GraphState) -> Dict[str, Any]:
     """Router 노드: LLM이 질문 유형(route) + 메일 유형(mail_type) 동시 판단"""
@@ -543,13 +582,20 @@ def router_node(state: GraphState) -> Dict[str, Any]:
         f"\n## 이전 대화 히스토리\n{history_text}\n" if history_text else ""
     )
 
-    # LLM이 route와 mail_type을 함께 판단
+    # 현재 날짜/주차 정보 생성
+    week_info = _get_week_info()
+
+    # LLM이 route, mail_type, week, search_query를 함께 판단
     simple_prompt = f"""사용자 질문을 분석하세요.
 
-## 출력 형식 (반드시 이 형식으로 세 줄 출력)
+## 현재 날짜 정보
+{week_info}
+
+## 출력 형식 (반드시 이 형식으로 네 줄 출력)
 route: [search/statistics/general]
 mail_type: [daily/weekly/all]
-week: [2025-XX/none]
+week: [YYYY-WW 또는 YYYY-WW,YYYY-WW,... 또는 none]
+search_query: [검색엔진에 보낼 독립적 검색 쿼리 / none]
 
 ## route 분류 기준
 - statistics: 제출/미제출 현황, 팀 수, 개수 등 **수치/통계** 질문
@@ -571,11 +617,37 @@ week: [2025-XX/none]
 - all: 둘 다 검색하거나 구분이 불명확할 때
 
 ## week 분류 기준
-- 사용자가 특정 주차를 언급하면 "2025-XX" 형식으로 출력
+- 단일 주차: "YYYY-WW" 형식으로 출력
   예) "30주차 보고" → week: 2025-30
   예) "48주차 DT팀" → week: 2025-48
-  예) "이번주" → 현재 주차로 변환 (현재 날짜 기준)
+- 복수 주차: 콤마(,)로 구분하여 나열
+  예) "최근 3주" → week: (위 '최근 3주' 값을 그대로 사용)
+  예) "최근 2주" → week: (위 '최근 2주' 값을 그대로 사용)
+  예) "47~49주차" → week: 2025-47,2025-48,2025-49
+- 상대적 시간 표현은 위 날짜 정보를 사용하여 **반드시 실제 주차로 변환**:
+  예) "이번주" → week: (위 '이번주' 값 사용)
+  예) "저번주"/"지난주" → week: (위 '저번주/지난주' 값 사용)
+  예) "다음주" → week: (위 '다음주' 값 사용)
 - 주차 언급이 없으면 → week: none
+- **중요**: "최근 N주", "이번주", "저번주" 등을 절대 그대로 출력하지 말고, 반드시 위 날짜 정보의 실제 값으로 변환하세요
+
+## search_query 작성 규칙 (route가 search일 때만)
+- 검색엔진(OpenSearch)에 보낼 **독립적인 검색 쿼리**를 작성하세요.
+- 핵심 원칙:
+  1. 이전 대화를 참조하는 후속 질문이면, 이전 대화의 **핵심 키워드/주제**를 반드시 포함
+  2. "정리해줘", "알려줘", "조사해줘", "다시" 같은 **지시어는 제거**하고 검색 키워드만 추출
+  3. **시간/주차 표현은 search_query에 절대 포함하지 마세요** (시간 필터는 week 필드가 담당)
+     - "이번주", "저번주", "최근 3주", "48주차" 같은 표현은 모두 week에만 반영
+  4. 팀명, 기술 용어, 프로젝트명 등 **검색에 필요한 키워드**만 포함
+- route가 search가 아니면 → search_query: none
+
+## search_query 예시
+- 첫 질문 "dsm misalign 조사해줘" → search_query: dsm misalign
+- 후속 질문 "오래된 순에서 최신순으로 정리해줘" → search_query: dsm misalign (이전 대화 주제 유지)
+- 후속 질문 "다른 팀은?" → search_query: dsm misalign (이전 주제 + 팀 범위 확장)
+- 첫 질문 "이번주 PROCESS팀 수율 이슈" → search_query: PROCESS팀 수율 이슈 (시간은 week에)
+- 첫 질문 "저번주 DT팀 보고 내용" → search_query: DT팀 보고 내용 (시간은 week에)
+- 후속 질문 "최근 3주차로 다시 조사해줘" → search_query: PROCESS팀 업무 (시간은 week에, 주제는 이전 대화에서)
 
 ## 중요: 대화 맥락 고려
 - 이전 대화가 있으면 현재 질문이 후속 질문인지 확인하세요.
@@ -583,16 +655,17 @@ week: [2025-XX/none]
 - 이전에 통계(statistics)를 물어봤다면 후속 질문도 statistics입니다.
 - 이전에 내용 검색(search)을 했다면 후속 질문도 search입니다.
 
-## 예시
-- "47주차 주보 미제출 팀 알려줘" → route: statistics, mail_type: weekly, week: 2025-47
-- "30주차 DT팀 보고 내용" → route: search, mail_type: weekly, week: 2025-30
-- "pulsed w dep 관련 내용" → route: search, mail_type: all, week: none
-- "ALD 공정 이슈" → route: search, mail_type: all, week: none
-- "데일리 메일 이슈 알려줘" → route: search, mail_type: daily, week: none
-- "PROCESS팀 수율 이슈 알려줘" → route: search, mail_type: all, week: none
-- "이번주 개선 사항 뭐야?" → route: search, mail_type: weekly, week: none
-- "안녕" → route: general, mail_type: all, week: none
-- "고마워" → route: general, mail_type: all, week: none
+## 분류 예시
+- "47주차 주보 미제출 팀 알려줘" → route: statistics, mail_type: weekly, week: 2025-47, search_query: none
+- "30주차 DT팀 보고 내용" → route: search, mail_type: weekly, week: 2025-30, search_query: DT팀 보고 내용
+- "pulsed w dep 관련 내용" → route: search, mail_type: all, week: none, search_query: pulsed w dep
+- "ALD 공정 이슈" → route: search, mail_type: all, week: none, search_query: ALD 공정 이슈
+- "데일리 메일 이슈 알려줘" → route: search, mail_type: daily, week: none, search_query: 이슈
+- "PROCESS팀 수율 이슈 알려줘" → route: search, mail_type: all, week: none, search_query: PROCESS팀 수율 이슈
+- "최근 3주 YIELD팀 현황" → route: search, mail_type: all, week: (최근 3주 값), search_query: YIELD팀 현황
+- "47~49주차 FA팀 이슈" → route: search, mail_type: all, week: 2025-47,2025-48,2025-49, search_query: FA팀 이슈
+- "안녕" → route: general, mail_type: all, week: none, search_query: none
+- "고마워" → route: general, mail_type: all, week: none, search_query: none
 {history_section}
 현재 질문: {question}
 
@@ -636,20 +709,31 @@ week: [2025-XX/none]
                     mail_type = "weekly_report"
                 # "all"이면 None 유지 (전체 검색)
 
-        # week 파싱
+        # week 파싱 (단일 또는 콤마 구분 복수 주차)
         if "week:" in answer:
             week_line = [l for l in answer.split("\n") if "week:" in l]
             if week_line:
                 week_part = week_line[0].split("week:")[-1].strip()
-                # "2025-30" 형식 매칭
-                week_match = re.search(r'(\d{4}-\d{1,2})', week_part)
-                if week_match:
-                    week = week_match.group(1)
+                # 콤마 구분 복수 주차 또는 단일 주차 매칭
+                week_matches = re.findall(r'(\d{4}-\d{1,2})', week_part)
+                if week_matches:
+                    week = week_matches  # List[str]
                 # "none"이면 None 유지
 
+        # search_query 파싱
+        search_query = question  # 기본값: 원문 그대로
+        if "search_query:" in answer:
+            sq_line = [l for l in answer.split("\n") if "search_query:" in l]
+            if sq_line:
+                sq_part = sq_line[0].split("search_query:", 1)[-1].strip()
+                if sq_part and sq_part.lower() != "none":
+                    search_query = sq_part
+
         _elapsed = (_time.time() - _t_start) * 1000
-        print(f"🔀 [Router] 분류 결과: route={route}, mail_type={mail_type}, week={week}")
-        print(f"   LLM 응답: {answer[:80]}...")
+        week_display = ",".join(week) if week else "none"
+        print(f"🔀 [Router] 분류 결과: route={route}, mail_type={mail_type}, week={week_display}")
+        print(f"🔀 [Router] search_query: {search_query[:80]}")
+        print(f"   LLM 응답: {answer[:120]}...")
         print(f"   ⏱️ {_elapsed:.0f}ms")
 
     except Exception as e:
@@ -657,8 +741,9 @@ week: [2025-XX/none]
         route = "general"
         mail_type = None
         week = None
+        search_query = question  # fallback: 원문
 
-    return {"route": route, "mail_type": mail_type, "week": week}
+    return {"route": route, "mail_type": mail_type, "week": week, "search_query": search_query}
 
 
 def route_question(
@@ -681,13 +766,16 @@ def retrieve_document(state: GraphState) -> Dict[str, Any]:
     _t_start = _time.time()
 
     question = state["question"]
+    search_query = state.get("search_query") or question  # fallback: 원문
     mail_type = state.get("mail_type")  # 메일 유형 필터
-    week = state.get("week")  # 주차 필터 (Router가 추출)
-    print(f"🔍 [Retrieve] 검색 시작: {question[:50]}...")
+    week = state.get("week")  # 주차 필터 (Router가 추출, List[str] 또는 None)
+    print(f"🔍 [Retrieve] 원문 질문: {question[:50]}...")
+    print(f"🔍 [Retrieve] 검색 쿼리: {search_query[:50]}...")
     if mail_type:
         print(f"📧 [Retrieve] 메일 유형 필터: {mail_type}")
     if week:
-        print(f"📅 [Retrieve] 주차 필터: {week}")
+        week_display = ",".join(week) if isinstance(week, list) else week
+        print(f"📅 [Retrieve] 주차 필터: {week_display} ({len(week) if isinstance(week, list) else 1}개 주차)")
 
     if not os_client:
         print("⚠️ [Retrieve] OpenSearch 클라이언트 없음")
@@ -696,7 +784,7 @@ def retrieve_document(state: GraphState) -> Dict[str, Any]:
     try:
         _t_search_start = _time.time()
         results = os_client.search(
-            question,
+            search_query,
             team=None,
             week=week,
             mail_type=mail_type,
@@ -1144,6 +1232,7 @@ async def chat_with_agent(
             lambda: graph.invoke(
                 {
                     "question": user_message,
+                    "search_query": "",  # Router가 채워줌
                     "context": "",
                     "answer": "",
                     "messages": history_messages,
@@ -1154,6 +1243,19 @@ async def chat_with_agent(
             ),
         )
         print("✅ graph.invoke 완료")
+
+        # 디버깅: Query Rewrite 결과 출력
+        _original_q = result.get("question", "")
+        _rewritten_q = result.get("search_query", "")
+        _route = result.get("route", "")
+        _week = result.get("week")
+        _week_display = ",".join(_week) if isinstance(_week, list) else (_week or "none")
+        _mail_type = result.get("mail_type")
+        print("=" * 60)
+        print(f"📋 [DEBUG] 원문 질문:    {_original_q}")
+        print(f"📋 [DEBUG] 재작성 쿼리:  {_rewritten_q}")
+        print(f"📋 [DEBUG] route={_route}, week={_week_display}, mail_type={_mail_type}")
+        print("=" * 60)
 
     except Exception as e:
         print(f"❌ graph.invoke 실패: {e}")

@@ -129,26 +129,6 @@ def _safe_list(value: object, fallback: Optional[List[str]] = None) -> List[str]
     return result
 
 
-def _safe_kpi(value: object) -> List[Dict[str, str]]:
-    if not isinstance(value, list):
-        return []
-    results: List[Dict[str, str]] = []
-    for item in value:
-        if not isinstance(item, dict):
-            continue
-        name = str(item.get("name", "")).strip()
-        if not name:
-            continue
-        results.append(
-            {
-                "name": name,
-                "value": str(item.get("value", "")).strip(),
-                "delta": str(item.get("delta", "")).strip(),
-            }
-        )
-    return results
-
-
 def _default_insight() -> Dict:
     return {
         "status": "unknown",
@@ -157,7 +137,6 @@ def _default_insight() -> Dict:
         "next_week_plan": [],
         "dependency": [],
         "action_required": [],
-        "kpi": [],
     }
 
 
@@ -173,7 +152,6 @@ def normalize_insight(data: Dict) -> Dict:
     normalized["next_week_plan"] = _safe_list(data.get("next_week_plan"))
     normalized["dependency"] = _safe_list(data.get("dependency"))
     normalized["action_required"] = _safe_list(data.get("action_required"))
-    normalized["kpi"] = _safe_kpi(data.get("kpi"))
     return normalized
 
 
@@ -242,7 +220,9 @@ def extract_executive_summary(text: str) -> str:
                 summary_lines = []
                 for jdx in range(idx + 1, len(lines)):
                     next_line = lines[jdx].strip()
-                    if re.match(r"^\d+\.", next_line) or re.match(r"^[#\*]+\s", next_line):
+                    if re.match(r"^\d+\.", next_line) or re.match(
+                        r"^[#\*]+\s", next_line
+                    ):
                         break
                     if (
                         not next_line
@@ -332,7 +312,9 @@ def generate_one_line_summary(team: str, exec_summary: str, current_week: str) -
 
 
 # ========== LLM 구조화 인사이트 ==========
-def generate_structured_insight(team: str, exec_summary: str, current_week: str) -> Dict:
+def generate_structured_insight(
+    team: str, exec_summary: str, current_week: str
+) -> Dict:
     if not exec_summary.strip():
         return _default_insight()
 
@@ -351,10 +333,7 @@ JSON 스키마:
   "risk": ["리스크 최대 3개"],
   "next_week_plan": ["다음주 계획 최대 3개"],
   "dependency": ["타팀/타조직 의존사항 최대 2개"],
-  "action_required": ["의사결정/지원 요청 최대 2개"],
-  "kpi": [
-    {"name":"지표명", "value":"현재값", "delta":"증감/변화"}
-  ]
+  "action_required": ["의사결정/지원 요청 최대 2개"]
 }
 
 작성 가이드:
@@ -394,8 +373,10 @@ JSON 스키마:
 
 
 def infer_tag(summary: str, insight: Dict) -> str:
-    if summary.startswith("[완료]") or summary.startswith("[리스크]") or summary.startswith(
-        "[의사결정요청]"
+    if (
+        summary.startswith("[완료]")
+        or summary.startswith("[리스크]")
+        or summary.startswith("[의사결정요청]")
     ):
         return ""
     if insight.get("action_required"):
@@ -421,7 +402,9 @@ def get_team_primary_domain(team: str, week: str) -> str:
     return TEAM_GROUP_MAP.get(team, "직속")
 
 
-def group_teams_by_domain(teams_data: Dict[str, Dict], week: str) -> Dict[str, List[Dict]]:
+def group_teams_by_domain(
+    teams_data: Dict[str, Dict], week: str
+) -> Dict[str, List[Dict]]:
     grouped = {domain: [] for domain in DOMAIN_ORDER}
     for team, data in teams_data.items():
         domain = get_team_primary_domain(team, week)
@@ -447,24 +430,6 @@ def _join_items(items: List[str], default_text: str = "-") -> str:
     return " / ".join(cleaned)
 
 
-def _format_kpi(items: List[Dict[str, str]]) -> str:
-    if not items:
-        return "-"
-    chunks: List[str] = []
-    for item in items[:3]:
-        name = item.get("name", "").strip()
-        value = item.get("value", "").strip()
-        delta = item.get("delta", "").strip()
-        text = name
-        if value:
-            text += f" {value}"
-        if delta:
-            text += f" ({delta})"
-        if text:
-            chunks.append(text)
-    return " / ".join(chunks) if chunks else "-"
-
-
 def _escape_html(text: str) -> str:
     return (
         text.replace("&", "&amp;")
@@ -487,7 +452,9 @@ def _render_tag(summary: str) -> str:
 
 
 # ========== HTML 출력 ==========
-def generate_html(grouped_data: Dict[str, List[Dict]], week: str, timestamp: str) -> str:
+def generate_html(
+    grouped_data: Dict[str, List[Dict]], week: str, timestamp: str
+) -> str:
     html = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -495,35 +462,121 @@ def generate_html(grouped_data: Dict[str, List[Dict]], week: str, timestamp: str
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Layer3 Executive Dashboard v2 - {week}</title>
     <style>
-        body {{ margin: 0; padding: 0; }}
-        table {{ border-collapse: collapse; }}
-        body, table, td, th, p, span, div {{
-            font-family: 'Malgun Gothic', '맑은 고딕', 'Apple SD Gothic Neo', 'Segoe UI', Arial, sans-serif !important;
+        body {{ font-family: 'Malgun Gothic', '맑은 고딕', 'Apple SD Gothic Neo', sans-serif; margin: 20px; background-color: #f4f4f4; }}
+        .container {{ max-width: 1400px; margin: 0 auto; background-color: #fff; padding: 20px; box-shadow: 0 0 10px rgba(0,0,0,0.1); border-radius: 8px; }}
+        
+        /* Header Section */
+        .header-section {{
+            background-color: #1a202c;
+            color: white;
+            padding: 20px;
+            border-radius: 6px;
+            margin-bottom: 20px;
         }}
+        .header-title {{ font-size: 24px; font-weight: bold; margin-bottom: 8px; }}
+        .header-meta {{ font-size: 13px; color: #a0aec0; }}
+
+        /* Division Section */
+        .division-section {{ margin-bottom: 30px; border: 1px solid #e2e8f0; border-radius: 6px; overflow: hidden; background-color: white; }}
+        .division-header {{ 
+            padding: 12px 20px; 
+            color: white; 
+            font-weight: bold; 
+            font-size: 16px;
+        }}
+        
+        /* Team Block */
+        .team-block {{
+            border-bottom: 1px solid #e2e8f0;
+            padding: 20px;
+        }}
+        .team-block:last-child {{ border-bottom: none; }}
+        
+        .team-header {{
+            font-size: 18px;
+            font-weight: bold;
+            color: #2d3748;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+        }}
+        .team-badge {{
+            background-color: #edf2f7;
+            padding: 4px 8px;
+            border-radius: 4px;
+            margin-right: 10px;
+            font-size: 12px;
+            color: #4a5568;
+            font-weight: normal;
+        }}
+
+        /* Content Layout */
+        .content-row {{
+            margin-bottom: 15px;
+        }}
+        
+        .summary-box {{
+            background-color: #f7fafc;
+            padding: 15px;
+            border-radius: 6px;
+            line-height: 1.6;
+            border-left: 4px solid #4299e1;
+        }}
+        .summary-label {{
+            font-weight: bold;
+            color: #2b6cb0;
+            display: block;
+            margin-bottom: 6px;
+            font-size: 14px;
+        }}
+        .summary-content {{
+            font-size: 15px;
+            color: #2d3748;
+        }}
+        
+        .detail-grid {{
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 15px;
+        }}
+        
+        @media (max-width: 1024px) {{
+            .detail-grid {{ grid-template-columns: 1fr; }}
+        }}
+
+        .detail-item {{
+            background-color: #fff;
+            border: 1px solid #e2e8f0;
+            padding: 15px;
+            border-radius: 6px;
+        }}
+        .detail-header {{
+            font-size: 13px;
+            font-weight: bold;
+            color: #718096;
+            margin-bottom: 8px;
+            border-bottom: 1px solid #edf2f7;
+            padding-bottom: 5px;
+            text-transform: uppercase;
+        }}
+        .detail-content {{
+            font-size: 14px;
+            color: #4a5568;
+            line-height: 1.5;
+            white-space: pre-wrap;
+        }}
+
+        /* Tag Styles */
+        .tag {{ display: inline-block; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: bold; margin-right: 4px; }}
+        
     </style>
 </head>
-<body style="margin: 0; padding: 0; background-color: #f5f5f5;">
-    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: #f5f5f5;">
-        <tr>
-            <td align="center" style="padding: 20px 10px;">
-                <table width="1080" cellpadding="0" cellspacing="0" border="0" style="max-width: 1080px;">
-                    <tr>
-                        <td style="background-color: #1a202c; padding: 24px 28px;">
-                            <table width="100%" cellpadding="0" cellspacing="0" border="0">
-                                <tr>
-                                    <td style="font-size: 22px; font-weight: bold; color: #ffffff;">
-                                        Layer3 Executive Dashboard v2
-                                    </td>
-                                </tr>
-                                <tr>
-                                    <td style="font-size: 13px; color: #a0aec0; padding-top: 6px;">
-                                        대상 주차: {week} | 생성: {timestamp}
-                                    </td>
-                                </tr>
-                            </table>
-                        </td>
-                    </tr>
-                    <tr><td style="height: 16px; background-color: #f5f5f5;"></td></tr>
+<body>
+    <div class="container">
+        <div class="header-section">
+            <div class="header-title">Layer3 Executive Dashboard v2</div>
+            <div class="header-meta">대상 주차: {week} | 생성: {timestamp}</div>
+        </div>
 """
 
     for domain in DOMAIN_ORDER:
@@ -531,65 +584,55 @@ def generate_html(grouped_data: Dict[str, List[Dict]], week: str, timestamp: str
         if not teams:
             continue
         domain_color = DOMAIN_COLORS.get(domain, "#666")
+        
         html += f"""
-                    <tr>
-                        <td style="background-color: #ffffff;">
-                            <table width="100%" cellpadding="0" cellspacing="0" border="0">
-                                <tr>
-                                    <td style="background-color: {domain_color}; padding: 12px 20px; font-size: 15px; font-weight: bold; color: #ffffff;">
-                                        {domain}
-                                    </td>
-                                </tr>
-                                <tr>
-                                    <td style="padding: 0;">
-                                        <table width="100%" cellpadding="0" cellspacing="0" border="0">
-                                            <tr style="background-color: #f7fafc;">
-                                                <td style="padding: 10px 12px; font-size: 11px; font-weight: bold; color: #4a5568; width: 80px; border-bottom: 2px solid #e2e8f0;">팀</td>
-                                                <td style="padding: 10px 12px; font-size: 11px; font-weight: bold; color: #4a5568; width: 300px; border-bottom: 2px solid #e2e8f0;">Executive Summary</td>
-                                                <td style="padding: 10px 12px; font-size: 11px; font-weight: bold; color: #4a5568; width: 250px; border-bottom: 2px solid #e2e8f0;">리스크</td>
-                                                <td style="padding: 10px 12px; font-size: 11px; font-weight: bold; color: #4a5568; width: 250px; border-bottom: 2px solid #e2e8f0;">다음주 계획</td>
-                                                <td style="padding: 10px 12px; font-size: 11px; font-weight: bold; color: #4a5568; width: 200px; border-bottom: 2px solid #e2e8f0;">의사결정 요청/KPI</td>
-                                            </tr>
-"""
+        <div class="division-section">
+            <div class="division-header" style="background-color: {domain_color};">{domain}</div>
+        """
+        
         for team_data in teams:
             team = team_data["team"]
             summary = _render_tag(team_data.get("summary", ""))
             insight = team_data.get("insight", _default_insight())
+            
             risk_text = _escape_html(_join_items(insight.get("risk", [])))
             plan_text = _escape_html(_join_items(insight.get("next_week_plan", [])))
             action_text = _escape_html(_join_items(insight.get("action_required", [])))
-            kpi_text = _escape_html(_format_kpi(insight.get("kpi", [])))
-            action_kpi = action_text
-            if kpi_text != "-":
-                if action_kpi == "-":
-                    action_kpi = f"KPI: {kpi_text}"
-                else:
-                    action_kpi = f"{action_kpi} / KPI: {kpi_text}"
 
             html += f"""
-                                            <tr>
-                                                <td style="padding: 12px 12px; font-size: 13px; color: #2d3748; font-weight: bold; border-bottom: 1px solid #e2e8f0; vertical-align: top;">{_escape_html(team)}</td>
-                                                <td style="padding: 12px 12px; font-size: 13px; color: #2d3748; line-height: 1.5; border-bottom: 1px solid #e2e8f0;">{summary}</td>
-                                                <td style="padding: 12px 12px; font-size: 12px; color: #2d3748; line-height: 1.5; border-bottom: 1px solid #e2e8f0;">{risk_text}</td>
-                                                <td style="padding: 12px 12px; font-size: 12px; color: #2d3748; line-height: 1.5; border-bottom: 1px solid #e2e8f0;">{plan_text}</td>
-                                                <td style="padding: 12px 12px; font-size: 12px; color: #2d3748; line-height: 1.5; border-bottom: 1px solid #e2e8f0;">{action_kpi}</td>
-                                            </tr>
-"""
-        html += """
-                                        </table>
-                                    </td>
-                                </tr>
-                            </table>
-                        </td>
-                    </tr>
-                    <tr><td style="height: 12px; background-color: #f5f5f5;"></td></tr>
-"""
+            <div class="team-block">
+                <div class="team-header">
+                    <span class="team-badge">TEAM</span> {team}
+                </div>
+                
+                <div class="content-row">
+                    <div class="summary-box">
+                        <span class="summary-label">Executive Summary</span>
+                        <div class="summary-content">{summary}</div>
+                    </div>
+                </div>
+
+                <div class="detail-grid">
+                    <div class="detail-item">
+                        <div class="detail-header">리스크 / 이슈</div>
+                        <div class="detail-content">{risk_text}</div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="detail-header">다음주 계획</div>
+                        <div class="detail-content">{plan_text}</div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="detail-header">의사결정 요청</div>
+                        <div class="detail-content">{action_text}</div>
+                    </div>
+                </div>
+            </div>
+            """
+        
+        html += "</div>"  # End division-section
 
     html += """
-                </table>
-            </td>
-        </tr>
-    </table>
+    </div>
 </body>
 </html>
 """
@@ -597,7 +640,9 @@ def generate_html(grouped_data: Dict[str, List[Dict]], week: str, timestamp: str
 
 
 # ========== Markdown 출력 ==========
-def generate_markdown(grouped_data: Dict[str, List[Dict]], week: str, timestamp: str) -> str:
+def generate_markdown(
+    grouped_data: Dict[str, List[Dict]], week: str, timestamp: str
+) -> str:
     md = f"""# Layer3 Executive Dashboard v2
 
 **대상 주차**: {week}
@@ -612,27 +657,21 @@ def generate_markdown(grouped_data: Dict[str, List[Dict]], week: str, timestamp:
             continue
         md += f"## {domain}\n\n"
         md += (
-            "| 팀 | Executive Summary | 리스크 | 다음주 계획 | 의사결정 요청/KPI |\n"
-            "|-----|-------------------|--------|-------------|-------------------|\n"
+            "| 팀 | Executive Summary | 리스크 | 다음주 계획 | 의사결정 요청 |\n"
+            "|-----|-------------------|--------|-------------|---------------|\n"
         )
         for team_data in teams:
             team = team_data["team"]
             summary = team_data["summary"].replace("|", "\\|")
             insight = team_data.get("insight", _default_insight())
             risk_text = _join_items(insight.get("risk", [])).replace("|", "\\|")
-            plan_text = _join_items(insight.get("next_week_plan", [])).replace("|", "\\|")
-            action_text = _join_items(insight.get("action_required", []))
-            kpi_text = _format_kpi(insight.get("kpi", []))
-            combined = action_text if action_text != "-" else ""
-            if kpi_text != "-":
-                if combined:
-                    combined = f"{combined} / KPI: {kpi_text}"
-                else:
-                    combined = f"KPI: {kpi_text}"
-            if not combined:
-                combined = "-"
-            combined = combined.replace("|", "\\|")
-            md += f"| {team} | {summary} | {risk_text} | {plan_text} | {combined} |\n"
+            plan_text = _join_items(insight.get("next_week_plan", [])).replace(
+                "|", "\\|"
+            )
+            action_text = _join_items(insight.get("action_required", [])).replace(
+                "|", "\\|"
+            )
+            md += f"| {team} | {summary} | {risk_text} | {plan_text} | {action_text} |\n"
         md += "\n---\n\n"
     return md
 
