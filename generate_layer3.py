@@ -22,14 +22,16 @@ OUTPUT_DIR = Path("output")
 # LLM 설정
 API_KEY = os.getenv("OPENROUTER_API_KEY")
 BASE_URL = os.getenv("OPENROUTER_BASE_URL")
-MODEL = "gpt-oss-120b"
+MODEL = "gpt-4.1"
+# MODEL = "z-ai/glm-4.7"
+# MODEL = "gpt-oss-120b"
 
 # 실행 설정
 CONFIG = {
-    "week": "2025-48",  # 대상 주차
-    "teams": None,  # None이면 전체 팀, ["FA팀"] 처럼 지정 가능
+    "week": "2026-09",  # 대상 주차
+    "teams": ["FA팀","CS팀"],  # None이면 전체 팀, ["FA팀"] 처럼 지정 가능
     "output_format": "both",  # "html", "md", "both"
-    "db_source": "opensearch",  # "file" 또는 "opensearch"
+    "db_source": "file",  # "file" 또는 "opensearch"
 }
 
 # 팀 목록
@@ -45,6 +47,15 @@ TEAMS = [
     "TEST팀",
     "YIELD팀",
 ]
+
+# 트렌드 태그 색상
+TREND_COLORS = {
+    "개선": "#38a169",  # 초록
+    "악화": "#e53e3e",  # 빨강
+    "유지": "#718096",  # 회색
+    "해결": "#3182ce",  # 파랑
+    "신규": "#dd6b20",  # 주황
+}
 
 # 그룹 순서 및 색상
 DOMAIN_ORDER = ["DRAM - PTE", "DRAM - SRT", "NAND - PTE", "NAND - SRT", "직속"]
@@ -85,7 +96,29 @@ EXEC_SUMMARY_KEYWORDS = [
     "주요사항",
     "Overview",
     "overview",
+    "1. 금일 완료 업무 상세 설명",
+    # "금일 완료 업무 상세 설명"
 ]
+
+
+# ========== 주차 계산 ==========
+def get_prev_weeks(week_str: str, n: int = 2) -> List[str]:
+    """YYYY-WW 형식의 이전 n주차 리스트 반환 (최근순)
+
+    Returns:
+        ["2026-04", "2026-03"] 형태 (week_str이 "2026-05"일 때)
+    """
+    year, week = map(int, week_str.split("-"))
+    result = []
+    for i in range(1, n + 1):
+        w = week - i
+        y = year
+        if w <= 0:
+            y -= 1
+            last_week = datetime(y, 12, 28).isocalendar()[1]
+            w += last_week
+        result.append(f"{y}-{w:02d}")
+    return result
 
 
 # ========== 데이터 로드 ==========
@@ -234,13 +267,17 @@ def generate_one_line_summary(team: str, exec_summary: str, current_week: str) -
 ## 길이:
 - 90~120자(공백 포함) 권장. 핵심이 잘리면 80~140자까지 허용.
 
-## 하이라이트 태그 (해당 시에만 문장 앞에 추가):
-- [완료]: 주요 업무가 완료되었다고 명시된 경우
-- 태그는 최대 1개만 사용, 해당 없으면 태그 없이 작성
+## 하이라이트 태그 (반드시 1개 선택):
+- [완료]: 이번 주 주요 업무/마일스톤이 완료된 경우
+- [진행중]: 특이사항 없이 정상 진행 중인 경우
+- [이슈]: 문제 발생 또는 이상 징후가 있는 경우
+- [지연]: 일정 또는 목표가 지연되고 있는 경우
+- [협의필요]: 타팀 또는 상위 조직의 대응/결정이 필요한 경우
+- 태그는 반드시 1개, 문장 맨 앞에 작성
 
 ## 출력 형식:
-- 태그 없는 경우: 설비 점검을 완료했고 수율 분석 리포트 작성이 진행 중이다.
-- 태그 있는 경우: [완료] 1a DRAM 공정 안정화를 달성했고 Yield 92.3%를 기록했다.
+- [진행중] 설비 점검을 완료했고 수율 분석 리포트 작성이 진행 중이다.
+- [완료] 1a DRAM 공정 안정화를 달성했고 Yield 92.3%를 기록했다.
 """
 
     user_prompt = f"""[{team}] {current_week} 주간보고 Executive Summary를 위 원칙대로 요약하세요.
@@ -268,9 +305,12 @@ def generate_one_line_summary(team: str, exec_summary: str, current_week: str) -
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.1,
-            max_tokens=200,
+            max_tokens=2000,
         )
-        summary = response.choices[0].message.content.strip()
+        choice = response.choices[0]
+        print(f"   - finish_reason: {choice.finish_reason}")
+        print(f"   - message fields: {choice.message.model_dump()}")
+        summary = (choice.message.content or "").strip()
 
         # 따옴표 제거
         summary = summary.strip("\"'")
@@ -279,6 +319,66 @@ def generate_one_line_summary(team: str, exec_summary: str, current_week: str) -
     except Exception as e:
         print(f"   ⚠️ LLM 오류: {e}")
         return exec_summary[:100] + "..." if len(exec_summary) > 100 else exec_summary
+
+
+# ========== 트렌드 태그 생성 ==========
+def generate_trend_tag(
+    team: str,
+    current_week: str,
+    current_exec: str,
+    prev_data: List[tuple],  # [(week, exec_summary), ...] 최근순
+) -> str:
+    """3주치 Executive Summary로 트렌드 한 단어 생성
+
+    Args:
+        prev_data: [(이전주차, exec_summary), ...] 최근주가 앞
+
+    Returns:
+        "개선" | "악화" | "유지" | "해결" | "신규"
+    """
+    valid_tags = {"개선", "악화", "유지", "해결", "신규"}
+
+    # 유효한 이전 데이터가 없으면 신규
+    valid_prev = [(w, s) for w, s in prev_data if s.strip()]
+    if not valid_prev:
+        return "신규"
+
+    # 오래된 순으로 정렬 후 텍스트 구성
+    history_text = ""
+    for w, s in reversed(valid_prev):
+        history_text += f"[{w}주차] {s}\n\n"
+    history_text += f"[{current_week}주차 - 현재] {current_exec}"
+
+    system_prompt = """당신은 반도체 공정 팀의 주간보고 트렌드를 분석하는 전문가입니다.
+최대 3주치 Executive Summary를 보고 현재 주차 상황을 아래 5가지 중 하나로 분류하세요.
+
+분류 기준:
+- 개선: 이전 주 대비 수율·이슈·진행 상황이 좋아지는 흐름
+- 악화: 이전 주 대비 상황이 나빠지거나 문제가 심화되는 흐름
+- 유지: 3주간 큰 변화 없이 유사한 수준 유지
+- 해결: 이전 주에 언급된 이슈/문제가 이번 주 완료 또는 해결됨
+- 신규: 이번 주에 처음 등장한 이슈 또는 업무 (이전 주에 없던 내용)
+
+반드시 위 5가지 중 하나의 단어만 출력하세요. 설명 없이 단어 하나만."""
+
+    user_prompt = f"[{team}] 팀 주간보고 트렌드 분석:\n\n{history_text}"
+
+    try:
+        client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
+        response = client.chat.completions.create(
+            model=MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.0,
+            max_tokens=10,
+        )
+        tag = response.choices[0].message.content.strip()
+        return tag if tag in valid_tags else "유지"
+    except Exception as e:
+        print(f"   ⚠️ 트렌드 LLM 오류: {e}")
+        return "유지"
 
 
 # ========== 도메인별 그룹핑 ==========
@@ -317,6 +417,7 @@ def group_teams_by_domain(
                 "team": team,
                 "summary": data.get("summary", ""),
                 "exec_summary": data.get("exec_summary", ""),
+                "trend": data.get("trend", ""),
             }
         )
 
@@ -396,6 +497,7 @@ def generate_html(
                                         <table width="100%" cellpadding="0" cellspacing="0" border="0">
                                             <tr style="background-color: #f7fafc;">
                                                 <td style="padding: 10px 16px; font-size: 11px; font-weight: bold; color: #4a5568; width: 80px; border-bottom: 2px solid #e2e8f0;">팀</td>
+                                                <td style="padding: 10px 16px; font-size: 11px; font-weight: bold; color: #4a5568; width: 56px; text-align: center; border-bottom: 2px solid #e2e8f0;">트렌드</td>
                                                 <td style="padding: 10px 16px; font-size: 11px; font-weight: bold; color: #4a5568; border-bottom: 2px solid #e2e8f0;">Executive Summary</td>
                                             </tr>
 """
@@ -403,15 +505,36 @@ def generate_html(
         for team_data in teams:
             team = team_data["team"]
             summary = team_data["summary"]
+            trend = team_data.get("trend", "")
 
             # 하이라이트 태그 스타일링
+            TAG_STYLES = {
+                "[완료]":    ("완료",    "#bee3f8", "#2a4365"),
+                "[진행중]":  ("진행중",  "#c6f6d5", "#22543d"),
+                "[이슈]":    ("이슈",    "#feebc8", "#7b341e"),
+                "[지연]":    ("지연",    "#fed7d7", "#742a2a"),
+                "[협의필요]": ("협의필요", "#e9d8fd", "#44337a"),
+            }
             summary_html = summary
-            if summary.startswith("[완료]"):
-                summary_html = f'<span style="background-color: #bee3f8; color: #2a4365; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: bold;">완료</span> {summary[4:].strip()}'
+            for tag, (label, bg, fg) in TAG_STYLES.items():
+                if summary.startswith(tag):
+                    badge = f'<span style="background-color: {bg}; color: {fg}; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: bold;">{label}</span>'
+                    summary_html = f'{badge} {summary[len(tag):].strip()}'
+                    break
+
+            # 트렌드 배지
+            trend_color = TREND_COLORS.get(trend, "#718096")
+            trend_html = (
+                f'<span style="background-color: {trend_color}; color: #ffffff; '
+                f'padding: 3px 8px; border-radius: 12px; font-size: 11px; font-weight: bold; '
+                f'white-space: nowrap;">{trend}</span>'
+                if trend else ""
+            )
 
             html += f"""
                                             <tr>
                                                 <td style="padding: 12px 16px; font-size: 13px; color: #2d3748; font-weight: bold; border-bottom: 1px solid #e2e8f0; vertical-align: top;">{team}</td>
+                                                <td style="padding: 12px 16px; text-align: center; border-bottom: 1px solid #e2e8f0; vertical-align: middle;">{trend_html}</td>
                                                 <td style="padding: 12px 16px; font-size: 13px; color: #2d3748; line-height: 1.5; border-bottom: 1px solid #e2e8f0;">{summary_html}</td>
                                             </tr>
 """
@@ -458,14 +581,15 @@ def generate_markdown(
             continue
 
         md += f"## {domain}\n\n"
-        md += "| 팀 | Executive Summary |\n"
-        md += "|-----|-------------------|\n"
+        md += "| 팀 | 트렌드 | Executive Summary |\n"
+        md += "|-----|:------:|-------------------|\n"
 
         for team_data in teams:
             team = team_data["team"]
             summary = team_data["summary"].replace("|", "\\|")
+            trend = team_data.get("trend", "")
 
-            md += f"| {team} | {summary} |\n"
+            md += f"| {team} | {trend} | {summary} |\n"
 
         md += "\n---\n\n"
 
@@ -506,6 +630,10 @@ def generate_layer3(
     print(f"💾 데이터 소스: {db_source}")
     print()
 
+    prev_weeks = get_prev_weeks(week, n=2)
+    print(f"📊 비교 주차: {prev_weeks[0]}, {prev_weeks[1]}")
+    print()
+
     teams_data = {}
 
     for team in teams:
@@ -525,9 +653,23 @@ def generate_layer3(
         summary = generate_one_line_summary(team, exec_summary, week)
         print(f"   - 요약: {summary[:50]}...")
 
+        # 4. 이전 2주 데이터 로드 및 트렌드 생성
+        prev_data = []
+        for pw in prev_weeks:
+            if db_source == "opensearch":
+                prev_mail = load_team_mail_from_opensearch(team, pw)
+            else:
+                prev_mail = load_team_mail(team, pw)
+            prev_exec = extract_executive_summary(prev_mail)
+            prev_data.append((pw, prev_exec))
+
+        trend = generate_trend_tag(team, week, exec_summary, prev_data)
+        print(f"   - 트렌드: {trend}")
+
         teams_data[team] = {
             "summary": summary,
             "exec_summary": exec_summary,
+            "trend": trend,
         }
 
         print(f"   ✅ 완료")
