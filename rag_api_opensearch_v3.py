@@ -66,6 +66,7 @@ OPENSEARCH_USER = os.getenv("OPENSEARCH_USER", "admin")
 OPENSEARCH_PASSWORD = os.getenv("OPENSEARCH_PASSWORD", "rlaeorka1!K")
 OPENSEARCH_USE_SSL = os.getenv("OPENSEARCH_USE_SSL", "true").lower() == "true"
 INDEX_NAME = os.getenv("OPENSEARCH_INDEX", "weekly_mail")
+SECONDARY_INDEX_NAME = os.getenv("OPENSEARCH_SECONDARY_INDEX", "syldgpt")
 
 # 임베딩 설정
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
@@ -190,6 +191,7 @@ class OpenSearchClient:
             api_key=OPENROUTER_API_KEY, base_url=OPENROUTER_BASE_URL
         )
         self.index_name = INDEX_NAME
+        self.secondary_index_name = SECONDARY_INDEX_NAME
 
     def _get_embedding(self, text: str) -> List[float]:
         """텍스트를 임베딩 벡터로 변환"""
@@ -287,6 +289,66 @@ class OpenSearchClient:
                     "html_path": source.get("html_path", ""),
                     "part_index": source.get("part_index"),
                     "total_parts": source.get("total_parts"),
+                }
+            )
+        return results
+
+    def search_secondary(
+        self,
+        query: str,
+        limit: int = 5,
+        vector_weight: float = 0.7,
+        keyword_weight: float = 0.3,
+    ) -> List[Dict]:
+        """syldgpt 인덱스 하이브리드 검색 (배경지식용)"""
+        total = vector_weight + keyword_weight
+        if total > 0:
+            vector_weight, keyword_weight = vector_weight / total, keyword_weight / total
+        else:
+            vector_weight, keyword_weight = 0.7, 0.3
+
+        query_embedding = self._get_embedding(query)
+
+        knn_boost = vector_weight * 10
+        bm25_boost = keyword_weight
+
+        search_body = {
+            "size": limit,
+            "query": {
+                "bool": {
+                    "should": [
+                        {
+                            "knn": {
+                                "embedding": {
+                                    "vector": query_embedding,
+                                    "k": limit,
+                                    "boost": knn_boost,
+                                }
+                            }
+                        },
+                        {
+                            "match": {
+                                "page_content": {
+                                    "query": query,
+                                    "boost": bm25_boost,
+                                }
+                            }
+                        },
+                    ],
+                    "minimum_should_match": 1,
+                }
+            },
+        }
+
+        response = self.client.search(index=self.secondary_index_name, body=search_body)
+
+        results = []
+        for hit in response["hits"]["hits"]:
+            source = hit["_source"]
+            results.append(
+                {
+                    "score": hit["_score"],
+                    "text": source.get("page_content", ""),
                 }
             )
         return results
@@ -473,6 +535,15 @@ ANSWER_SYSTEM_PROMPT = """당신은 반도체 주간 업무 보고서 시스템�
 3. 질문에 대한 답이 컨텍스트에 없으면 "제공된 문서에서 해당 정보를 찾을 수 없습니다"라고 명확히 답변하세요.
 4. 숫자, 팀명, 날짜 등은 컨텍스트에 있는 그대로 정확히 인용하세요.
 
+## 컨텍스트 구성
+- "=== 메일 검색 결과 ===" : 사내 주간업무보고 메일에서 검색된 문서입니다. [문서 N]으로 표기됩니다.
+- "=== 배경지식 ===" : 반도체 공정/장비/기술 관련 사내 기술문서(SYLD GPT) 데이터베이스에서 검색된 참고 자료입니다. [참고 N]으로 표기됩니다.
+
+## 답변 작성 방법
+- 메일 검색 결과([문서 N])를 주된 근거로 답변하세요.
+- 배경지식([참고 N])은 메일 내용의 기술적 맥락을 보충하거나, 용어/공정을 설명할 때 활용하세요.
+- 두 출처를 자연스럽게 결합하여 답변하되, 어느 출처에서 왔는지 구분 가능하도록 표기하세요.
+
 ## 금지 사항
 - 컨텍스트에 명시되지 않은 정보를 답변에 포함하지 마세요.
 - 일반 지식, 추측, 유추를 섞지 마세요.
@@ -480,10 +551,11 @@ ANSWER_SYSTEM_PROMPT = """당신은 반도체 주간 업무 보고서 시스템�
 - 답을 모르면 솔직히 "해당 정보가 문서에 없습니다"라고 하세요.
 
 ## 출처 표시 규칙
-- 각 정보에 해당 출처를 [문서 N] 형식으로 표시하세요.
-- [문서 N]은 **실제로 해당 문서에서 직접 가져온 내용에만** 붙이세요.
+- 메일 내용 인용 시: [문서 N] 형식으로 표시하세요.
+- 배경지식 인용 시: [참고 N] 형식으로 표시하세요.
+- 출처 태그는 **실제로 해당 문서에서 직접 가져온 내용에만** 붙이세요.
 - 출처가 불명확하거나 여러 문서를 종합한 내용은 출처를 붙이지 마세요.
-- 답변 마지막에 "참고: [문서 1], [문서 3]" 형태로 사용한 문서를 명시하세요.
+- 답변 마지막에 "참고: [문서 1], [참고 2]" 형태로 사용한 출처를 명시하세요.
 
 ## 답변 형식 (필수 준수)
 - 간결하고 명확하게 작성하세요.
@@ -809,23 +881,51 @@ def retrieve_document(state: GraphState) -> Dict[str, Any]:
             for r in results
         ]
 
-        print(f"📊 [Retrieve] 검색 완료: {len(formatted)}개 문서")
+        print(f"📊 [Retrieve] 메일 검색 완료: {len(formatted)}개 문서")
+
+        # 배경지식 검색 (syldgpt)
+        secondary_results = []
+        try:
+            _t_sec_start = _time.time()
+            secondary_results = os_client.search_secondary(
+                search_query, limit=SEARCH_RESULT_LIMIT
+            )
+            _sec_elapsed = (_time.time() - _t_sec_start) * 1000
+            print(f"📚 [Retrieve] 배경지식 검색 완료: {len(secondary_results)}개 문서 ({_sec_elapsed:.0f}ms)")
+        except Exception as e:
+            print(f"⚠️ [Retrieve] 배경지식 검색 실패 (무시): {e}")
 
         # 컨텍스트 문자열 생성 (문자열 연결 최적화)
-        if not formatted:
+        if not formatted and not secondary_results:
             _total_elapsed = (_time.time() - _t_start) * 1000
             print(f"⏱️ [Retrieve] 총 소요시간: {_total_elapsed:.0f}ms")
             return {"context": ""}
 
         context_parts = []
-        for i, ctx in enumerate(formatted, 1):
-            context_parts.append(
-                f"\n[문서 {i}]\n"
-                f"팀: {ctx.get('team', 'unknown')}\n"
-                f"주차: {ctx.get('week', 'unknown')}\n"
-                f"내용:\n{ctx.get('text', '')}\n"
-                f"{'-' * 40}"
-            )
+
+        # 메일 검색 결과
+        if formatted:
+            context_parts.append("\n=== 메일 검색 결과 ===")
+            for i, ctx in enumerate(formatted, 1):
+                context_parts.append(
+                    f"\n[문서 {i}]\n"
+                    f"팀: {ctx.get('team', 'unknown')}\n"
+                    f"주차: {ctx.get('week', 'unknown')}\n"
+                    f"내용:\n{ctx.get('text', '')}\n"
+                    f"{'-' * 40}"
+                )
+
+        # 배경지식 결과
+        if secondary_results:
+            context_parts.append("\n=== 배경지식 ===")
+            for i, ctx in enumerate(secondary_results, 1):
+                text = ctx["text"][:MAX_TEXT_PER_DOC] if len(ctx["text"]) > MAX_TEXT_PER_DOC else ctx["text"]
+                context_parts.append(
+                    f"\n[참고 {i}]\n"
+                    f"내용:\n{text}\n"
+                    f"{'-' * 40}"
+                )
+
         context_text = "".join(context_parts)
 
         # 검색 결과 JSON도 저장 (출처 추출용)
@@ -1060,7 +1160,7 @@ def llm_answer_node(state: GraphState) -> Dict[str, Any]:
 요약에서 언급한 내용을 구체적으로 설명하세요.
 • 개조식(•)으로 항목별 정리
 • 팀명, 수치 등 핵심 키워드는 **굵게** 표시
-• 각 항목에 출처 [문서 N] 표시
+• 각 항목에 출처 [문서 N] 또는 [참고 N] 표시
 
 (( 핵심 결론 ))
 전체 내용을 1~2줄로 마무리하세요.
@@ -1315,7 +1415,7 @@ def parse_used_references(answer: str, contexts: List[Dict]) -> tuple:
     used_contexts = [ctx for i, ctx in enumerate(contexts) if i in used_indices]
 
     clean_answer = re.sub(
-        r"\n*참고:\s*(\[문서\s*\d+\],?\s*)+\.?$", "", answer, flags=re.MULTILINE
+        r"\n*참고:\s*(\[(문서|참고)\s*\d+\],?\s*)+\.?$", "", answer, flags=re.MULTILINE
     ).strip()
 
     return clean_answer, used_contexts
