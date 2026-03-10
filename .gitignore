@@ -218,3 +218,6 @@ create_dummy_data.py
 main.py
 pyproject.toml
 __pycache__/opensearch.cpython-311.pyc
+CLAUDE.md
+test_syldgpt_dummy.py
+test_weekly_dummy.py

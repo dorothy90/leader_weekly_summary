@@ -85,7 +85,7 @@ MAX_HISTORY_TURNS = int(os.getenv("MAX_HISTORY_TURNS", "10"))
 MAX_ANSWER_LENGTH = int(os.getenv("MAX_ANSWER_LENGTH", "1000"))
 
 # LLM 히스토리 설정
-MAX_LLM_HISTORY_TURNS = int(os.getenv("MAX_LLM_HISTORY_TURNS", "3"))
+MAX_LLM_HISTORY_TURNS = int(os.getenv("MAX_LLM_HISTORY_TURNS", "5"))
 
 # 토큰/검색 설정
 MAX_TOOL_RESULT_TOKENS = int(os.getenv("MAX_TOOL_RESULT_TOKENS", "150000"))
@@ -580,7 +580,17 @@ ANSWER_SYSTEM_PROMPT = """당신은 반도체 주간 업무 보고서 시스템�
 ### 기타
 - 표(table)는 사용하지 말고 반드시 개조식(•)으로 작성하세요.
 - 코드나 기술 용어는 따옴표로 감싸세요: "defect_count"
-- 구분선(────)은 남용하지 마세요."""
+- 구분선(────)은 남용하지 마세요.
+
+## 대화 스타일
+- 자연스럽고 친근한 어조로 답변하세요.
+- 이전 대화 내용이 있으면 자연스럽게 연결하세요.
+  예: "앞서 말씀하신 XX 이슈와 관련해서..."
+  예: "이전에 확인한 YY팀 현황에 이어서..."
+- 답변 마지막에 관련된 후속 탐색을 1~2개 제안하세요.
+  예: "다른 팀의 유사한 이슈도 확인해볼까요?"
+  예: "최근 몇 주간의 추이도 살펴볼 수 있습니다."
+- 단, 후속 제안은 검색 결과가 있을 때만 하세요. 일반 대화에서는 불필요합니다."""
 
 
 # ===== 유틸리티: 주차 정보 =====
@@ -720,10 +730,14 @@ search_query: [검색엔진에 보낼 독립적 검색 쿼리 / none]
 - 첫 질문 "이번주 PROCESS팀 수율 이슈" → search_query: PROCESS팀 수율 이슈 (시간은 week에)
 - 첫 질문 "저번주 DT팀 보고 내용" → search_query: DT팀 보고 내용 (시간은 week에)
 - 후속 질문 "최근 3주차로 다시 조사해줘" → search_query: PROCESS팀 업무 (시간은 week에, 주제는 이전 대화에서)
+- 후속 질문 "더 자세히 알려줘" → search_query: 수율 이슈 (이전 대화의 검색 주제를 그대로 사용)
+- 후속 질문 "좀 더 설명해줘" → search_query: (이전 대화의 검색 주제를 그대로 사용)
+- 후속 질문 "계속" → search_query: (이전 대화의 검색 주제를 그대로 사용)
 
 ## 중요: 대화 맥락 고려
 - 이전 대화가 있으면 현재 질문이 후속 질문인지 확인하세요.
 - "3주차는?", "그럼 다음주는?", "다른 팀은?" 같은 짧은 질문은 이전 대화의 맥락을 이어받습니다.
+- "더 자세히", "좀 더 알려줘", "계속" 같은 모호한 후속 질문은 이전 대화의 검색 주제를 그대로 search_query에 사용하세요. "자세히" 같은 모호한 단어만으로 search_query를 만들면 안 됩니다.
 - 이전에 통계(statistics)를 물어봤다면 후속 질문도 statistics입니다.
 - 이전에 내용 검색(search)을 했다면 후속 질문도 search입니다.
 
@@ -1759,12 +1773,15 @@ async def chat_v2(request: ChatV2Request):
     if not message:
         raise HTTPException(status_code=400, detail="메시지가 비어있습니다")
 
+    # conversation_id 미전송 시 자동 생성 (멀티턴 히스토리 보장)
+    conversation_id = request.conversation_id or f"auto_{request.user_id}"
+
     # Agent 호출
     result = await chat_with_agent(
         message,
         team=request.team,
         week=request.week,
-        conversation_id=request.conversation_id,
+        conversation_id=conversation_id,
     )
 
     # 출처 추출
@@ -1788,24 +1805,23 @@ async def chat_v2(request: ChatV2Request):
     # 후처리: 마크다운/HTML → 코난 챗봇 plain text (굵게만 사용)
     answer_converted = format_for_konan_chatbot(clean_answer)
 
-    # MongoDB 저장
-    if request.conversation_id:
-        await save_full_log(
-            conversation_id=request.conversation_id,
-            user_id=request.user_id,
-            message=message,
-            team=request.team,
-            week=request.week,
-            tool_calls=result["tool_calls"],
-            tool_results=result["tool_results"],
-            answer=answer_converted,
-            references=[ref.model_dump() for ref in references],
-        )
-        await save_history(
-            conversation_id=request.conversation_id,
-            user_message=message,
-            assistant_answer=answer_converted,
-        )
+    # MongoDB 저장 (conversation_id는 항상 존재)
+    await save_full_log(
+        conversation_id=conversation_id,
+        user_id=request.user_id,
+        message=message,
+        team=request.team,
+        week=request.week,
+        tool_calls=result["tool_calls"],
+        tool_results=result["tool_results"],
+        answer=answer_converted,
+        references=[ref.model_dump() for ref in references],
+    )
+    await save_history(
+        conversation_id=conversation_id,
+        user_message=message,
+        assistant_answer=answer_converted,
+    )
 
     return ChatV2Response(
         answer=answer_converted,
