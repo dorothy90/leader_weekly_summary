@@ -250,8 +250,8 @@ mail_type: [daily/weekly/all]
 
 ## route 분류 기준
 - statistics: 제출/미제출 현황, 팀 수, 개수 등 **수치/통계** 질문
-- search: 메일 **내용** 검색 (이슈, 분석, 개선 사항 등)
-- general: 인사, 감사, 도움말 등 일반 대화
+- search: 메일 **내용** 검색 (이슈, 분석, 개선 사항, 특정 용어/개념 등)
+- general: 메일 내용과 무관한 인사, 감사, 도움말 등 일반 대화
 
 ## mail_type 분류 기준
 - daily: 일일보고/데일리 메일만 검색할 때
@@ -265,6 +265,7 @@ mail_type: [daily/weekly/all]
 - "일일보고 분석해줘" → route: search, mail_type: daily
 - "PROCESS팀 수율 이슈 알려줘" → route: search, mail_type: all
 - "이번주 개선 사항 뭐야?" → route: search, mail_type: weekly
+- "wads가 뭐니" → route: search, mail_type: all
 - "안녕" → route: general, mail_type: all
 
 질문: {question}

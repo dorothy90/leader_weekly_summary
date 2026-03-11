@@ -750,6 +750,7 @@ search_query: [검색엔진에 보낼 독립적 검색 쿼리 / none]
 - "PROCESS팀 수율 이슈 알려줘" → route: search, mail_type: all, week: none, search_query: PROCESS팀 수율 이슈
 - "최근 3주 YIELD팀 현황" → route: search, mail_type: all, week: (최근 3주 값), search_query: YIELD팀 현황
 - "47~49주차 FA팀 이슈" → route: search, mail_type: all, week: 2025-47,2025-48,2025-49, search_query: FA팀 이슈
+- "wads가 뭐니" → route: search, mail_type: all, week: none, search_query: wads
 - "안녕" → route: general, mail_type: all, week: none, search_query: none
 - "고마워" → route: general, mail_type: all, week: none, search_query: none
 {history_section}
