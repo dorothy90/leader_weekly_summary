@@ -421,9 +421,10 @@ def group_teams_by_domain(
             }
         )
 
-    # 각 도메인 내에서 팀명으로 정렬
+    # 각 도메인 내에서 TEAMS 리스트 순서로 정렬
+    team_order = {t: i for i, t in enumerate(TEAMS)}
     for domain in grouped:
-        grouped[domain].sort(key=lambda x: x["team"])
+        grouped[domain].sort(key=lambda x: team_order.get(x["team"], 999))
 
     return grouped
 

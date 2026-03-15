@@ -16,7 +16,7 @@ import json
 import asyncio
 from pathlib import Path
 from typing import List, Dict, Optional, Any, Annotated, Sequence, Literal, TypedDict
-from datetime import datetime, UTC
+from datetime import datetime, timedelta, UTC
 from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException
@@ -92,6 +92,20 @@ MAX_TOOL_RESULT_TOKENS = int(os.getenv("MAX_TOOL_RESULT_TOKENS", "150000"))
 SEARCH_RESULT_LIMIT = int(os.getenv("SEARCH_RESULT_LIMIT", "50"))
 MAX_TEXT_PER_DOC = int(os.getenv("MAX_TEXT_PER_DOC", "2000"))
 ENCODING_NAME = "cl100k_base"
+
+RECENCY_BOOST_WEEKS = 4
+RECENCY_BOOSTS = [1.5, 1.0, 0.6, 0.3]  # W-0, W-1, W-2, W-3
+
+def _get_recency_boost_clauses() -> list:
+    """최근 N주에 대한 term boost should 절 생성."""
+    today = datetime.now()
+    clauses = []
+    for i in range(RECENCY_BOOST_WEEKS):
+        dt = today - timedelta(weeks=i)
+        iso_year, iso_week, _ = dt.isocalendar()
+        week_str = f"{iso_year}-{iso_week:02d}"
+        clauses.append({"term": {"week": {"value": week_str, "boost": RECENCY_BOOSTS[i]}}})
+    return clauses
 
 # LangGraph 설정
 GRAPH_RECURSION_LIMIT = int(os.getenv("GRAPH_RECURSION_LIMIT", "15"))
@@ -244,30 +258,36 @@ class OpenSearchClient:
         knn_boost = vector_weight * 10
         bm25_boost = keyword_weight
 
+        should_clauses = [
+            {
+                "knn": {
+                    "embedding": {
+                        "vector": query_embedding,
+                        "k": limit,
+                        "boost": knn_boost,
+                    }
+                }
+            },
+            {
+                "match": {
+                    "text": {
+                        "query": query,
+                        "analyzer": "korean",
+                        "boost": bm25_boost,
+                    }
+                }
+            },
+        ]
+
+        # 주차 필터 없을 때만 recency boost (최근 4주)
+        if not week:
+            should_clauses.extend(_get_recency_boost_clauses())
+
         search_body = {
             "size": limit,
             "query": {
                 "bool": {
-                    "should": [
-                        {
-                            "knn": {
-                                "embedding": {
-                                    "vector": query_embedding,
-                                    "k": limit,
-                                    "boost": knn_boost,
-                                }
-                            }
-                        },
-                        {
-                            "match": {
-                                "text": {
-                                    "query": query,
-                                    "analyzer": "korean",
-                                    "boost": bm25_boost,
-                                }
-                            }
-                        },
-                    ],
+                    "should": should_clauses,
                     "filter": filters if filters else [],
                     "minimum_should_match": 1,
                 }
