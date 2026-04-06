@@ -449,6 +449,26 @@ def process_all(recreate_index: bool = False):
     print(f"   총 파트 수: {stats['parts']}개 (5000자 청킹)")
     print(f"   실패: {stats['failed']}개")
 
+    # Wiki 요약 자동 생성 (임베딩된 주차 대상)
+    if stats["mails"] > 0:
+        try:
+            # 처리된 메일 폴더에서 주차 추출
+            processed_weeks = set()
+            for mail_dir in mail_folders:
+                if mail_dir.is_dir():
+                    # data/{week}/{team}/mail_* 구조에서 week 추출
+                    parts = mail_dir.parts
+                    data_idx = list(parts).index("data") if "data" in parts else -1
+                    if data_idx >= 0 and data_idx + 1 < len(parts):
+                        processed_weeks.add(parts[data_idx + 1])
+
+            if processed_weeks:
+                print(f"\n📖 Wiki 요약 자동 생성 시작: {', '.join(sorted(processed_weeks))}")
+                from wiki_builder import backfill_all
+                backfill_all(weeks=sorted(processed_weeks))
+        except Exception as e:
+            print(f"⚠️ Wiki 요약 생성 실패 (무시): {e}")
+
 
 # ========== 검색 함수 ==========
 def search_vector(

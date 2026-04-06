@@ -64,7 +64,7 @@ OPENSEARCH_HOST = os.getenv("OPENSEARCH_HOST", "localhost")
 OPENSEARCH_PORT = int(os.getenv("OPENSEARCH_PORT", "9200"))
 OPENSEARCH_USER = os.getenv("OPENSEARCH_USER", "admin")
 OPENSEARCH_PASSWORD = os.getenv("OPENSEARCH_PASSWORD", "rlaeorka1!K")
-OPENSEARCH_USE_SSL = os.getenv("OPENSEARCH_USE_SSL", "true").lower() == "true"
+OPENSEARCH_USE_SSL = os.getenv("OPENSEARCH_USE_SSL", "false").lower() == "true"
 INDEX_NAME = os.getenv("OPENSEARCH_INDEX", "weekly_mail")
 SECONDARY_INDEX_NAME = os.getenv("OPENSEARCH_SECONDARY_INDEX", "syldgpt")
 
@@ -206,6 +206,7 @@ class OpenSearchClient:
         )
         self.index_name = INDEX_NAME
         self.secondary_index_name = SECONDARY_INDEX_NAME
+        self.wiki_index_name = "wiki_summaries"
 
     def _get_embedding(self, text: str) -> List[float]:
         """텍스트를 임베딩 벡터로 변환"""
@@ -371,6 +372,89 @@ class OpenSearchClient:
                     "text": source.get("page_content", ""),
                 }
             )
+        return results
+
+    def search_wiki(
+        self,
+        query: str,
+        team: Optional[str] = None,
+        week=None,
+        summary_type: Optional[str] = None,
+        limit: int = 5,
+        vector_weight: float = 0.7,
+        keyword_weight: float = 0.3,
+    ) -> List[Dict]:
+        """wiki_summaries 인덱스 하이브리드 검색"""
+        # 인덱스 존재 확인
+        if not self.client.indices.exists(index=self.wiki_index_name):
+            return []
+
+        total = vector_weight + keyword_weight
+        if total > 0:
+            vector_weight, keyword_weight = vector_weight / total, keyword_weight / total
+        else:
+            vector_weight, keyword_weight = 0.7, 0.3
+
+        query_embedding = self._get_embedding(query)
+
+        filters = []
+        if team:
+            filters.append({"term": {"team": team}})
+        if week:
+            if isinstance(week, list):
+                filters.append({"terms": {"week": week}})
+            else:
+                filters.append({"term": {"week": week}})
+        if summary_type:
+            filters.append({"term": {"summary_type": summary_type}})
+
+        knn_boost = vector_weight * 10
+        bm25_boost = keyword_weight
+
+        search_body = {
+            "size": limit,
+            "query": {
+                "bool": {
+                    "should": [
+                        {
+                            "knn": {
+                                "embedding": {
+                                    "vector": query_embedding,
+                                    "k": limit,
+                                    "boost": knn_boost,
+                                }
+                            }
+                        },
+                        {
+                            "match": {
+                                "text": {
+                                    "query": query,
+                                    "analyzer": "korean",
+                                    "boost": bm25_boost,
+                                }
+                            }
+                        },
+                    ],
+                    "filter": filters if filters else [],
+                    "minimum_should_match": 1,
+                }
+            },
+        }
+
+        response = self.client.search(index=self.wiki_index_name, body=search_body)
+
+        results = []
+        for hit in response["hits"]["hits"]:
+            source = hit["_source"]
+            results.append({
+                "score": hit["_score"],
+                "text": source.get("text", ""),
+                "title": source.get("title", ""),
+                "summary_type": source.get("summary_type", ""),
+                "team": source.get("team"),
+                "week": source.get("week"),
+                "topic": source.get("topic"),
+            })
         return results
 
     def get_stats(self) -> Dict:
@@ -556,13 +640,14 @@ ANSWER_SYSTEM_PROMPT = """당신은 반도체 주간 업무 보고서 시스템�
 4. 숫자, 팀명, 날짜 등은 컨텍스트에 있는 그대로 정확히 인용하세요.
 
 ## 컨텍스트 구성
-- "=== 메일 검색 결과 ===" : 사내 주간업무보고 메일에서 검색된 문서입니다. [문서 N]으로 표기됩니다.
+- "=== Wiki 요약 ===" : 사전에 정리된 팀별/주차별 핵심 요약입니다. [요약 N]으로 표기됩니다. 전체적인 맥락과 핵심 내용을 파악하는 데 우선 활용하세요.
+- "=== 메일 검색 결과 ===" : 사내 주간업무보고 메일에서 검색된 원문 문서입니다. [문서 N]으로 표기됩니다. 상세한 근거와 수치 확인에 활용하세요.
 - "=== 배경지식 ===" : 반도체 공정/장비/기술 관련 사내 기술문서(SYLD GPT) 데이터베이스에서 검색된 참고 자료입니다. [참고 N]으로 표기됩니다.
 
 ## 답변 작성 방법
-- 메일 검색 결과([문서 N])를 주된 근거로 답변하세요.
+- Wiki 요약([요약 N])으로 전체 맥락을 먼저 파악하고, 메일 원문([문서 N])으로 상세 내용을 보충하세요.
 - 배경지식([참고 N])은 메일 내용의 기술적 맥락을 보충하거나, 용어/공정을 설명할 때 활용하세요.
-- 두 출처를 자연스럽게 결합하여 답변하되, 어느 출처에서 왔는지 구분 가능하도록 표기하세요.
+- 세 출처를 자연스럽게 결합하여 답변하되, 어느 출처에서 왔는지 구분 가능하도록 표기하세요.
 
 ## 금지 사항
 - 컨텍스트에 명시되지 않은 정보를 답변에 포함하지 마세요.
@@ -571,11 +656,12 @@ ANSWER_SYSTEM_PROMPT = """당신은 반도체 주간 업무 보고서 시스템�
 - 답을 모르면 솔직히 "해당 정보가 문서에 없습니다"라고 하세요.
 
 ## 출처 표시 규칙
+- Wiki 요약 인용 시: [요약 N] 형식으로 표시하세요.
 - 메일 내용 인용 시: [문서 N] 형식으로 표시하세요.
 - 배경지식 인용 시: [참고 N] 형식으로 표시하세요.
 - 출처 태그는 **실제로 해당 문서에서 직접 가져온 내용에만** 붙이세요.
 - 출처가 불명확하거나 여러 문서를 종합한 내용은 출처를 붙이지 마세요.
-- 답변 마지막에 "참고: [문서 1], [참고 2]" 형태로 사용한 출처를 명시하세요.
+- 답변 마지막에 "참고: [요약 1], [문서 2], [참고 3]" 형태로 사용한 출처를 명시하세요.
 
 ## 답변 형식 (필수 준수)
 - 간결하고 명확하게 작성하세요.
@@ -889,6 +975,25 @@ def retrieve_document(state: GraphState) -> Dict[str, Any]:
         return {"context": ""}
 
     try:
+        # ===== Tier 1: Wiki 요약 검색 =====
+        wiki_results = []
+        try:
+            _t_wiki_start = _time.time()
+            wiki_results = os_client.search_wiki(
+                search_query,
+                team=None,
+                week=week,
+                limit=5,
+            )
+            _wiki_elapsed = (_time.time() - _t_wiki_start) * 1000
+            if wiki_results:
+                print(f"📖 [Retrieve] Wiki 요약 검색 완료: {len(wiki_results)}개 문서 ({_wiki_elapsed:.0f}ms)")
+            else:
+                print(f"📖 [Retrieve] Wiki 요약 없음 ({_wiki_elapsed:.0f}ms)")
+        except Exception as e:
+            print(f"⚠️ [Retrieve] Wiki 검색 실패 (무시): {e}")
+
+        # ===== Tier 2: Raw chunk 검색 =====
         _t_search_start = _time.time()
         results = os_client.search(
             search_query,
@@ -918,7 +1023,7 @@ def retrieve_document(state: GraphState) -> Dict[str, Any]:
 
         print(f"📊 [Retrieve] 메일 검색 완료: {len(formatted)}개 문서")
 
-        # 배경지식 검색 (syldgpt)
+        # ===== Tier 3: 배경지식 검색 (syldgpt) =====
         secondary_results = []
         try:
             _t_sec_start = _time.time()
@@ -930,15 +1035,32 @@ def retrieve_document(state: GraphState) -> Dict[str, Any]:
         except Exception as e:
             print(f"⚠️ [Retrieve] 배경지식 검색 실패 (무시): {e}")
 
-        # 컨텍스트 문자열 생성 (문자열 연결 최적화)
-        if not formatted and not secondary_results:
+        # 컨텍스트 문자열 생성 (3-tier 구조)
+        if not wiki_results and not formatted and not secondary_results:
             _total_elapsed = (_time.time() - _t_start) * 1000
             print(f"⏱️ [Retrieve] 총 소요시간: {_total_elapsed:.0f}ms")
             return {"context": ""}
 
         context_parts = []
 
-        # 메일 검색 결과
+        # Wiki 요약 결과 (Tier 1 - 사전 정리된 고수준 요약)
+        if wiki_results:
+            context_parts.append("\n=== Wiki 요약 (사전 정리된 핵심 요약) ===")
+            for i, ctx in enumerate(wiki_results, 1):
+                wiki_meta = []
+                if ctx.get("team"):
+                    wiki_meta.append(f"팀: {ctx['team']}")
+                if ctx.get("week"):
+                    wiki_meta.append(f"주차: {ctx['week']}")
+                meta_str = ", ".join(wiki_meta) if wiki_meta else ""
+                context_parts.append(
+                    f"\n[요약 {i}] {ctx.get('title', '')}\n"
+                    f"{meta_str}\n"
+                    f"내용:\n{ctx.get('text', '')}\n"
+                    f"{'-' * 40}"
+                )
+
+        # 메일 검색 결과 (Tier 2 - 원문 상세)
         if formatted:
             context_parts.append("\n=== 메일 검색 결과 ===")
             for i, ctx in enumerate(formatted, 1):
@@ -950,7 +1072,7 @@ def retrieve_document(state: GraphState) -> Dict[str, Any]:
                     f"{'-' * 40}"
                 )
 
-        # 배경지식 결과
+        # 배경지식 결과 (Tier 3)
         if secondary_results:
             context_parts.append("\n=== 배경지식 ===")
             for i, ctx in enumerate(secondary_results, 1):
@@ -1429,6 +1551,39 @@ async def chat_with_agent(
     print(
         f"✅ [chat_with_agent] 완료: {elapsed:.0f}ms, route={result.get('route', 'unknown')}"
     )
+
+    # Knowledge Accumulation: 검색 기반 양질의 답변을 wiki에 축적
+    if (
+        result.get("route") == "search"
+        and answer
+        and len(answer) > 200
+        and "[문서" in answer  # 실제 문서를 참조한 답변만
+        and os_client
+    ):
+        try:
+            from wiki_builder import accumulate_query_result, get_embedding_client as _get_embed_client
+
+            _embed_client = _get_embed_client()
+            asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: accumulate_query_result(
+                    os_client=os_client.client,
+                    embed_client=_embed_client,
+                    question=user_message,
+                    answer=answer,
+                    source_teams=list(set(
+                        r.get("team") for r in (json.loads(tool_results[0]["result"]) if tool_results else [])
+                        if r.get("team")
+                    )) or None,
+                    source_weeks=list(set(
+                        r.get("week") for r in (json.loads(tool_results[0]["result"]) if tool_results else [])
+                        if r.get("week")
+                    )) or None,
+                ),
+            )
+            print("📖 [Knowledge Accumulation] 비동기 저장 시작")
+        except Exception as e:
+            print(f"⚠️ [Knowledge Accumulation] 실패 (무시): {e}")
 
     return {
         "answer": answer,
