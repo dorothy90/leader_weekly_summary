@@ -4,27 +4,48 @@
 - body.txt + vision 결과 → combined.txt 생성
 """
 
+import io
 import os
 import base64
-import json
+import random
 import time
 from pathlib import Path
-from openai import OpenAI
+
+import httpx
+from PIL import Image, ImageOps
+from openai import (
+    OpenAI,
+    APIConnectionError,
+    APITimeoutError,
+    RateLimitError,
+    BadRequestError,
+    AuthenticationError,
+    PermissionDeniedError,
+    UnprocessableEntityError,
+    APIStatusError,
+    InternalServerError,
+)
 
 # ========== 설정 ==========
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "your_api_key")
 VISION_MODEL = "gpt-oss-120b"
 DATA_DIR = Path("data")
 
-# 타임아웃 & 재시도 설정
-VISION_TIMEOUT = 60  # 1분 타임아웃
-MAX_RETRIES = 3  # 최대 재시도 횟수
+# 이미지 전처리 설정
+MAX_IMAGE_SIDE = 1800  # 긴 변 최대 px
+MAX_IMAGE_BYTES = 1_500_000  # 전처리 후 목표 크기 1.5MB
+FALLBACK_IMAGE_SIDE = 1400  # 재시도 시 다운그레이드 해상도
 
-# OpenRouter 클라이언트 (타임아웃 설정)
+# 타임아웃 & 재시도 설정
+MAX_RETRIES = 4
+INITIAL_BACKOFF = 2.0
+
+# OpenRouter 클라이언트 (타임아웃 분리, SDK 재시도 비활성화)
 client = OpenAI(
     api_key=OPENROUTER_API_KEY,
     base_url="https://openrouter.ai/api/v1",
-    timeout=VISION_TIMEOUT,
+    max_retries=0,
+    timeout=httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=10.0),
 )
 
 # Vision 프롬프트
@@ -45,30 +66,86 @@ VISION_PROMPT = """이미지에서 모든 정보를 추출해주세요.
 추출 결과:"""
 
 
-def encode_image(image_path):
-    """이미지를 base64로 인코딩"""
-    with open(image_path, "rb") as f:
-        return base64.b64encode(f.read()).decode("utf-8")
+def preprocess_image(image_path, max_side=MAX_IMAGE_SIDE):
+    """이미지 전처리: 리사이즈 + JPEG 압축 + base64 인코딩"""
+    with Image.open(image_path) as img:
+        img = ImageOps.exif_transpose(img)
+
+        if img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+        elif img.mode == "L":
+            img = img.convert("RGB")
+
+        width, height = img.size
+        longest = max(width, height)
+
+        if longest > max_side:
+            scale = max_side / longest
+            new_size = (int(width * scale), int(height * scale))
+            img = img.resize(new_size, Image.Resampling.LANCZOS)
+
+        # 단계적 압축으로 목표 크기 이하 달성
+        qualities = [85, 75, 65]
+        out_bytes = None
+        encoded = None
+
+        for q in qualities:
+            buffer = io.BytesIO()
+            img.save(buffer, format="JPEG", quality=q, optimize=True, progressive=True)
+            data = buffer.getvalue()
+            if len(data) <= MAX_IMAGE_BYTES or q == qualities[-1]:
+                out_bytes = data
+                encoded = base64.b64encode(data).decode("utf-8")
+                break
+
+        meta = {
+            "orig_size": (width, height),
+            "final_size": img.size,
+            "binary_bytes": len(out_bytes),
+            "base64_bytes": len(encoded),
+        }
+        return encoded, "image/jpeg", meta
 
 
-def get_media_type(filename):
-    """파일 확장자로 media type 추출"""
-    ext = filename.lower().split(".")[-1]
-    types = {
-        "png": "image/png",
-        "jpg": "image/jpeg",
-        "jpeg": "image/jpeg",
-        "gif": "image/gif",
-        "webp": "image/webp",
-        "bmp": "image/bmp",
-    }
-    return types.get(ext, "image/png")
+def should_retry(exc):
+    """재시도 가능한 에러인지 판별"""
+    if isinstance(exc, (APITimeoutError, APIConnectionError, RateLimitError, InternalServerError)):
+        return True
+    if isinstance(exc, APIStatusError):
+        return exc.status_code in (408, 409, 429) or exc.status_code >= 500
+    return False
+
+
+def classify_error(exc):
+    """에러 타입 분류 (로깅용)"""
+    if isinstance(exc, APITimeoutError):
+        return "timeout"
+    if isinstance(exc, APIConnectionError):
+        return "connection"
+    if isinstance(exc, RateLimitError):
+        return "rate_limit"
+    if isinstance(exc, (AuthenticationError, PermissionDeniedError)):
+        return "auth"
+    if isinstance(exc, (BadRequestError, UnprocessableEntityError)):
+        return "bad_request"
+    if isinstance(exc, APIStatusError):
+        return f"http_{exc.status_code}"
+    return type(exc).__name__
+
+
+def is_image_file(filename):
+    """이미지 파일 여부 확인"""
+    image_exts = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
+    return Path(filename).suffix.lower() in image_exts
 
 
 def extract_text_from_image(image_path):
-    """Vision LLM으로 이미지에서 텍스트 추출 (타임아웃 & 재시도 포함)"""
-    base64_image = encode_image(image_path)
-    media_type = get_media_type(image_path.name)
+    """Vision LLM으로 이미지에서 텍스트 추출 (전처리 + 에러분류 + backoff)"""
+    base64_image, media_type, meta = preprocess_image(image_path, max_side=MAX_IMAGE_SIDE)
+    print(
+        f"      📐 전처리: {meta['orig_size']} → {meta['final_size']}, "
+        f"payload={meta['binary_bytes']:,}B, base64={meta['base64_bytes']:,}chars"
+    )
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
@@ -91,30 +168,37 @@ def extract_text_from_image(image_path):
                     }
                 ],
                 max_tokens=4096,
-                timeout=VISION_TIMEOUT,
             )
 
-            return response.choices[0].message.content
+            return response.choices[0].message.content or ""
 
-        except Exception as e:
-            error_type = type(e).__name__
-            print(f"      ⚠️ 시도 {attempt} 실패 ({error_type}): {e}")
+        except Exception as exc:
+            err = classify_error(exc)
+            print(f"      ⚠️ 시도 {attempt} 실패 ({err}): {exc}")
 
-            if attempt < MAX_RETRIES:
-                wait_time = attempt * 5  # 5초, 10초, 15초 대기
-                print(f"      ⏳ {wait_time}초 후 재시도...")
-                time.sleep(wait_time)
-            else:
+            # 입력/인증 문제는 즉시 종료
+            if isinstance(exc, (BadRequestError, UnprocessableEntityError, AuthenticationError, PermissionDeniedError)):
+                return f"[Vision 추출 실패: {err} - {exc}]"
+
+            # 재시도 불가하거나 마지막 시도면 종료
+            if not should_retry(exc) or attempt == MAX_RETRIES:
+                print(f"   ❌ Vision 최종 실패 ({image_path.name}): {MAX_RETRIES}회 시도 후 실패")
+                return f"[Vision 추출 실패: {err} - {exc}]"
+
+            # 2회 실패 시 해상도 다운그레이드
+            if attempt == 2:
+                base64_image, media_type, meta = preprocess_image(image_path, max_side=FALLBACK_IMAGE_SIDE)
                 print(
-                    f"   ❌ Vision 최종 실패 ({image_path.name}): {MAX_RETRIES}회 시도 모두 실패"
+                    f"      📐 다운그레이드: {meta['final_size']}, "
+                    f"payload={meta['binary_bytes']:,}B"
                 )
-                return f"[Vision 추출 실패: {MAX_RETRIES}회 시도 후 실패 - {e}]"
 
+            # exponential backoff + jitter
+            sleep_s = INITIAL_BACKOFF * (2 ** (attempt - 1)) + random.uniform(0, 0.8)
+            print(f"      ⏳ {sleep_s:.1f}초 후 재시도...")
+            time.sleep(sleep_s)
 
-def is_image_file(filename):
-    """이미지 파일 여부 확인"""
-    image_exts = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
-    return Path(filename).suffix.lower() in image_exts
+    return "[Vision 추출 실패: unknown]"
 
 
 def process_mail_folder(mail_dir):

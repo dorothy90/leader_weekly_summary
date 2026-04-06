@@ -11,62 +11,39 @@ import base64
 import shutil
 import hashlib
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime
 from urllib.parse import quote
-from exchangelib import (
-    Account,
-    Credentials,
-    Configuration,
-    DELEGATE,
-    EWSDateTime,
-    EWSTimeZone,
-    FileAttachment,
-)
+from imap_tools import MailBox, AND
+
 
 # ========== 설정 ==========
-EWS_SERVER = "outlook.office365.com"  # ✅ 호스트명만 입력
-EMAIL = "dorothy90@cau.ac.kr"
-PASSWORD = "rlaeorka1!"
-# EMAIL = os.getenv("EWS_EMAIL", "your_email@skhynix.com")
-# PASSWORD = os.getenv("EWS_PASSWORD", "your_password")
-TARGET_RECIPIENT = "2067627@skhynix.com"
+IMAP_SERVER = "imap.gmail.com"
+EMAIL = "kdhboy90@gmail.com"
+# 구글 계정 2단계 인증 설정 후 생성한 16자리 '앱 비밀번호'를 입력하세요.
+# (기존 구글 계정 비밀번호는 보안상 작동하지 않습니다)
+PASSWORD = "etqs osgt ofbm skfm" 
+
 DATA_DIR = Path("data")  # 저장 폴더
 MAIL_DIR = Path("mail")  # body.html 모아두는 폴더 (RAG API 서빙용)
 
 
 # %%
-def generate_owa_url(item_id, ews_server=EWS_SERVER):
-    """EWS item_id로 OWA(Outlook Web Access) URL 생성
-
-    Args:
-        item_id: EWS 메일 고유 식별자
-        ews_server: EWS 서버 주소 (기본값: EWS_SERVER)
-
-    Returns:
-        OWA 웹메일 URL 문자열, item_id가 없으면 None
-    """
-    if not item_id:
+def generate_gmail_url(thread_id):
+    """Gmail Thread ID로 접근 가능한 웹메일 URL 생성"""
+    if not thread_id:
         return None
+    return f"https://mail.google.com/mail/u/0/#inbox/{thread_id}"
 
-    # OWA 서버 주소 (일반적으로 ews.도메인 → mail.도메인)
-    owa_base = ews_server.replace("ews.", "mail.")
-    encoded_id = quote(str(item_id), safe="")
-
-    return f"https://{owa_base}/owa/?ItemID={encoded_id}&exvsurl=1&viewmodel=ReadMessageItem"
-
-
-def connect_ews():
-    """EWS 연결"""
-    credentials = Credentials(username=EMAIL, password=PASSWORD)
-    config = Configuration(server=EWS_SERVER, credentials=credentials)
-    account = Account(
-        primary_smtp_address=EMAIL,
-        config=config,
-        autodiscover=False,
-        access_type=DELEGATE,
-    )
-    print(f"✅ EWS 연결 성공: {EMAIL}")
-    return account
+def connect_imap():
+    """Gmail IMAP 연결"""
+    print(f"🔄 IMAP 서버({IMAP_SERVER}) 연결 중...")
+    try:
+        mailbox = MailBox(IMAP_SERVER).login(EMAIL, PASSWORD)
+        print(f"✅ IMAP 연결 성공: {EMAIL}")
+        return mailbox
+    except Exception as e:
+        print(f"❌ 로그인 실패! 구글 '앱 비밀번호'를 설정했는지 확인하세요.\n에러: {e}")
+        raise
 
 
 def get_week_string(dt):
@@ -302,107 +279,78 @@ def copy_body_html_to_mail_dir(
         print(f"   📄 복사: {dest_path}")
 
 
-def fetch_mails(account, days_back=7):
-    """메일 가져오기"""
-    tz = EWSTimeZone.localzone()
-    end_date = datetime.now()
-    start_date = end_date - timedelta(days=days_back)
-
-    ews_start = EWSDateTime.from_datetime(start_date.replace(tzinfo=tz))
-    ews_end = EWSDateTime.from_datetime(end_date.replace(tzinfo=tz))
-
-    # 받은 편지함에서 날짜 범위로 필터링
-    mails = account.inbox.filter(datetime_received__range=(ews_start, ews_end))
-
+def fetch_mails(mailbox, days_back=1):
+    """IMAP을 통해 메일 가져오기"""
+    import datetime
+    
+    end_date = datetime.date.today() + datetime.timedelta(days=1)
+    start_date = end_date - datetime.timedelta(days=days_back)
+    
     results = []
-    for mail in mails:
-        # 받는 사람 중 TARGET_RECIPIENT 포함 여부 확인
-        recipients = []
-        if mail.to_recipients:
-            recipients = [
-                r.email_address for r in mail.to_recipients if r.email_address
-            ]
-        if mail.cc_recipients:
-            recipients += [
-                r.email_address for r in mail.cc_recipients if r.email_address
-            ]
+    
+    # 받은 편지함에서 날짜 조건으로 메일 가져오기
+    for msg in mailbox.fetch(AND(date_gte=start_date, date_lt=end_date)):
+        thread_id = msg.headers.get("x-gm-thrid", [""])[0]
 
-        if not any(TARGET_RECIPIENT in r for r in recipients):
-            continue
-
-        # 메일 정보 추출 (URL 참조용 식별자 포함)
         mail_data = {
-            "subject": mail.subject,
-            "sender": mail.sender.email_address if mail.sender else None,
-            "received": mail.datetime_received,
-            "body_text": "",
-            "body_html": "",  # HTML 본문 추가
+            "subject": msg.subject,
+            "sender": msg.from_,
+            "received": msg.date,
+            "body_text": msg.text or "",
+            "body_html": msg.html or "",
             "inline_images": [],
             "attachments": [],
             # URL 참조용 필드
-            "item_id": str(mail.id) if mail.id else None,
-            "message_id": mail.message_id,
-            "conversation_id": (
-                str(mail.conversation_id) if mail.conversation_id else None
-            ),
-            "owa_url": generate_owa_url(mail.id),
+            "item_id": msg.uid,
+            "message_id": msg.headers.get("message-id", [""])[0],
+            "conversation_id": thread_id,
+            "owa_url": generate_gmail_url(thread_id),
         }
 
-        # 본문 텍스트 & HTML 추출
-        if mail.text_body:
-            mail_data["body_text"] = mail.text_body
-        if mail.body:
-            body_content = str(mail.body)
-            mail_data["body_html"] = body_content
-            # text_body가 없으면 HTML에서 가져옴
-            if not mail_data["body_text"]:
-                mail_data["body_text"] = body_content
+        # text_body가 없으면 HTML에서 가져옴
+        if not mail_data["body_text"] and mail_data["body_html"]:
+            mail_data["body_text"] = mail_data["body_html"]
 
-        # 첨부파일 & 인라인 이미지
-        for attachment in mail.attachments or []:
-            if isinstance(attachment, FileAttachment):
-                att_info = {
-                    "name": attachment.name,
-                    "content_type": attachment.content_type,
-                    "size": len(attachment.content) if attachment.content else 0,
-                    "is_inline": attachment.is_inline,
-                    "content": attachment.content,  # 바이트 데이터
-                    "content_id": attachment.content_id,  # CID 참조용
-                }
+        # 첨부파일 및 인라인 이미지 분리
+        for att in msg.attachments:
+            att_info = {
+                "name": att.filename or "unnamed_attachment",
+                "content_type": att.content_type,
+                "size": len(att.payload),
+                "is_inline": bool(att.content_id),
+                "content": att.payload,
+                "content_id": att.content_id,
+            }
 
-                if attachment.is_inline:
-                    mail_data["inline_images"].append(att_info)
-                else:
-                    mail_data["attachments"].append(att_info)
+            # content_id가 존재하면 인라인 이미지로 간주
+            if att_info["is_inline"]:
+                mail_data["inline_images"].append(att_info)
+            else:
+                mail_data["attachments"].append(att_info)
 
-        # 주차, 팀 추출
-        week = get_week_string(mail.datetime_received)
+        week = get_week_string(mail_data["received"])
         team = detect_team(mail_data["subject"], mail_data["sender"] or "")
 
-        results.append(
-            {
-                "week": week,
-                "team": team,
-                "data": mail_data,
-            }
-        )
-        print(
-            f"📧 [{week}/{team}] {mail_data['subject'][:40]}... (인라인: {len(mail_data['inline_images'])}, 첨부: {len(mail_data['attachments'])})"
-        )
+        results.append({
+            "week": week,
+            "team": team,
+            "data": mail_data,
+        })
+        print(f"📧 [{week}/{team}] {mail_data['subject'][:40]}... (인라인: {len(mail_data['inline_images'])}, 첨부: {len(mail_data['attachments'])})")
 
     return results
 
 
 def main():
     print("=" * 50)
-    print("EWS 메일 수집 & 로컬 저장")
+    print("Gmail IMAP 메일 수집 & 로컬 저장")
     print("=" * 50)
 
     # 연결
-    account = connect_ews()
+    mailbox = connect_imap()
 
-    # 메일 수집 (최근 7일)
-    mails = fetch_mails(account, days_back=7)
+    # 메일 수집 (최근 1일)
+    mails = fetch_mails(mailbox, days_back=3)
 
     print("\n" + "=" * 50)
     print("💾 로컬에 저장 중...")

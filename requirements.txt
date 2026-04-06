@@ -5,6 +5,9 @@ langchain-core>=0.3.0
 langgraph>=0.2.0
 pydantic==2.10.4
 
+# 이미지 전처리
+Pillow>=10.0.0
+
 # 첨부파일 처리
 pandas==2.2.3
 openpyxl==3.1.5
