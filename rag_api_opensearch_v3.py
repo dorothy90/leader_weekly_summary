@@ -96,6 +96,11 @@ ENCODING_NAME = "cl100k_base"
 RECENCY_BOOST_WEEKS = 4
 RECENCY_BOOSTS = [1.5, 1.0, 0.6, 0.3]  # W-0, W-1, W-2, W-3
 
+# Deep Mining 설정
+DEEP_MINING_BATCH_SIZE = int(os.getenv("DEEP_MINING_BATCH_SIZE", "20"))
+DEEP_MINING_SCROLL_SIZE = int(os.getenv("DEEP_MINING_SCROLL_SIZE", "200"))
+DEEP_MINING_OUTPUT_DIR = Path(os.getenv("DEEP_MINING_OUTPUT_DIR", "exports/deep_mining"))
+
 def _get_recency_boost_clauses() -> list:
     """최근 N주에 대한 term boost should 절 생성."""
     today = datetime.now()
@@ -474,6 +479,80 @@ class OpenSearchClient:
             }
         except Exception as e:
             return {"status": "error", "error": str(e)}
+
+    def scroll_search(
+        self,
+        teams: Optional[List[str]] = None,
+        week_from: Optional[str] = None,
+        week_to: Optional[str] = None,
+        mail_type: Optional[str] = None,
+        scroll_size: int = DEEP_MINING_SCROLL_SIZE,
+    ) -> List[Dict]:
+        """OpenSearch scroll API로 전체 문서 순회 (Deep Mining용)
+
+        Args:
+            teams: 팀 필터 리스트
+            week_from: 주차 범위 시작 (e.g. "2025-01")
+            week_to: 주차 범위 끝 (e.g. "2025-20")
+            mail_type: 메일 유형 필터
+            scroll_size: 한 번에 가져올 문서 수
+
+        Returns:
+            전체 문서 리스트 (embedding 제외)
+        """
+        filters = []
+        if teams:
+            filters.append({"terms": {"team": teams}})
+        if week_from or week_to:
+            range_filter = {}
+            if week_from:
+                range_filter["gte"] = week_from
+            if week_to:
+                range_filter["lte"] = week_to
+            filters.append({"range": {"week": range_filter}})
+        if mail_type:
+            filters.append({"term": {"mail_type": mail_type}})
+
+        search_body = {
+            "size": scroll_size,
+            "query": {"bool": {"filter": filters}} if filters else {"match_all": {}},
+            "sort": [{"mail_id": "asc"}, {"part_index": "asc"}],
+            "_source": {"excludes": ["embedding"]},
+        }
+
+        all_docs = []
+        response = self.client.search(
+            index=self.index_name, body=search_body, scroll="2m"
+        )
+        scroll_id = response.get("_scroll_id")
+        hits = response["hits"]["hits"]
+
+        while hits:
+            for hit in hits:
+                source = hit["_source"]
+                all_docs.append({
+                    "text": source.get("text", ""),
+                    "team": source.get("team", "unknown"),
+                    "week": source.get("week", "unknown"),
+                    "mail_id": source.get("mail_id", "unknown"),
+                    "mail_type": source.get("mail_type", ""),
+                    "part_index": source.get("part_index", 0),
+                    "total_parts": source.get("total_parts", 1),
+                    "html_path": source.get("html_path", ""),
+                })
+
+            response = self.client.scroll(scroll_id=scroll_id, scroll="2m")
+            scroll_id = response.get("_scroll_id")
+            hits = response["hits"]["hits"]
+
+        # scroll 컨텍스트 정리
+        if scroll_id:
+            try:
+                self.client.clear_scroll(scroll_id=scroll_id)
+            except Exception:
+                pass
+
+        return all_docs
 
 
 # ========== LLM 클라이언트 ==========
@@ -2073,6 +2152,102 @@ async def get_weeks():
 async def get_teams():
     """팀 목록"""
     return {"teams": TEAMS}
+
+
+# ========== Deep Mining API ==========
+from deep_mining_schemas import DeepMineRequest, DeepMineResponse
+from fastapi.responses import FileResponse
+import uuid
+
+# 작업 상태 저장 (in-memory)
+_deep_mine_jobs: Dict[str, DeepMineResponse] = {}
+_deep_mine_lock = asyncio.Lock()
+
+
+async def _run_deep_mining(job_id: str, request: DeepMineRequest):
+    """백그라운드에서 deep mining 실행"""
+    try:
+        async with _deep_mine_lock:
+            _deep_mine_jobs[job_id].status = "processing"
+            _deep_mine_jobs[job_id].progress = 0.1
+
+        from deep_mining import run_deep_mining_pipeline
+        result = await run_deep_mining_pipeline(
+            query=request.query,
+            os_client=os_client,
+            teams=[request.team] if request.team else None,
+            week_from=request.week_from,
+            week_to=request.week_to,
+            mail_type=request.mail_type,
+            num_slides=request.num_slides,
+            job_id=job_id,
+            progress_callback=lambda p: _update_progress(job_id, p),
+        )
+
+        async with _deep_mine_lock:
+            job = _deep_mine_jobs[job_id]
+            job.status = "completed"
+            job.progress = 1.0
+            job.text_summary = result["text_summary"]
+            job.pptx_url = f"/deep-mine/{job_id}/download"
+            job.document_count = result["document_count"]
+
+    except Exception as e:
+        async with _deep_mine_lock:
+            job = _deep_mine_jobs[job_id]
+            job.status = "failed"
+            job.error = str(e)
+
+
+def _update_progress(job_id: str, progress: float):
+    """진행률 업데이트 (동기 콜백)"""
+    if job_id in _deep_mine_jobs:
+        _deep_mine_jobs[job_id].progress = progress
+
+
+@app.post("/deep-mine", response_model=DeepMineResponse)
+async def start_deep_mine(request: DeepMineRequest):
+    """Deep Mining 작업 시작 — job_id 즉시 반환"""
+    if not os_client:
+        raise HTTPException(status_code=503, detail="OpenSearch 초기화 중")
+
+    job_id = str(uuid.uuid4())[:8]
+    _deep_mine_jobs[job_id] = DeepMineResponse(
+        job_id=job_id, status="accepted", progress=0.0
+    )
+
+    asyncio.create_task(_run_deep_mining(job_id, request))
+
+    return _deep_mine_jobs[job_id]
+
+
+@app.get("/deep-mine/{job_id}", response_model=DeepMineResponse)
+async def get_deep_mine_status(job_id: str):
+    """Deep Mining 작업 상태 조회"""
+    if job_id not in _deep_mine_jobs:
+        raise HTTPException(status_code=404, detail="작업을 찾을 수 없습니다")
+    return _deep_mine_jobs[job_id]
+
+
+@app.get("/deep-mine/{job_id}/download")
+async def download_deep_mine(job_id: str):
+    """Deep Mining PPTX 파일 다운로드"""
+    if job_id not in _deep_mine_jobs:
+        raise HTTPException(status_code=404, detail="작업을 찾을 수 없습니다")
+
+    job = _deep_mine_jobs[job_id]
+    if job.status != "completed":
+        raise HTTPException(status_code=400, detail=f"작업 상태: {job.status}")
+
+    pptx_path = DEEP_MINING_OUTPUT_DIR / f"{job_id}.pptx"
+    if not pptx_path.exists():
+        raise HTTPException(status_code=404, detail="PPTX 파일이 없습니다")
+
+    return FileResponse(
+        path=str(pptx_path),
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        filename=f"deep_mining_{job_id}.pptx",
+    )
 
 
 # ========== 실행 ==========
