@@ -488,6 +488,43 @@ def backfill_all(
 
 
 # ========== Knowledge Accumulation ==========
+def verify_answer_grounding(question: str, answer: str, source_chunks: str) -> bool:
+    """LLM으로 답변이 소스 문서에 근거하는지 검증"""
+    if not source_chunks or not source_chunks.strip():
+        return False
+
+    client = OpenAI(api_key=OPENROUTER_API_KEY, base_url=OPENROUTER_BASE_URL)
+    try:
+        resp = client.chat.completions.create(
+            model=LLM_MODEL,
+            messages=[
+                {"role": "system", "content": "당신은 답변의 사실 근거를 검증하는 전문가입니다. 답변이 소스 문서에 정확히 근거하는지 판단하세요."},
+                {"role": "user", "content": f"""아래 답변이 소스 문서에 근거하는지 판단하세요.
+
+소스 문서:
+{source_chunks[:15000]}
+
+질문: {question}
+답변: {answer[:5000]}
+
+판단 기준:
+- 답변의 핵심 내용이 소스 문서에서 확인 가능하면 APPROVE
+- 소스 문서에 없는 내용을 만들어냈거나, 핵심 사실이 틀리면 REJECT
+
+APPROVE 또는 REJECT 한 단어만 출력하세요."""},
+            ],
+            temperature=0,
+            max_tokens=10,
+        )
+        result = resp.choices[0].message.content.strip().upper()
+        approved = "APPROVE" in result
+        print(f"  {'✅' if approved else '❌'} [Wiki 검증] {result}")
+        return approved
+    except Exception as e:
+        print(f"  ⚠️ [Wiki 검증] LLM 호출 실패, 저장 건너뜀: {e}")
+        return False
+
+
 def accumulate_query_result(
     os_client: OpenSearch,
     embed_client: OpenAI,
@@ -495,8 +532,13 @@ def accumulate_query_result(
     answer: str,
     source_teams: Optional[List[str]] = None,
     source_weeks: Optional[List[str]] = None,
+    source_chunks: Optional[str] = None,
 ):
     """쿼리 결과를 wiki에 축적 (knowledge evaporation 방지)"""
+    # 저장 전 LLM 검증
+    if not verify_answer_grounding(question, answer, source_chunks or ""):
+        print("  🚫 [Knowledge Accumulation] 근거 검증 실패, 저장하지 않음")
+        return
     text = f"질문: {question}\n\n답변:\n{answer}"
     title = f"Q&A: {question[:80]}"
 

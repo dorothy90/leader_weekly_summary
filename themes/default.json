@@ -1,0 +1,16 @@
+{
+  "bg_dark": "#1a1a2e",
+  "bg_light": "#ffffff",
+  "bg_section": "#f7f8fa",
+  "accent": "#e94560",
+  "text_primary": "#ffffff",
+  "text_dark": "#2d3748",
+  "text_muted": "#718096",
+  "header_bg": "#2d3748",
+  "header_font": "#ffffff",
+  "font_title": 36,
+  "font_subtitle": 20,
+  "font_body": 16,
+  "font_small": 12,
+  "font_metric": 28
+}

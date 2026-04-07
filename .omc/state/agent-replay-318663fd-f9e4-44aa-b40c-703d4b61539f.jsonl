@@ -1,0 +1,3 @@
+{"t":0,"agent":"system","event":"keyword_detected","keyword":"ccg"}
+{"t":0,"agent":"a2327ad","agent_type":"Explore","event":"agent_start","parent_mode":"none"}
+{"t":0,"agent":"a2327ad","agent_type":"Explore","event":"agent_stop","success":true,"duration_ms":57740}

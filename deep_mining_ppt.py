@@ -3,6 +3,7 @@ Deep Mining PPT 생성 — 카드 기반 레이아웃 + 렌더
 6단 아키텍처 중 5~6단: Layout(card packing + fit check) → Render(create_native_pptx)
 """
 
+import json
 import logging
 from dataclasses import dataclass, field
 from typing import List, Any, Dict, Optional
@@ -20,9 +21,9 @@ from deep_mining_schemas import (
 
 logger = logging.getLogger(__name__)
 
-# ========== 디자인 테마 상수 ==========
+# ========== 디자인 테마 ==========
 
-THEME = {
+_DEFAULT_THEME = {
     "bg_dark": "#1a1a2e",
     "bg_light": "#ffffff",
     "bg_section": "#f7f8fa",
@@ -38,6 +39,21 @@ THEME = {
     "font_small": 12,
     "font_metric": 28,
 }
+
+_THEMES_DIR = Path(__file__).parent / "themes"
+
+
+def load_theme(name: str = "default") -> dict:
+    """themes/<name>.json 로드. 없으면 내장 기본 테마 반환."""
+    path = _THEMES_DIR / f"{name}.json"
+    if path.exists():
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    logger.warning(f"Theme '{name}' not found, using default")
+    return dict(_DEFAULT_THEME)
+
+
+THEME = load_theme()
 
 # 슬라이드 usable area (10x5.625 inches, margin 0.8)
 MARGIN = 0.8
@@ -286,6 +302,27 @@ def _truncate_table(data: List[List[str]], max_rows: int = MAX_TABLE_ROWS) -> Li
 
 # ========== Step 4: 카드 → slide definition ==========
 
+def _make_slide_header(title: str) -> List[Dict]:
+    """6개 빌더에서 반복되는 제목 + 액센트 바 2요소 반환"""
+    return [
+        {
+            "type": "text_box",
+            "content": title,
+            "position": {"left": MARGIN, "top": 0.5, "width": CONTENT_W, "height": 0.8},
+            "style": {
+                "font_size": THEME["font_subtitle"] + 4,
+                "font_bold": True,
+                "font_color": THEME["text_dark"],
+            },
+        },
+        {
+            "type": "shape",
+            "shape_type": "rectangle",
+            "position": {"left": MARGIN, "top": 1.3, "width": 1.5, "height": 0.06},
+            "style": {"fill_color": THEME["accent"]},
+        },
+    ]
+
 def _build_title_slide(card: ContentCard) -> Dict:
     """타이틀 슬라이드"""
     info = card.content
@@ -343,22 +380,7 @@ def _build_summary_slide(card: ContentCard) -> Dict:
     return {
         "background": {"color": THEME["bg_light"]},
         "elements": [
-            {
-                "type": "text_box",
-                "content": "Executive Summary",
-                "position": {"left": MARGIN, "top": 0.5, "width": CONTENT_W, "height": 0.8},
-                "style": {
-                    "font_size": THEME["font_subtitle"] + 4,
-                    "font_bold": True,
-                    "font_color": THEME["text_dark"],
-                },
-            },
-            {
-                "type": "shape",
-                "shape_type": "rectangle",
-                "position": {"left": MARGIN, "top": 1.3, "width": 1.5, "height": 0.06},
-                "style": {"fill_color": THEME["accent"]},
-            },
+            *_make_slide_header("Executive Summary"),
             {
                 "type": "text_box",
                 "content": content,
@@ -375,24 +397,7 @@ def _build_summary_slide(card: ContentCard) -> Dict:
 
 def _build_team_slide(cards: List[ContentCard]) -> Dict:
     """팀별 분석 슬라이드 (1~2개 팀 카드 병합 가능)"""
-    elements = [
-        {
-            "type": "text_box",
-            "content": "팀별 핵심 분석",
-            "position": {"left": MARGIN, "top": 0.5, "width": CONTENT_W, "height": 0.8},
-            "style": {
-                "font_size": THEME["font_subtitle"] + 4,
-                "font_bold": True,
-                "font_color": THEME["text_dark"],
-            },
-        },
-        {
-            "type": "shape",
-            "shape_type": "rectangle",
-            "position": {"left": MARGIN, "top": 1.3, "width": 1.5, "height": 0.06},
-            "style": {"fill_color": THEME["accent"]},
-        },
-    ]
+    elements = [*_make_slide_header("팀별 핵심 분석")]
 
     if len(cards) == 1:
         tf: TeamFindings = cards[0].content
@@ -462,24 +467,7 @@ def _build_team_slide(cards: List[ContentCard]) -> Dict:
 
 def _build_topic_slide(cards: List[ContentCard]) -> Dict:
     """주제별 분석 슬라이드"""
-    elements = [
-        {
-            "type": "text_box",
-            "content": "주제별 분석",
-            "position": {"left": MARGIN, "top": 0.5, "width": CONTENT_W, "height": 0.8},
-            "style": {
-                "font_size": THEME["font_subtitle"] + 4,
-                "font_bold": True,
-                "font_color": THEME["text_dark"],
-            },
-        },
-        {
-            "type": "shape",
-            "shape_type": "rectangle",
-            "position": {"left": MARGIN, "top": 1.3, "width": 1.5, "height": 0.06},
-            "style": {"fill_color": THEME["accent"]},
-        },
-    ]
+    elements = [*_make_slide_header("주제별 분석")]
 
     table_data = [["주제", "핵심 포인트"]]
     for card in cards:
@@ -520,22 +508,7 @@ def _build_trend_slide(card: ContentCard) -> Dict:
     return {
         "background": {"color": THEME["bg_light"]},
         "elements": [
-            {
-                "type": "text_box",
-                "content": "Trends",
-                "position": {"left": MARGIN, "top": 0.5, "width": CONTENT_W, "height": 0.8},
-                "style": {
-                    "font_size": THEME["font_subtitle"] + 4,
-                    "font_bold": True,
-                    "font_color": THEME["text_dark"],
-                },
-            },
-            {
-                "type": "shape",
-                "shape_type": "rectangle",
-                "position": {"left": MARGIN, "top": 1.3, "width": 1.5, "height": 0.06},
-                "style": {"fill_color": THEME["accent"]},
-            },
+            *_make_slide_header("Trends"),
             {
                 "type": "text_box",
                 "content": bullets,
@@ -561,22 +534,7 @@ def _build_metric_slide(card: ContentCard) -> Dict:
     return {
         "background": {"color": THEME["bg_light"]},
         "elements": [
-            {
-                "type": "text_box",
-                "content": "Key Metrics",
-                "position": {"left": MARGIN, "top": 0.5, "width": CONTENT_W, "height": 0.8},
-                "style": {
-                    "font_size": THEME["font_subtitle"] + 4,
-                    "font_bold": True,
-                    "font_color": THEME["text_dark"],
-                },
-            },
-            {
-                "type": "shape",
-                "shape_type": "rectangle",
-                "position": {"left": MARGIN, "top": 1.3, "width": 1.5, "height": 0.06},
-                "style": {"fill_color": THEME["accent"]},
-            },
+            *_make_slide_header("Key Metrics"),
             {
                 "type": "table",
                 "data": table_data,
@@ -599,22 +557,7 @@ def _build_recommendation_slide(card: ContentCard) -> Dict:
     return {
         "background": {"color": THEME["bg_light"]},
         "elements": [
-            {
-                "type": "text_box",
-                "content": "Recommendations",
-                "position": {"left": MARGIN, "top": 0.5, "width": CONTENT_W, "height": 0.8},
-                "style": {
-                    "font_size": THEME["font_subtitle"] + 4,
-                    "font_bold": True,
-                    "font_color": THEME["text_dark"],
-                },
-            },
-            {
-                "type": "shape",
-                "shape_type": "rectangle",
-                "position": {"left": MARGIN, "top": 1.3, "width": 1.5, "height": 0.06},
-                "style": {"fill_color": THEME["accent"]},
-            },
+            *_make_slide_header("Recommendations"),
             {
                 "type": "text_box",
                 "content": bullets,
@@ -670,6 +613,21 @@ def _build_appendix_slide(card: ContentCard) -> Dict:
     }
 
 
+# 카드 → 빌더 함수 매핑. multi-card 빌더(team, topic)는 slide_cards 전체를 받음
+_SINGLE_CARD_BUILDERS = {
+    "title": _build_title_slide,
+    "summary": _build_summary_slide,
+    "trend": _build_trend_slide,
+    "metric": _build_metric_slide,
+    "recommendation": _build_recommendation_slide,
+    "appendix": _build_appendix_slide,
+}
+_MULTI_CARD_BUILDERS = {
+    "team": _build_team_slide,
+    "topic": _build_topic_slide,
+}
+
+
 def cards_to_slide_defs(packed: List[List[ContentCard]]) -> List[Dict]:
     """packed 카드 리스트 → create_native_pptx()용 slide definition dict 리스트"""
     slide_defs = []
@@ -678,26 +636,14 @@ def cards_to_slide_defs(packed: List[List[ContentCard]]) -> List[Dict]:
         if not slide_cards:
             continue
 
-        primary = slide_cards[0]
+        card_type = slide_cards[0].card_type
 
-        if primary.card_type == "title":
-            slide_defs.append(_build_title_slide(primary))
-        elif primary.card_type == "summary":
-            slide_defs.append(_build_summary_slide(primary))
-        elif primary.card_type == "team":
-            slide_defs.append(_build_team_slide(slide_cards))
-        elif primary.card_type == "topic":
-            slide_defs.append(_build_topic_slide(slide_cards))
-        elif primary.card_type == "trend":
-            slide_defs.append(_build_trend_slide(primary))
-        elif primary.card_type == "metric":
-            slide_defs.append(_build_metric_slide(primary))
-        elif primary.card_type == "recommendation":
-            slide_defs.append(_build_recommendation_slide(primary))
-        elif primary.card_type == "appendix":
-            slide_defs.append(_build_appendix_slide(primary))
+        if card_type in _MULTI_CARD_BUILDERS:
+            slide_defs.append(_MULTI_CARD_BUILDERS[card_type](slide_cards))
+        elif card_type in _SINGLE_CARD_BUILDERS:
+            slide_defs.append(_SINGLE_CARD_BUILDERS[card_type](slide_cards[0]))
         else:
-            logger.warning(f"Unknown card type: {primary.card_type}")
+            logger.warning(f"Unknown card type: {card_type}")
 
     return slide_defs
 

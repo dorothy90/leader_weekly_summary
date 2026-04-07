@@ -1643,6 +1643,10 @@ async def chat_with_agent(
             from wiki_builder import accumulate_query_result, get_embedding_client as _get_embed_client
 
             _embed_client = _get_embed_client()
+            _parsed_results = json.loads(tool_results[0]["result"]) if tool_results else []
+            _source_chunks_text = "\n\n---\n\n".join(
+                r.get("text", "") for r in _parsed_results if r.get("text")
+            )
             asyncio.get_event_loop().run_in_executor(
                 None,
                 lambda: accumulate_query_result(
@@ -1651,13 +1655,14 @@ async def chat_with_agent(
                     question=user_message,
                     answer=answer,
                     source_teams=list(set(
-                        r.get("team") for r in (json.loads(tool_results[0]["result"]) if tool_results else [])
+                        r.get("team") for r in _parsed_results
                         if r.get("team")
                     )) or None,
                     source_weeks=list(set(
-                        r.get("week") for r in (json.loads(tool_results[0]["result"]) if tool_results else [])
+                        r.get("week") for r in _parsed_results
                         if r.get("week")
                     )) or None,
+                    source_chunks=_source_chunks_text or None,
                 ),
             )
             print("📖 [Knowledge Accumulation] 비동기 저장 시작")
