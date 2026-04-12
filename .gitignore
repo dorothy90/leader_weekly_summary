@@ -246,3 +246,17 @@ exports/deep_mining/test_6slides.pptx
 exports/deep_mining/test_10slides.pptx
 exports/deep_mining/test_refactored.pptx
 .gitignore
+.omc/project-memory.json
+.omc/sessions/636e4c62-17b2-456d-8c6a-c3450393c6d7.json
+.omc/sessions/318663fd-f9e4-44aa-b40c-703d4b61539f.json
+.omc/sessions/c1bf6150-c4c7-456e-b8ad-180a904cdd72.json
+.omc/state/agent-replay-318663fd-f9e4-44aa-b40c-703d4b61539f.jsonl
+.omc/state/agent-replay-578455ca-a51a-4d14-82f7-2ef8f149bd54.jsonl
+.omc/state/idle-notif-cooldown.json
+.omc/state/last-tool-error.json
+.omc/state/mission-state.json
+.omc/state/subagent-tracking.json
+.omc/state/idle-notif-cooldown.json
+.omc/project-memory.json
+.omc/state/mission-state.json
+.omc/state/subagent-tracking.json

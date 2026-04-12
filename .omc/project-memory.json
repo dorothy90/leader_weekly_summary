@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "lastScanned": 1775569698766,
+  "lastScanned": 1775993360578,
   "projectRoot": "/Users/daehwankim/Documents/weekly_mail_agent",
   "techStack": {
     "languages": [
@@ -49,7 +49,7 @@
       "path": "__pycache__",
       "purpose": null,
       "fileCount": 17,
-      "lastAccessed": 1775569698752,
+      "lastAccessed": 1775993360563,
       "keyFiles": [
         "deep_mining_ppt.cpython-313.pyc",
         "deep_mining_schemas.cpython-313.pyc",
@@ -62,7 +62,7 @@
       "path": "chroma_db",
       "purpose": null,
       "fileCount": 1,
-      "lastAccessed": 1775569698752,
+      "lastAccessed": 1775993360564,
       "keyFiles": [
         "chroma.sqlite3"
       ]
@@ -71,21 +71,21 @@
       "path": "data",
       "purpose": "Data files",
       "fileCount": 1,
-      "lastAccessed": 1775569698753,
+      "lastAccessed": 1775993360564,
       "keyFiles": []
     },
     "exports": {
       "path": "exports",
       "purpose": null,
       "fileCount": 0,
-      "lastAccessed": 1775569698753,
+      "lastAccessed": 1775993360564,
       "keyFiles": []
     },
     "mail": {
       "path": "mail",
       "purpose": null,
       "fileCount": 13,
-      "lastAccessed": 1775569698753,
+      "lastAccessed": 1775993360564,
       "keyFiles": [
         "2025-48_베네피아_mail_001.html",
         "2026-13_UNKNOWN_mail_0324_074705_0cf774b5.html",
@@ -98,7 +98,7 @@
       "path": "output",
       "purpose": null,
       "fileCount": 161,
-      "lastAccessed": 1775569698754,
+      "lastAccessed": 1775993360565,
       "keyFiles": [
         "layer1_2025-48_20260103_220904.md",
         "layer1_2025-48_20260103_221450.md",
@@ -111,7 +111,7 @@
       "path": "pptdaddy",
       "purpose": null,
       "fileCount": 10,
-      "lastAccessed": 1775569698754,
+      "lastAccessed": 1775993360565,
       "keyFiles": [
         "CLAUDE.md",
         "INSTALL.md",
@@ -120,11 +120,20 @@
         "base-styles.css"
       ]
     },
+    "themes": {
+      "path": "themes",
+      "purpose": null,
+      "fileCount": 1,
+      "lastAccessed": 1775993360565,
+      "keyFiles": [
+        "default.json"
+      ]
+    },
     "wiki": {
       "path": "wiki",
       "purpose": null,
       "fileCount": 1,
-      "lastAccessed": 1775569698754,
+      "lastAccessed": 1775993360565,
       "keyFiles": [
         "index.md"
       ]
@@ -132,261 +141,33 @@
   },
   "hotPaths": [
     {
-      "path": "rag_api_opensearch_v3.py",
-      "accessCount": 58,
-      "lastAccessed": 1775573661867,
-      "type": "file"
-    },
-    {
-      "path": "",
-      "accessCount": 19,
-      "lastAccessed": 1775573657551,
-      "type": "directory"
-    },
-    {
-      "path": "pptdaddy/utils/export_native.py",
-      "accessCount": 18,
-      "lastAccessed": 1775572180119,
-      "type": "file"
-    },
-    {
-      "path": "embed_vectordb.py",
-      "accessCount": 17,
-      "lastAccessed": 1775562807928,
-      "type": "file"
-    },
-    {
-      "path": "deep_mining_ppt.py",
+      "path": "generate_stitch_report.py",
       "accessCount": 15,
-      "lastAccessed": 1775573333567,
-      "type": "file"
-    },
-    {
-      "path": "rag_v3/core.py",
-      "accessCount": 6,
-      "lastAccessed": 1775482237797,
-      "type": "file"
-    },
-    {
-      "path": "rag_v3/graph.py",
-      "accessCount": 6,
-      "lastAccessed": 1775482237888,
-      "type": "file"
-    },
-    {
-      "path": "deep_mining_schemas.py",
-      "accessCount": 6,
-      "lastAccessed": 1775573687248,
-      "type": "file"
-    },
-    {
-      "path": "opensearch.py",
-      "accessCount": 5,
-      "lastAccessed": 1775480213634,
-      "type": "file"
-    },
-    {
-      "path": "pptdaddy/agent/ppt_agent.py",
-      "accessCount": 5,
-      "lastAccessed": 1775482228642,
-      "type": "file"
-    },
-    {
-      "path": "pptdaddy/agent/tools.py",
-      "accessCount": 5,
-      "lastAccessed": 1775482228979,
-      "type": "file"
-    },
-    {
-      "path": "deep_mining.py",
-      "accessCount": 5,
-      "lastAccessed": 1775573662651,
-      "type": "file"
-    },
-    {
-      "path": "generate_layer2.py",
-      "accessCount": 4,
-      "lastAccessed": 1775479880317,
-      "type": "file"
-    },
-    {
-      "path": "pyproject.toml",
-      "accessCount": 4,
-      "lastAccessed": 1775480083721,
-      "type": "file"
-    },
-    {
-      "path": "requirements.txt",
-      "accessCount": 4,
-      "lastAccessed": 1775480086571,
-      "type": "file"
-    },
-    {
-      "path": "rag_v3/main.py",
-      "accessCount": 4,
-      "lastAccessed": 1775480878183,
-      "type": "file"
-    },
-    {
-      "path": "wiki_export.py",
-      "accessCount": 4,
-      "lastAccessed": 1775562766247,
-      "type": "file"
-    },
-    {
-      "path": "logical-foraging-russell.md",
-      "accessCount": 4,
-      "lastAccessed": 1775562813646,
-      "type": "file"
-    },
-    {
-      "path": "process_vision.py",
-      "accessCount": 3,
-      "lastAccessed": 1775480090425,
-      "type": "file"
-    },
-    {
-      "path": "rag_api_opensearch.py",
-      "accessCount": 3,
-      "lastAccessed": 1775480094088,
-      "type": "file"
-    },
-    {
-      "path": "summarize_chunks.py",
-      "accessCount": 3,
-      "lastAccessed": 1775480225704,
-      "type": "file"
-    },
-    {
-      "path": ".env",
-      "accessCount": 3,
-      "lastAccessed": 1775480469759,
-      "type": "file"
-    },
-    {
-      "path": "pptdaddy/utils/export.py",
-      "accessCount": 3,
-      "lastAccessed": 1775482100835,
-      "type": "file"
-    },
-    {
-      "path": "pptdaddy/agent/tool_executor.py",
-      "accessCount": 3,
-      "lastAccessed": 1775482234187,
-      "type": "file"
-    },
-    {
-      "path": "wiki/index.md",
-      "accessCount": 3,
-      "lastAccessed": 1775562785180,
-      "type": "file"
-    },
-    {
-      "path": "main.py",
-      "accessCount": 2,
-      "lastAccessed": 1775480105261,
-      "type": "file"
-    },
-    {
-      "path": "pptdaddy/app.py",
-      "accessCount": 2,
-      "lastAccessed": 1775480220052,
-      "type": "file"
-    },
-    {
-      "path": "CLAUDE.md",
-      "accessCount": 2,
-      "lastAccessed": 1775480231464,
-      "type": "file"
-    },
-    {
-      "path": "pptdaddy/agent/main_chat.py",
-      "accessCount": 2,
-      "lastAccessed": 1775482110312,
-      "type": "file"
-    },
-    {
-      "path": "wiki/team-week/2026-11_YIELD팀.md",
-      "accessCount": 2,
-      "lastAccessed": 1775562807076,
-      "type": "file"
-    },
-    {
-      "path": "test_weekly_dummy.py",
-      "accessCount": 2,
-      "lastAccessed": 1775569779828,
-      "type": "file"
-    },
-    {
-      "path": "plan.md",
-      "accessCount": 1,
-      "lastAccessed": 1775479061775,
-      "type": "file"
-    },
-    {
-      "path": "generate_layer1.py",
-      "accessCount": 1,
-      "lastAccessed": 1775480086591,
-      "type": "file"
-    },
-    {
-      "path": "pptdaddy/.env.example",
-      "accessCount": 1,
-      "lastAccessed": 1775480086954,
+      "lastAccessed": 1775998135137,
       "type": "file"
     },
     {
       "path": "generate_layer3_v2.py",
-      "accessCount": 1,
-      "lastAccessed": 1775480087016,
+      "accessCount": 7,
+      "lastAccessed": 1775994575510,
       "type": "file"
     },
     {
-      "path": "fetch_mail.py",
-      "accessCount": 1,
-      "lastAccessed": 1775480090120,
-      "type": "file"
-    },
-    {
-      "path": "process_attachment.py",
-      "accessCount": 1,
-      "lastAccessed": 1775480090708,
-      "type": "file"
-    },
-    {
-      "path": "chunk_classify.py",
-      "accessCount": 1,
-      "lastAccessed": 1775480092935,
+      "path": "wiki/overview/2026-11_전체요약.html",
+      "accessCount": 5,
+      "lastAccessed": 1775994982200,
       "type": "file"
     },
     {
       "path": "wiki/overview/2026-11_전체요약.md",
-      "accessCount": 1,
-      "lastAccessed": 1775480961209,
+      "accessCount": 4,
+      "lastAccessed": 1775995958515,
       "type": "file"
     },
     {
-      "path": "pptdaddy/utils/screenshot.py",
+      "path": "generate_layer3.py",
       "accessCount": 1,
-      "lastAccessed": 1775482110090,
-      "type": "file"
-    },
-    {
-      "path": "pptdaddy/main.py",
-      "accessCount": 1,
-      "lastAccessed": 1775569733435,
-      "type": "file"
-    },
-    {
-      "path": "ppt_outline.md",
-      "accessCount": 1,
-      "lastAccessed": 1775569744616,
-      "type": "file"
-    },
-    {
-      "path": "themes/default.json",
-      "accessCount": 1,
-      "lastAccessed": 1775573260479,
+      "lastAccessed": 1775994557927,
       "type": "file"
     }
   ],
