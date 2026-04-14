@@ -95,12 +95,28 @@ def week_to_period(week: str) -> str:
 
 
 # ========== Overview MD 파싱 ==========
-_SECTION_RE = re.compile(
-    r"\*\*(\d+)\.\s*([^\*]+?)\*\*\s*(.*?)(?=\n\*\*\d+\.|\Z)",
-    re.DOTALL,
+# 한 줄짜리 섹션 헤더 감지 — 관대하게:
+#   **1. X**   **1) X**   ### 1. X   ## 1. X   1. **X**   **1. X:**
+_HEADER_LINE_RE = re.compile(
+    r"^[ \t]*(?:#{1,6}[ \t]*)?"
+    r"\*{0,2}[ \t]*"
+    r"(\d+)[.)][ \t]*"
+    r"\*{0,2}[ \t]*"
+    r"([^\n*#][^\n*]*?)"
+    r"[ \t]*\*{0,2}[ \t]*:?[ \t]*$",
+    re.MULTILINE,
 )
 
-_TITLE_DESC_RE = re.compile(r"\*\*(.+?)\*\*\s*[:：–—\-]\s*(.+)")
+_SEPARATORS = ":：–—\\-·•/→"
+_TITLE_DESC_RE = re.compile(
+    r"^\s*\*{0,2}\s*"
+    r"(?P<title>[^" + _SEPARATORS + r"\n*]+?)"
+    r"\s*\*{0,2}\s*"
+    r"[" + _SEPARATORS + r"]\s*"
+    r"(?P<desc>.+)$"
+)
+
+_BULLET_PREFIX_RE = re.compile(r"^\s*(?:[-*•▪·]|\d+[.)])\s+")
 
 
 def _strip_frontmatter(text: str) -> str:
@@ -113,27 +129,34 @@ def _strip_frontmatter(text: str) -> str:
 
 def _extract_sections(text: str) -> Dict[str, str]:
     text = _strip_frontmatter(text)
+    matches = list(_HEADER_LINE_RE.finditer(text))
+    if not matches:
+        return {}
     sections: Dict[str, str] = {}
-    for m in _SECTION_RE.finditer(text):
-        sections[m.group(1)] = m.group(3).strip()
+    for i, m in enumerate(matches):
+        num = m.group(1)
+        body_start = m.end()
+        body_end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        sections[num] = text[body_start:body_end].strip()
     return sections
 
 
 def _parse_bullet_lines(body: str) -> List[str]:
     out: List[str] = []
     for raw in body.split("\n"):
-        line = raw.strip()
-        if line.startswith("- "):
-            out.append(line[2:].strip())
-        elif line.startswith("-") and len(line) > 1:
-            out.append(line[1:].strip())
-    return [b for b in out if b]
+        m = _BULLET_PREFIX_RE.match(raw)
+        if not m:
+            continue
+        content = raw[m.end():].strip()
+        if content:
+            out.append(content)
+    return out
 
 
 def _split_title_desc(bullet: str) -> Dict[str, str]:
     m = _TITLE_DESC_RE.match(bullet)
     if m:
-        return {"title": m.group(1).strip(), "desc": m.group(2).strip()}
+        return {"title": m.group("title").strip(), "desc": m.group("desc").strip()}
     return {"title": bullet.strip(), "desc": ""}
 
 

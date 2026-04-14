@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "lastScanned": 1775993360578,
+  "lastScanned": 1776174401161,
   "projectRoot": "/Users/daehwankim/Documents/weekly_mail_agent",
   "techStack": {
     "languages": [
@@ -48,8 +48,8 @@
     "__pycache__": {
       "path": "__pycache__",
       "purpose": null,
-      "fileCount": 17,
-      "lastAccessed": 1775993360563,
+      "fileCount": 18,
+      "lastAccessed": 1776174401144,
       "keyFiles": [
         "deep_mining_ppt.cpython-313.pyc",
         "deep_mining_schemas.cpython-313.pyc",
@@ -62,7 +62,7 @@
       "path": "chroma_db",
       "purpose": null,
       "fileCount": 1,
-      "lastAccessed": 1775993360564,
+      "lastAccessed": 1776174401144,
       "keyFiles": [
         "chroma.sqlite3"
       ]
@@ -71,21 +71,21 @@
       "path": "data",
       "purpose": "Data files",
       "fileCount": 1,
-      "lastAccessed": 1775993360564,
+      "lastAccessed": 1776174401145,
       "keyFiles": []
     },
     "exports": {
       "path": "exports",
       "purpose": null,
       "fileCount": 0,
-      "lastAccessed": 1775993360564,
+      "lastAccessed": 1776174401145,
       "keyFiles": []
     },
     "mail": {
       "path": "mail",
       "purpose": null,
       "fileCount": 13,
-      "lastAccessed": 1775993360564,
+      "lastAccessed": 1776174401145,
       "keyFiles": [
         "2025-48_베네피아_mail_001.html",
         "2026-13_UNKNOWN_mail_0324_074705_0cf774b5.html",
@@ -97,8 +97,8 @@
     "output": {
       "path": "output",
       "purpose": null,
-      "fileCount": 161,
-      "lastAccessed": 1775993360565,
+      "fileCount": 167,
+      "lastAccessed": 1776174401147,
       "keyFiles": [
         "layer1_2025-48_20260103_220904.md",
         "layer1_2025-48_20260103_221450.md",
@@ -111,7 +111,7 @@
       "path": "pptdaddy",
       "purpose": null,
       "fileCount": 10,
-      "lastAccessed": 1775993360565,
+      "lastAccessed": 1776174401148,
       "keyFiles": [
         "CLAUDE.md",
         "INSTALL.md",
@@ -124,7 +124,7 @@
       "path": "themes",
       "purpose": null,
       "fileCount": 1,
-      "lastAccessed": 1775993360565,
+      "lastAccessed": 1776174401148,
       "keyFiles": [
         "default.json"
       ]
@@ -132,8 +132,8 @@
     "wiki": {
       "path": "wiki",
       "purpose": null,
-      "fileCount": 1,
-      "lastAccessed": 1775993360565,
+      "fileCount": 2,
+      "lastAccessed": 1776174401148,
       "keyFiles": [
         "index.md"
       ]
@@ -142,32 +142,8 @@
   "hotPaths": [
     {
       "path": "generate_stitch_report.py",
-      "accessCount": 15,
-      "lastAccessed": 1775998135137,
-      "type": "file"
-    },
-    {
-      "path": "generate_layer3_v2.py",
-      "accessCount": 7,
-      "lastAccessed": 1775994575510,
-      "type": "file"
-    },
-    {
-      "path": "wiki/overview/2026-11_전체요약.html",
-      "accessCount": 5,
-      "lastAccessed": 1775994982200,
-      "type": "file"
-    },
-    {
-      "path": "wiki/overview/2026-11_전체요약.md",
-      "accessCount": 4,
-      "lastAccessed": 1775995958515,
-      "type": "file"
-    },
-    {
-      "path": "generate_layer3.py",
-      "accessCount": 1,
-      "lastAccessed": 1775994557927,
+      "accessCount": 2,
+      "lastAccessed": 1776174852245,
       "type": "file"
     }
   ],
