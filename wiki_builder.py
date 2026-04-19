@@ -30,7 +30,7 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "")
 EMBEDDING_MODEL = "qwen/qwen3-embedding-8b"
 EMBEDDING_DIMENSION = 4096
-LLM_MODEL = 'z-ai/glm-4.7'
+LLM_MODEL = "z-ai/glm-4.7"
 # LLM_MODEL = os.getenv("LLM_MODEL", "gpt-oss-120b")
 
 SOURCE_INDEX = os.getenv("OPENSEARCH_INDEX", "weekly_mail")
@@ -39,8 +39,16 @@ WIKI_INDEX = "wiki_summaries"
 DATA_DIR = Path("data")
 
 TEAMS = [
-    "CS팀", "DT팀", "EQUIP팀", "FA팀", "PE팀",
-    "PI팀", "PROCESS팀", "QA팀", "TEST팀", "YIELD팀",
+    "CS팀",
+    "DT팀",
+    "EQUIP팀",
+    "FA팀",
+    "PE팀",
+    "PI팀",
+    "PROCESS팀",
+    "QA팀",
+    "TEST팀",
+    "YIELD팀",
 ]
 
 
@@ -118,10 +126,12 @@ def create_wiki_index(client: OpenSearch):
                     "fields": {"keyword": {"type": "keyword"}},
                 },
                 # 메타데이터
-                "summary_type": {"type": "keyword"},   # team-week / topic / overview / query_synthesis
+                "summary_type": {
+                    "type": "keyword"
+                },  # team-week / topic / overview / query_synthesis
                 "team": {"type": "keyword"},
                 "week": {"type": "keyword"},
-                "topic": {"type": "keyword"},           # topic-timeline용
+                "topic": {"type": "keyword"},  # topic-timeline용
                 "source_doc_ids": {"type": "keyword"},  # 원본 문서 ID 참조
                 "created_at": {"type": "date"},
                 "updated_at": {"type": "date"},
@@ -145,9 +155,7 @@ def get_available_weeks(client: OpenSearch) -> List[str]:
     body = {
         "size": 0,
         "aggs": {
-            "weeks": {
-                "terms": {"field": "week", "size": 100, "order": {"_key": "asc"}}
-            }
+            "weeks": {"terms": {"field": "week", "size": 100, "order": {"_key": "asc"}}}
         },
     }
     resp = client.search(index=SOURCE_INDEX, body=body)
@@ -159,9 +167,7 @@ def get_teams_for_week(client: OpenSearch, week: str) -> List[str]:
     body = {
         "size": 0,
         "query": {"term": {"week": week}},
-        "aggs": {
-            "teams": {"terms": {"field": "team", "size": 20}}
-        },
+        "aggs": {"teams": {"terms": {"field": "team", "size": 20}}},
     }
     resp = client.search(index=SOURCE_INDEX, body=body)
     return [b["key"] for b in resp["aggregations"]["teams"]["buckets"]]
@@ -187,18 +193,22 @@ def fetch_chunks_for_team_week(
     results = []
     for hit in resp["hits"]["hits"]:
         src = hit["_source"]
-        results.append({
-            "id": hit["_id"],
-            "text": src.get("text", ""),
-            "team": src.get("team", ""),
-            "week": src.get("week", ""),
-            "mail_id": src.get("mail_id", ""),
-            "part_index": src.get("part_index", 0),
-        })
+        results.append(
+            {
+                "id": hit["_id"],
+                "text": src.get("text", ""),
+                "team": src.get("team", ""),
+                "week": src.get("week", ""),
+                "mail_id": src.get("mail_id", ""),
+                "part_index": src.get("part_index", 0),
+            }
+        )
     return results
 
 
-def fetch_all_chunks_for_week(client: OpenSearch, week: str, limit: int = 500) -> List[Dict]:
+def fetch_all_chunks_for_week(
+    client: OpenSearch, week: str, limit: int = 500
+) -> List[Dict]:
     """특정 주차의 전체 chunk 조회 (모든 팀)"""
     body = {
         "size": limit,
@@ -209,12 +219,14 @@ def fetch_all_chunks_for_week(client: OpenSearch, week: str, limit: int = 500) -
     results = []
     for hit in resp["hits"]["hits"]:
         src = hit["_source"]
-        results.append({
-            "id": hit["_id"],
-            "text": src.get("text", ""),
-            "team": src.get("team", ""),
-            "week": src.get("week", ""),
-        })
+        results.append(
+            {
+                "id": hit["_id"],
+                "text": src.get("text", ""),
+                "team": src.get("team", ""),
+                "week": src.get("week", ""),
+            }
+        )
     return results
 
 
@@ -245,22 +257,18 @@ def generate_team_week_summary(team: str, week: str, chunks: List[Dict]) -> str:
 섹션 헤더는 반드시 `**숫자. 제목**` 형식이며, `#`, `##`, `###` 같은 markdown heading을 사용해서는 안 됩니다.
 불릿은 `- ` 로만 시작합니다.
 
-예시:
-**1. 핵심 요약 (3줄 이내)**
-- 이번 주 가장 중요한 내용.
-- 두 번째 핵심 내용.
-- 세 번째 핵심 내용.
+1. 핵심 요약 (3줄 이내)
+- 이번 주 가장 중요한 내용을 압축
 
-**2. 주요 업무**
-- **프로젝트/업무명**: 진행 상황, 수치, 결과.
-- **프로젝트/업무명**: 진행 상황, 수치, 결과.
+2. 주요 업무
+- 진행 주인 업무/프로젝트벼로 정리
+- 수치, 결과가 있으면 반드시 포함
 
-**3. 이슈 & 리스크**
-- **이슈명**: 문제점, 지연 사항, 주의 필요 항목.
-- **이슈명**: 문제점, 지연 사항, 주의 필요 항목.
+3. 이슈 & 리스크
+- 문제점, 지연 사항, 주의 필요 항목
 
-**4. 핵심 키워드**
-- 키워드1, 키워드2, 키워드3, ... (5~10개, 쉼표 구분)"""
+4. 핵심 키워드
+- 이 주차의 핵심 기술 프로젝트 키워드 5~10개 (쉼표 구분)"""
 
     user_prompt = f"""[{team}] {week} 주차 보고서를 요약해주세요.
 
@@ -297,35 +305,26 @@ def generate_weekly_overview(week: str, team_summaries: Dict[str, str]) -> str:
 
 작성 원칙:
 1. 각 팀 요약을 바탕으로 조직 전체 관점에서 종합
-2. 팀 간 연관 이슈가 있으면 크로스 레퍼런스
+2. 팀 간 연관 이슈가 있으면 크로스 레퍼런스, 여러 팀에 걸친 공통 공통 이슈나 연관 사항
 3. 조직 차원의 핵심 이슈와 리스크 도출
 
 출력 형식 — 아래 예시의 구조를 한 글자도 바꾸지 말고 그대로 복제하세요.
-섹션 헤더는 반드시 `**숫자. 제목**` 형식이며, `#`, `##`, `###` 같은 markdown heading을 사용해서는 안 됩니다.
+섹션 헤더는 반드시 `숫자. 제목` 형식이며, `#`, `##`, `###` 같은 markdown heading을 사용해서는 안 됩니다.
 불릿은 `- ` 로만 시작하고, 제목과 설명 사이 구분자는 `: ` 를 사용합니다.
-팀명/이슈명/리스크명은 반드시 `**...**` 로 볼드 처리합니다.
+팀명/이슈명/리스크명은 반드시 `...` 로 볼드 처리합니다.
 
 예시:
-**1. 이번 주 조직 핵심 (3줄)**
-- 첫 번째 핵심 요점.
-- 두 번째 핵심 요점.
-- 세 번째 핵심 요점.
+1. 이번 주 조직 핵심 (3줄)
+- 가장 중요한 조직 차원 이슈
 
-**2. 팀별 하이라이트**
-- **EQUIP팀**: 한 줄 핵심.
-- **PE팀**: 한 줄 핵심.
-- **PROCESS팀**: 한 줄 핵심.
-- **QA팀**: 한 줄 핵심.
-- **TEST팀**: 한 줄 핵심.
-- **YIELD팀**: 한 줄 핵심.
+2. 팀별 하이라이트
+- 팀명: 한 줄 핵심 (팀당 1줄)
 
-**3. 크로스팀 이슈**
-- **이슈 제목**: 설명.
-- **이슈 제목**: 설명.
+3. 크로스팀 이슈
+- 여러 팀에 걸친 공통 이슈나 연관 사항
 
-**4. 주요 리스크**
-- **리스크 제목**: 설명.
-- **리스크 제목**: 설명."""
+4. 주요 리스크
+- 조직 차원에서 주의 필요한 항목"""
 
     user_prompt = f"""{week} 주차 전체 팀 현황을 종합해주세요.
 
@@ -363,7 +362,7 @@ def save_wiki_doc(
         return
 
     embedding = get_embedding(embed_client, text)
-    now = datetime.now(tz=__import__('datetime').timezone.utc).isoformat()
+    now = datetime.now(tz=__import__("datetime").timezone.utc).isoformat()
 
     doc = {
         "embedding": embedding,
@@ -418,7 +417,8 @@ def backfill_team_week(
     source_ids = [c["id"] for c in chunks]
 
     save_wiki_doc(
-        os_client, embed_client,
+        os_client,
+        embed_client,
         text=summary,
         title=title,
         summary_type="team-week",
@@ -449,7 +449,8 @@ def backfill_weekly_overview(
     title = f"{week} 전체 팀 종합 요약"
 
     save_wiki_doc(
-        os_client, embed_client,
+        os_client,
+        embed_client,
         text=overview,
         title=title,
         summary_type="overview",
@@ -519,8 +520,13 @@ def verify_answer_grounding(question: str, answer: str, source_chunks: str) -> b
         resp = client.chat.completions.create(
             model=LLM_MODEL,
             messages=[
-                {"role": "system", "content": "당신은 답변의 사실 근거를 검증하는 전문가입니다. 답변이 소스 문서에 정확히 근거하는지 판단하세요."},
-                {"role": "user", "content": f"""아래 답변이 소스 문서에 근거하는지 판단하세요.
+                {
+                    "role": "system",
+                    "content": "당신은 답변의 사실 근거를 검증하는 전문가입니다. 답변이 소스 문서에 정확히 근거하는지 판단하세요.",
+                },
+                {
+                    "role": "user",
+                    "content": f"""아래 답변이 소스 문서에 근거하는지 판단하세요.
 
 소스 문서:
 {source_chunks[:15000]}
@@ -532,7 +538,8 @@ def verify_answer_grounding(question: str, answer: str, source_chunks: str) -> b
 - 답변의 핵심 내용이 소스 문서에서 확인 가능하면 APPROVE
 - 소스 문서에 없는 내용을 만들어냈거나, 핵심 사실이 틀리면 REJECT
 
-APPROVE 또는 REJECT 한 단어만 출력하세요."""},
+APPROVE 또는 REJECT 한 단어만 출력하세요.""",
+                },
             ],
             temperature=0,
             max_tokens=10,
@@ -591,9 +598,12 @@ def accumulate_query_result(
             # cosine similarity > 0.92 이면 기존 문서 업데이트
             if top_score > 9.2:  # OpenSearch kNN score는 10 * cosine
                 existing_id = resp["hits"]["hits"][0]["_id"]
-                print(f"  🔄 기존 문서 업데이트: {existing_id} (score: {top_score:.2f})")
+                print(
+                    f"  🔄 기존 문서 업데이트: {existing_id} (score: {top_score:.2f})"
+                )
                 save_wiki_doc(
-                    os_client, embed_client,
+                    os_client,
+                    embed_client,
                     text=text,
                     title=title,
                     summary_type="query_synthesis",
@@ -607,7 +617,8 @@ def accumulate_query_result(
 
     # 새 문서 저장
     save_wiki_doc(
-        os_client, embed_client,
+        os_client,
+        embed_client,
         text=text,
         title=title,
         summary_type="query_synthesis",
@@ -618,12 +629,24 @@ def accumulate_query_result(
 
 # ========== CLI ==========
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Wiki Builder - OpenSearch wiki 요약 생성")
-    parser.add_argument("--week", type=str, nargs="*", help="대상 주차 (예: 2025-48 2025-49)")
-    parser.add_argument("--team", type=str, nargs="*", help="대상 팀 (예: YIELD팀 DT팀)")
-    parser.add_argument("--skip-overview", action="store_true", help="전체 요약 생성 건너뛰기")
-    parser.add_argument("--recreate", action="store_true", help="인덱스 재생성 (기존 데이터 삭제)")
-    parser.add_argument("--list-weeks", action="store_true", help="사용 가능한 주차 목록 출력")
+    parser = argparse.ArgumentParser(
+        description="Wiki Builder - OpenSearch wiki 요약 생성"
+    )
+    parser.add_argument(
+        "--week", type=str, nargs="*", help="대상 주차 (예: 2025-48 2025-49)"
+    )
+    parser.add_argument(
+        "--team", type=str, nargs="*", help="대상 팀 (예: YIELD팀 DT팀)"
+    )
+    parser.add_argument(
+        "--skip-overview", action="store_true", help="전체 요약 생성 건너뛰기"
+    )
+    parser.add_argument(
+        "--recreate", action="store_true", help="인덱스 재생성 (기존 데이터 삭제)"
+    )
+    parser.add_argument(
+        "--list-weeks", action="store_true", help="사용 가능한 주차 목록 출력"
+    )
 
     args = parser.parse_args()
 

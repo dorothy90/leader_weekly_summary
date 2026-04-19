@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "lastScanned": 1776174401161,
+  "lastScanned": 1776438118952,
   "projectRoot": "/Users/daehwankim/Documents/weekly_mail_agent",
   "techStack": {
     "languages": [
@@ -49,7 +49,7 @@
       "path": "__pycache__",
       "purpose": null,
       "fileCount": 18,
-      "lastAccessed": 1776174401144,
+      "lastAccessed": 1776438118927,
       "keyFiles": [
         "deep_mining_ppt.cpython-313.pyc",
         "deep_mining_schemas.cpython-313.pyc",
@@ -62,7 +62,7 @@
       "path": "chroma_db",
       "purpose": null,
       "fileCount": 1,
-      "lastAccessed": 1776174401144,
+      "lastAccessed": 1776438118929,
       "keyFiles": [
         "chroma.sqlite3"
       ]
@@ -71,21 +71,21 @@
       "path": "data",
       "purpose": "Data files",
       "fileCount": 1,
-      "lastAccessed": 1776174401145,
+      "lastAccessed": 1776438118929,
       "keyFiles": []
     },
     "exports": {
       "path": "exports",
       "purpose": null,
       "fileCount": 0,
-      "lastAccessed": 1776174401145,
+      "lastAccessed": 1776438118929,
       "keyFiles": []
     },
     "mail": {
       "path": "mail",
       "purpose": null,
       "fileCount": 13,
-      "lastAccessed": 1776174401145,
+      "lastAccessed": 1776438118929,
       "keyFiles": [
         "2025-48_베네피아_mail_001.html",
         "2026-13_UNKNOWN_mail_0324_074705_0cf774b5.html",
@@ -98,7 +98,7 @@
       "path": "output",
       "purpose": null,
       "fileCount": 167,
-      "lastAccessed": 1776174401147,
+      "lastAccessed": 1776438118930,
       "keyFiles": [
         "layer1_2025-48_20260103_220904.md",
         "layer1_2025-48_20260103_221450.md",
@@ -111,7 +111,7 @@
       "path": "pptdaddy",
       "purpose": null,
       "fileCount": 10,
-      "lastAccessed": 1776174401148,
+      "lastAccessed": 1776438118930,
       "keyFiles": [
         "CLAUDE.md",
         "INSTALL.md",
@@ -124,7 +124,7 @@
       "path": "themes",
       "purpose": null,
       "fileCount": 1,
-      "lastAccessed": 1776174401148,
+      "lastAccessed": 1776438118931,
       "keyFiles": [
         "default.json"
       ]
@@ -133,7 +133,7 @@
       "path": "wiki",
       "purpose": null,
       "fileCount": 2,
-      "lastAccessed": 1776174401148,
+      "lastAccessed": 1776438118931,
       "keyFiles": [
         "index.md"
       ]
@@ -141,9 +141,33 @@
   },
   "hotPaths": [
     {
+      "path": "wiki/overview/2026-11_전체요약.html",
+      "accessCount": 3,
+      "lastAccessed": 1776470930518,
+      "type": "file"
+    },
+    {
       "path": "generate_stitch_report.py",
       "accessCount": 2,
       "lastAccessed": 1776174852245,
+      "type": "file"
+    },
+    {
+      "path": "",
+      "accessCount": 2,
+      "lastAccessed": 1776470384122,
+      "type": "directory"
+    },
+    {
+      "path": "wiki/overview/_outlook_test_2026-11.html",
+      "accessCount": 1,
+      "lastAccessed": 1776470655689,
+      "type": "file"
+    },
+    {
+      "path": "generate_outlook_report.py",
+      "accessCount": 1,
+      "lastAccessed": 1776471326510,
       "type": "file"
     }
   ],
