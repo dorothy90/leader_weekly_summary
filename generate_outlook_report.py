@@ -34,10 +34,52 @@ CARD_BG = "#ffffff"
 PANEL_BG = "#f6f8fa"
 FONT = "'Malgun Gothic','맑은 고딕',Arial,Helvetica,sans-serif"
 
-SECTION_RE = re.compile(r"^\*\*\s*(\d+)\.\s*([^*]+?)\*\*\s*$", re.MULTILINE)
+TEAM_ORG_MAP = {
+    "EQUIP":   "DRAM PTE",
+    "PE":      "DRAM PTE",
+    "PROCESS": "NAND PTE",
+    "QA":      "DRAM SRT",
+    "TEST":    "NAND SRT",
+    "YIELD":   "직속",
+}
+ORG_ORDER = ["DRAM PTE", "NAND PTE", "DRAM SRT", "NAND SRT", "직속"]
+ORG_FALLBACK = "기타"
+
+
+def _team_org(team: str) -> str:
+    key = (team or "").strip().rstrip("팀").strip()
+    return TEAM_ORG_MAP.get(key, ORG_FALLBACK)
+
+SECTION_RE = re.compile(
+    r"^[ \t]*(?:#{1,6}[ \t]*)?"
+    r"\*{0,2}[ \t]*"
+    r"(\d+)[.)][ \t]*"
+    r"\*{0,2}[ \t]*"
+    r"([^\n*#][^\n*]*?)"
+    r"[ \t]*\*{0,2}[ \t]*:?[ \t]*$",
+    re.MULTILINE,
+)
 BULLET_RE = re.compile(r"^-\s+(.*)")
 BOLD_LABEL_RE = re.compile(r"^\*\*([^*]+)\*\*\s*(?:[:：]|[\u2013\u2014\-])?\s*(.*)$", re.DOTALL)
 INLINE_BOLD_RE = re.compile(r"\*\*([^*]+)\*\*")
+MD_TABLE_SEP_RE = re.compile(r"^\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?\s*$")
+
+RISK_HEADER_ALIAS = {
+    "항목": "항목",
+    "리스크": "항목",
+    "리스크명": "항목",
+    "상세내용": "상세내용",
+    "상세 내용": "상세내용",
+    "상세": "상세내용",
+    "설명": "상세내용",
+    "영향도": "영향도",
+    "임팩트": "영향도",
+    "대응방안": "대응방안",
+    "대응 방안": "대응방안",
+    "대응": "대응방안",
+    "대응 필요 팀": "대응방안",
+    "대응팀": "대응방안",
+}
 
 
 def parse_frontmatter(text: str) -> tuple[dict, str]:
@@ -175,6 +217,59 @@ def render_team_table(bullets: list[str]) -> str:
     )
 
 
+def render_team_table_grouped(bullets: list[str]) -> str:
+    if not bullets:
+        return (
+            f'<tr><td style="padding:4px 28px 16px 28px; font-family:{FONT}; '
+            f'font-size:13px; color:{MUTED};">팀 데이터 없음</td></tr>'
+        )
+
+    grouped: dict[str, list[tuple[str, str, str]]] = {}
+    for b in bullets:
+        label, rest = split_labeled(b)
+        badge = label.removesuffix("팀") if label.endswith("팀") else (label or "팀")
+        org = _team_org(label or b)
+        grouped.setdefault(org, []).append((badge, rest or b, label))
+
+    ordered_orgs = [o for o in ORG_ORDER if o in grouped] + [
+        o for o in grouped if o not in ORG_ORDER
+    ]
+
+    blocks: list[str] = []
+    for gi, org in enumerate(ordered_orgs):
+        header_row = (
+            f'<tr><td colspan="2" style="padding:10px 0 6px 0; '
+            f'border-bottom:1px solid {BORDER}; color:{NAVY}; font-weight:bold; '
+            f'font-size:11px; letter-spacing:1px; text-transform:uppercase;">'
+            f'{esc_inline(org)}</td></tr>'
+        )
+        team_rows = []
+        for badge, rest, _label in grouped[org]:
+            team_rows.append(
+                f'<tr>'
+                f'<td width="90" valign="top" bgcolor="{NAVY}" '
+                f'style="width:90px; padding:10px 10px; background-color:{NAVY}; '
+                f'color:#ffffff; font-weight:bold; border:1px solid {NAVY};">{esc_inline(badge)}</td>'
+                f'<td valign="top" bgcolor="{CARD_BG}" '
+                f'style="padding:10px 12px; background-color:{CARD_BG}; '
+                f'border:1px solid {BORDER}; color:{INK};">{esc_inline(rest)}</td>'
+                f'</tr>'
+            )
+        blocks.append(header_row + "".join(team_rows))
+        if gi < len(ordered_orgs) - 1:
+            blocks.append(
+                '<tr><td colspan="2" style="font-size:1px; line-height:10px;">&nbsp;</td></tr>'
+            )
+
+    return (
+        f'<tr><td style="padding:4px 28px 16px 28px;">'
+        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
+        f'style="border-collapse:collapse; font-family:{FONT}; font-size:13px; line-height:19px;">'
+        f'{"".join(blocks)}'
+        f'</table></td></tr>'
+    )
+
+
 def render_boxes(bullets: list[str], accent: str, bg: str, text_color: str) -> str:
     rows: list[str] = []
     for i, b in enumerate(bullets):
@@ -204,23 +299,240 @@ def render_boxes(bullets: list[str], accent: str, bg: str, text_color: str) -> s
     )
 
 
+CROSS_GROUP_HEADER_RE = re.compile(
+    r"^\s*#{2,4}\s*"
+    r"(?:[①②③④⑤⑥⑦⑧⑨⑩]\s*)?"
+    r"\**\s*"
+    r"(?P<title>[^(\n#][^(\n]*?)"
+    r"\s*\**\s*"
+    r"(?:\(\s*(?P<teams>[^)]+?)\s*\))?\s*$"
+)
+CROSS_TEAM_SPLIT_RE = re.compile(r"\s*(?:<->|↔|⇄|⟷|,)\s*")
+SUMMARY_KEYS = {"종합", "요약", "Summary", "summary", "정리"}
+
+
+def parse_cross_team_groups(body: str) -> list[dict]:
+    groups: list[dict] = []
+    current: dict | None = None
+    for raw in body.split("\n"):
+        line = raw.rstrip()
+        if not line.strip():
+            continue
+        header_match = (
+            CROSS_GROUP_HEADER_RE.match(line)
+            if line.lstrip().startswith("#")
+            else None
+        )
+        if header_match:
+            if current is not None:
+                groups.append(current)
+            teams_raw = header_match.group("teams") or ""
+            teams = [t.strip() for t in CROSS_TEAM_SPLIT_RE.split(teams_raw) if t.strip()]
+            current = {
+                "title": header_match.group("title").strip().strip("*").strip(),
+                "related_teams": teams,
+                "entries": [],
+                "summary": "",
+            }
+            continue
+        m = BULLET_RE.match(line.strip())
+        if m and current is not None:
+            content = m.group(1).strip()
+            label, rest = split_labeled(content)
+            if label in SUMMARY_KEYS:
+                current["summary"] = rest or content
+                continue
+            stripped = content.lstrip("*").strip()
+            for key in SUMMARY_KEYS:
+                if stripped.startswith(key):
+                    after = stripped[len(key):].lstrip(" *:：—–-").strip()
+                    if after:
+                        current["summary"] = after
+                        break
+            else:
+                if label:
+                    current["entries"].append({"team": label, "content": rest})
+                else:
+                    current["entries"].append({"team": "", "content": content})
+                continue
+    if current is not None:
+        groups.append(current)
+    return [g for g in groups if g["entries"] or g["summary"]]
+
+
+def render_cross_team_groups(groups: list[dict]) -> str:
+    blocks: list[str] = []
+    for gi, g in enumerate(groups):
+        pills = ""
+        if g["related_teams"]:
+            pills_text = " · ".join(esc_inline(t) for t in g["related_teams"])
+            pills = (
+                f' <span style="color:{MUTED}; font-weight:normal; '
+                f'font-size:11px;">({pills_text})</span>'
+            )
+        title_row = (
+            f'<tr><td style="padding:6px 12px; background-color:{YELLOW_BG}; '
+            f'border-left:3px solid {YELLOW}; color:{YELLOW_TEXT}; '
+            f'font-weight:bold;">{esc_inline(g["title"])}{pills}</td></tr>'
+        )
+        entry_rows: list[str] = []
+        for e in g["entries"]:
+            team = esc_inline(e.get("team", ""))
+            content = esc_inline(e.get("content", ""))
+            team_chip = (
+                f'<b style="color:{YELLOW_TEXT};">{team}</b> &middot; '
+                if team else ""
+            )
+            entry_rows.append(
+                f'<tr><td style="padding:6px 12px 6px 18px; '
+                f'background-color:{CARD_BG}; border-left:3px solid {YELLOW}; '
+                f'color:{INK};">{team_chip}{content}</td></tr>'
+            )
+        summary_row = ""
+        if g["summary"]:
+            summary_row = (
+                f'<tr><td style="padding:8px 12px; background-color:{PANEL_BG}; '
+                f'border-left:3px solid {NAVY}; color:{INK};">'
+                f'<b style="color:{NAVY};">종합 &middot; </b>'
+                f'{esc_inline(g["summary"])}</td></tr>'
+            )
+        blocks.append(title_row + "".join(entry_rows) + summary_row)
+        if gi < len(groups) - 1:
+            blocks.append(
+                '<tr><td style="font-size:1px; line-height:10px;">&nbsp;</td></tr>'
+            )
+    return (
+        f'<tr><td style="padding:4px 28px 16px 28px;">'
+        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
+        f'style="border-collapse:collapse; font-family:{FONT}; font-size:13px; '
+        f'line-height:20px; color:{INK};">'
+        f'{"".join(blocks)}'
+        f'</table></td></tr>'
+    )
+
+
+def parse_table_cells(line: str) -> list[str]:
+    s = line.strip()
+    if s.startswith("|"):
+        s = s[1:]
+    if s.endswith("|"):
+        s = s[:-1]
+    return [c.strip().strip("*").strip() for c in s.split("|")]
+
+
+def parse_risk_table(body: str) -> list[dict]:
+    lines = [ln for ln in body.split("\n") if ln.strip()]
+    rows: list[dict] = []
+    i = 0
+    while i < len(lines) - 1:
+        if lines[i].lstrip().startswith("|") and MD_TABLE_SEP_RE.match(lines[i + 1].strip()):
+            header = parse_table_cells(lines[i])
+            j = i + 2
+            while j < len(lines) and lines[j].lstrip().startswith("|"):
+                cells = parse_table_cells(lines[j])
+                if len(cells) == len(header):
+                    row = {"항목": "", "상세내용": "", "영향도": "", "대응방안": ""}
+                    for k, v in zip(header, cells):
+                        canonical = RISK_HEADER_ALIAS.get(k.strip())
+                        if canonical:
+                            row[canonical] = v.strip()
+                    rows.append(row)
+                j += 1
+            break
+        i += 1
+    return rows
+
+
+def render_risks_table(rows: list[dict]) -> str:
+    valid = [r for r in rows if any(v.strip() for v in r.values())]
+    if not valid:
+        return (
+            f'<tr><td style="padding:4px 28px 16px 28px; font-family:{FONT}; '
+            f'font-size:13px; color:{MUTED};">리스크 없음</td></tr>'
+        )
+    header_cell_style = (
+        f"padding:8px 10px; background-color:{RED_BG}; border:1px solid {BORDER}; "
+        f"color:{RED_TEXT}; font-weight:bold; font-size:12px;"
+    )
+    body_cell_style_primary = (
+        f"padding:8px 10px; background-color:{CARD_BG}; border:1px solid {BORDER}; "
+        f"font-weight:bold; color:{INK};"
+    )
+    body_cell_style = (
+        f"padding:8px 10px; background-color:{CARD_BG}; border:1px solid {BORDER}; "
+        f"color:{INK};"
+    )
+    header_row = (
+        f'<tr bgcolor="{RED_BG}">'
+        f'<th align="left" bgcolor="{RED_BG}" width="20%" style="width:20%; {header_cell_style}">항목</th>'
+        f'<th align="left" bgcolor="{RED_BG}" width="30%" style="width:30%; {header_cell_style}">상세내용</th>'
+        f'<th align="left" bgcolor="{RED_BG}" width="22%" style="width:22%; {header_cell_style}">영향도</th>'
+        f'<th align="left" bgcolor="{RED_BG}" width="28%" style="width:28%; {header_cell_style}">대응방안</th>'
+        f'</tr>'
+    )
+    body_rows = "".join(
+        f'<tr>'
+        f'<td valign="top" bgcolor="{CARD_BG}" style="{body_cell_style_primary}">{esc_inline(r.get("항목") or "—")}</td>'
+        f'<td valign="top" bgcolor="{CARD_BG}" style="{body_cell_style}">{esc_inline(r.get("상세내용") or "—")}</td>'
+        f'<td valign="top" bgcolor="{CARD_BG}" style="{body_cell_style}">{esc_inline(r.get("영향도") or "—")}</td>'
+        f'<td valign="top" bgcolor="{CARD_BG}" style="{body_cell_style}">{esc_inline(r.get("대응방안") or "—")}</td>'
+        f'</tr>'
+        for r in valid
+    )
+    return (
+        f'<tr><td style="padding:4px 28px 16px 28px;">'
+        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
+        f'style="border-collapse:collapse; font-family:{FONT}; font-size:13px; line-height:19px;">'
+        f'{header_row}'
+        f'{body_rows}'
+        f'</table></td></tr>'
+    )
+
+
+RECO_BG = "#eef3f9"
+
 SECTION_STYLES = {
     1: ("bullets", NAVY),
-    2: ("teams", NAVY),
-    3: ("boxes", YELLOW, YELLOW_BG, YELLOW_TEXT),
-    4: ("boxes", RED, RED_BG, RED_TEXT),
+    2: ("teams_grouped", NAVY),
+    3: ("cross_groups", YELLOW, YELLOW_BG, YELLOW_TEXT),
+    4: ("risks_table", RED),
+    5: ("boxes", NAVY, RECO_BG, NAVY),
 }
 
 
-def render_section(num: int, title: str, bullets: list[str]) -> str:
+def render_section(num: int, title: str, content: str) -> str:
     style = SECTION_STYLES.get(num, ("bullets", NAVY))
     kind = style[0]
     accent = style[1]
+
+    if kind == "risks_table":
+        rows = parse_risk_table(content)
+        if rows:
+            return section_header(num, title, accent) + render_risks_table(rows)
+        bullets = parse_bullets(content)
+        return (
+            section_header(num, title, accent)
+            + render_boxes(bullets, RED, RED_BG, RED_TEXT)
+        )
+
+    if kind == "cross_groups":
+        groups = parse_cross_team_groups(content)
+        if groups:
+            return section_header(num, title, accent) + render_cross_team_groups(groups)
+        bullets = parse_bullets(content)
+        return (
+            section_header(num, title, accent)
+            + render_boxes(bullets, style[1], style[2], style[3])
+        )
+
+    bullets = parse_bullets(content)
     parts = [section_header(num, title, accent)]
     if kind == "bullets":
         parts.append(render_bullet_list(bullets))
     elif kind == "teams":
         parts.append(render_team_table(bullets))
+    elif kind == "teams_grouped":
+        parts.append(render_team_table_grouped(bullets))
     elif kind == "boxes":
         parts.append(render_boxes(bullets, style[1], style[2], style[3]))
     return "".join(parts)
@@ -257,7 +569,7 @@ def render_html(meta: dict, sections: list[tuple[int, str, str]]) -> str:
             preheader = first_bullets[0][:140]
 
     body_rows = "".join(
-        render_section(num, title, parse_bullets(content))
+        render_section(num, title, content)
         for num, title, content in sections
     )
 

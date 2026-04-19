@@ -30,8 +30,7 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "")
 EMBEDDING_MODEL = "qwen/qwen3-embedding-8b"
 EMBEDDING_DIMENSION = 4096
-LLM_MODEL = "z-ai/glm-4.7"
-# LLM_MODEL = os.getenv("LLM_MODEL", "gpt-oss-120b")
+LLM_MODEL = "z-ai/glm-5"
 
 SOURCE_INDEX = os.getenv("OPENSEARCH_INDEX", "weekly_mail")
 WIKI_INDEX = "wiki_summaries"
@@ -231,24 +230,30 @@ def fetch_all_chunks_for_week(
 
 
 # ========== LLM 요약 생성 ==========
-MAX_CHARS_PER_CALL = 150000
-CHUNK_CHAR_SIZE = 30000
-CHUNK_OVERLAP = 2000
+def generate_team_week_summary(team: str, week: str, chunks: List[Dict]) -> str:
+    """팀-주차 wiki 요약 생성"""
+    if not chunks:
+        return ""
 
-TEAM_WEEK_SYSTEM_PROMPT = """당신은 반도체 주간 업무 보고서 요약 전문가입니다.
+    combined_text = "\n\n---\n\n".join([c["text"] for c in chunks])
+    # 토큰 제한을 위해 자름
+    if len(combined_text) > 30000:
+        combined_text = combined_text[:30000] + "\n\n... (이하 생략)"
 
-주차 형식: YYYY-WW (예: 2026-02 = 2026년 제2주차, 월이 아님)
+    client = OpenAI(api_key=OPENROUTER_API_KEY, base_url=OPENROUTER_BASE_URL)
 
-작성 원칙:
+    system_prompt = """당신은 반도체 주간 업무 보고서 요약 전문가입니다.
+
+## 주차 형식:
+- YYYY-WW (예: 2026-02 = 2026년 제2주차, 월이 아님!)
+
+## 작성 원칙:
 1. 원본 메일 내용만 기반으로 요약 (추측 금지)
-2. 핵심 이슈, 진행 상황, 수치 중심
+2. 핵심 이슈, 진행 상황, 수치를 중심으로 정리
 3. 기술 용어는 그대로 유지
-4. 간결하고 구조화된 형태
+4. 간결하고 구조화된 형태로 작성
 
-출력 형식 — 아래 예시의 구조를 한 글자도 바꾸지 말고 그대로 복제하세요.
-섹션 헤더는 반드시 `**숫자. 제목**` 형식이며, `#`, `##`, `###` 같은 markdown heading을 사용해서는 안 됩니다.
-불릿은 `- ` 로만 시작합니다. 단 섹션 3은 예시의 마크다운 표 형식 그대로 출력합니다.
-
+## 출력 형식:
 1. 핵심 요약 (3줄 이내)
 - 이번 주 가장 중요한 내용을 압축
 
@@ -257,81 +262,29 @@ TEAM_WEEK_SYSTEM_PROMPT = """당신은 반도체 주간 업무 보고서 요약 
 - 수치, 결과가 있으면 반드시 포함
 
 3. 이슈 & 리스크
-| 항목 | 상세내용 | 영향도 | 대응방안 |
-|------|---------|--------|---------|
-| Procyon P6 일정 지연 | 완료 일정 26년 2월 → 7월로 5개월 지연 확정, CS 일정 26년 12월 | 양산 이관 전체 일정 영향 | EPM PCSA 개선, Edge 수율 개선 가속화 |
-(반드시 위 4개 컬럼 유지. **영향도는 '상/중/하' 같은 레이블이 아니라 어떤 대상(일정·양산·수율·품질 등)에 어떻게 영향을 주는지 구체적으로 서술**, 숫자/기간/대상 포함. 원본에 없는 값은 `—`로. 리스크가 없으면 표 없이 `- 해당 없음` 한 줄.)
+- 문제점, 지연 사항, 주의 필요 항목
 
 4. 핵심 키워드
-- 이 주차의 핵심 기술 프로젝트 키워드 5~10개 (쉼표 구분)"""
-
-
-def _sliding_split(text: str, size: int, overlap: int) -> List[str]:
-    step = size - overlap
-    parts: List[str] = []
-    start = 0
-    n = len(text)
-    while start < n:
-        parts.append(text[start:start + size])
-        if start + size >= n:
-            break
-        start += step
-    return parts
-
-
-def _call_team_week_llm(team: str, week: str, text: str) -> str:
-    client = OpenAI(
-        api_key=OPENROUTER_API_KEY,
-        base_url=OPENROUTER_BASE_URL,
-        timeout=120.0,
-    )
+- 이 주차의 핵심 기술/프로젝트 키워드 5~10개 (쉼표 구분)"""
 
     user_prompt = f"""[{team}] {week} 주차 보고서를 요약해주세요.
 
 --- 원본 내용 ---
-{text}
+{combined_text}
 --- 끝 ---
 
 위 내용을 바탕으로 구조화된 요약을 작성하세요."""
 
-    try:
-        response = client.chat.completions.create(
-            model=LLM_MODEL,
-            messages=[
-                {"role": "system", "content": TEAM_WEEK_SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0.2,
-            max_tokens=4000,
-        )
-    except Exception as exc:
-        print(f"   [LLM error] team={team} chars={len(text)}: {type(exc).__name__}: {exc}")
-        return ""
-
-    content = response.choices[0].message.content or ""
-    if not content.strip():
-        finish = getattr(response.choices[0], "finish_reason", "?")
-        print(f"   [empty LLM response] team={team} chars={len(text)} finish_reason={finish}")
-    return content
-
-
-def generate_team_week_summary(team: str, week: str, chunks: List[Dict]) -> str:
-    """팀-주차 wiki 요약 생성"""
-    if not chunks:
-        return ""
-
-    combined_text = "\n\n---\n\n".join([c["text"] for c in chunks])
-
-    if len(combined_text) <= MAX_CHARS_PER_CALL:
-        return _call_team_week_llm(team, week, combined_text)
-
-    parts = _sliding_split(combined_text, CHUNK_CHAR_SIZE, CHUNK_OVERLAP)
-    print(
-        f"   [sliding split] team={team}, chunks={len(chunks)}, "
-        f"combined_chars={len(combined_text)}, parts={len(parts)}"
+    response = client.chat.completions.create(
+        model=LLM_MODEL,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        temperature=0.2,
+        
     )
-    summaries = [_call_team_week_llm(team, week, part) for part in parts]
-    return "\n\n".join(summaries)
+    return response.choices[0].message.content
 
 
 def generate_weekly_overview(week: str, team_summaries: Dict[str, str]) -> str:
@@ -343,48 +296,27 @@ def generate_weekly_overview(week: str, team_summaries: Dict[str, str]) -> str:
     for team, summary in team_summaries.items():
         summaries_text += f"\n=== {team} ===\n{summary}\n"
 
-    client = OpenAI(
-        api_key=OPENROUTER_API_KEY,
-        base_url=OPENROUTER_BASE_URL,
-        timeout=120.0,
-    )
+    client = OpenAI(api_key=OPENROUTER_API_KEY, base_url=OPENROUTER_BASE_URL)
 
     system_prompt = """당신은 반도체 조직의 주간 업무 현황을 종합하는 전문가입니다.
 
-작성 원칙:
-1. 각 팀 요약을 바탕으로 조직 전체 관점에서 종합
-2. 팀 간 연관 이슈가 있으면 크로스 레퍼런스, 여러 팀에 걸친 공통 공통 이슈나 연관 사항
-3. 조직 차원의 핵심 이슈와 리스크 도출
+## 작성 원칙:
+1. 각 팀의 요약을 바탕으로 조직 전체 관점에서 종합
+2. 팀 간 연관된 이슈가 있으면 크로스 레퍼런스
+3. 조직 차원의 핵심 이슈와 리스크를 도출
 
-출력 형식 — 아래 예시의 구조를 한 글자도 바꾸지 말고 그대로 복제하세요.
-섹션 헤더는 반드시 `**숫자. 제목**` 형식이며, `#`, `##`, `###` 같은 markdown heading을 사용해서는 안 됩니다.
-불릿은 `- ` 로만 시작하고, 제목과 설명 사이 구분자는 `: ` 를 사용합니다. 단 섹션 4는 예시의 마크다운 표 형식 그대로 출력합니다.
-팀명/이슈명/리스크명은 반드시 `**...**` 로 볼드 처리합니다.
-
-예시:
-**1. 이번 주 조직 핵심 (3줄)**
+## 출력 형식:
+1. 이번 주 조직 핵심 (3줄)
 - 가장 중요한 조직 차원 이슈
 
-**2. 팀별 하이라이트**
+2. 팀별 하이라이트
 - 팀명: 한 줄 핵심 (팀당 1줄)
 
-**3. 크로스팀 이슈**
-### 이슈 제목 (관련팀A <-> 관련팀B <-> 관련팀C)
-- 관련팀A: 해당 팀 관점의 상세 내용 (수치/기간 포함)
-- 관련팀B: 해당 팀 관점의 상세 내용
-- 관련팀C: 해당 팀 관점의 상세 내용
-- 종합: 조직 차원의 해석과 필요 액션 (개별 팀 bullet에 이미 있는 문장을 반복하지 말 것)
+3. 크로스팀 이슈
+- 여러 팀에 걸친 공통 이슈나 연관 사항
 
-(여러 이슈가 있으면 `###` 블록을 반복. 각 블록은 반드시 `### 소제목 (팀 <-> 팀)` + 관련 팀별 bullet + 마지막에 `- 종합: ...` bullet 순서.)
-
-**4. 주요 리스크 항목**
-| 항목 | 상세내용 | 영향도 | 대응방안 |
-|------|---------|--------|---------|
-| Procyon P6 일정 지연 | 완료 일정 26년 2월 → 7월로 5개월 지연 확정, CS 일정 26년 12월 | 양산 이관 전체 일정 영향 | EPM PCSA 개선, Edge 수율 개선 가속화 |
-(반드시 위 4개 컬럼을 그대로 유지. **영향도는 '상/중/하' 같은 레이블이 아니라 해당 리스크가 실제로 어디에 어떤 영향을 주는지를 구체적으로 서술**. 숫자/기간/대상(양산·일정·품질 등)을 포함. 모르면 `—`로.)
-
-**5. 조직 차원 권고사항**
-- 권고명: 이번 주차 데이터에 근거한 조직 차원 실행 권고 (리스크 대응과 구분되는 상위 차원)"""
+4. 주요 리스크
+- 조직 차원에서 주의 필요한 항목"""
 
     user_prompt = f"""{week} 주차 전체 팀 현황을 종합해주세요.
 
@@ -392,37 +324,16 @@ def generate_weekly_overview(week: str, team_summaries: Dict[str, str]) -> str:
 
 위 각 팀 요약을 바탕으로 조직 전체 관점의 종합 요약을 작성하세요."""
 
-    try:
-        response = client.chat.completions.create(
-            model=LLM_MODEL,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0.2,
-            max_tokens=8000,
-        )
-    except Exception as exc:
-        print(
-            f"   [overview LLM error] week={week} chars={len(summaries_text)}: "
-            f"{type(exc).__name__}: {exc}"
-        )
-        return ""
-
-    choice = response.choices[0]
-    content = choice.message.content or ""
-    finish = getattr(choice, "finish_reason", "?")
-    if not content.strip():
-        print(
-            f"   [overview empty] week={week} chars={len(summaries_text)} "
-            f"finish_reason={finish}"
-        )
-    elif finish != "stop":
-        print(
-            f"   [overview truncated] week={week} chars={len(summaries_text)} "
-            f"finish_reason={finish} output_chars={len(content)}"
-        )
-    return content
+    response = client.chat.completions.create(
+        model=LLM_MODEL,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        temperature=0.2,
+        
+    )
+    return response.choices[0].message.content
 
 
 # ========== Wiki 문서 저장 ==========
@@ -617,7 +528,7 @@ def verify_answer_grounding(question: str, answer: str, source_chunks: str) -> b
 
 판단 기준:
 - 답변의 핵심 내용이 소스 문서에서 확인 가능하면 APPROVE
-- 소스 문서에 없는 내용을 만들어냈거나, 핵심 사실이 틀리면 REJECT
+- 소스 문서에 없는 내용을 만들어냈거나, 핵심 사실이 틀리면 REJECT30
 
 APPROVE 또는 REJECT 한 단어만 출력하세요.""",
                 },

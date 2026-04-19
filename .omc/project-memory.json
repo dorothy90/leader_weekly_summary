@@ -141,22 +141,40 @@
   },
   "hotPaths": [
     {
-      "path": "wiki/overview/2026-11_전체요약.html",
-      "accessCount": 3,
-      "lastAccessed": 1776470930518,
+      "path": "generate_stitch_report.py",
+      "accessCount": 36,
+      "lastAccessed": 1776604809912,
       "type": "file"
     },
     {
-      "path": "generate_stitch_report.py",
-      "accessCount": 2,
-      "lastAccessed": 1776174852245,
+      "path": "generate_outlook_report.py",
+      "accessCount": 14,
+      "lastAccessed": 1776604864944,
       "type": "file"
     },
     {
       "path": "",
-      "accessCount": 2,
-      "lastAccessed": 1776470384122,
+      "accessCount": 5,
+      "lastAccessed": 1776592635657,
       "type": "directory"
+    },
+    {
+      "path": "wiki/overview/2026-11_전체요약.html",
+      "accessCount": 4,
+      "lastAccessed": 1776583800565,
+      "type": "file"
+    },
+    {
+      "path": "wiki/overview/2026-11_전체요약.md",
+      "accessCount": 4,
+      "lastAccessed": 1776593570343,
+      "type": "file"
+    },
+    {
+      "path": "output/stitch_2026-11_20260412_211929.html",
+      "accessCount": 2,
+      "lastAccessed": 1776584077671,
+      "type": "file"
     },
     {
       "path": "wiki/overview/_outlook_test_2026-11.html",
@@ -165,9 +183,21 @@
       "type": "file"
     },
     {
-      "path": "generate_outlook_report.py",
+      "path": "output/layer3_v2_2025-48_20260211_204002.md",
       "accessCount": 1,
-      "lastAccessed": 1776471326510,
+      "lastAccessed": 1776584069470,
+      "type": "file"
+    },
+    {
+      "path": "summarize_chunks.py",
+      "accessCount": 1,
+      "lastAccessed": 1776585733584,
+      "type": "file"
+    },
+    {
+      "path": "wiki_export.py",
+      "accessCount": 1,
+      "lastAccessed": 1776592667576,
       "type": "file"
     }
   ],
