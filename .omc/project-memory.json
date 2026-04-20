@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "lastScanned": 1776573214891,
+  "lastScanned": 1776696754362,
   "projectRoot": "/Users/daehwankim/Documents/weekly_mail_agent",
   "techStack": {
     "languages": [
@@ -48,8 +48,8 @@
     "__pycache__": {
       "path": "__pycache__",
       "purpose": null,
-      "fileCount": 18,
-      "lastAccessed": 1776573214878,
+      "fileCount": 19,
+      "lastAccessed": 1776696754347,
       "keyFiles": [
         "deep_mining_ppt.cpython-313.pyc",
         "deep_mining_schemas.cpython-313.pyc",
@@ -62,7 +62,7 @@
       "path": "chroma_db",
       "purpose": null,
       "fileCount": 1,
-      "lastAccessed": 1776573214878,
+      "lastAccessed": 1776696754348,
       "keyFiles": [
         "chroma.sqlite3"
       ]
@@ -71,21 +71,21 @@
       "path": "data",
       "purpose": "Data files",
       "fileCount": 1,
-      "lastAccessed": 1776573214879,
+      "lastAccessed": 1776696754348,
       "keyFiles": []
     },
     "exports": {
       "path": "exports",
       "purpose": null,
       "fileCount": 0,
-      "lastAccessed": 1776573214879,
+      "lastAccessed": 1776696754349,
       "keyFiles": []
     },
     "mail": {
       "path": "mail",
       "purpose": null,
       "fileCount": 13,
-      "lastAccessed": 1776573214879,
+      "lastAccessed": 1776696754349,
       "keyFiles": [
         "2025-48_베네피아_mail_001.html",
         "2026-13_UNKNOWN_mail_0324_074705_0cf774b5.html",
@@ -97,8 +97,8 @@
     "output": {
       "path": "output",
       "purpose": null,
-      "fileCount": 167,
-      "lastAccessed": 1776573214879,
+      "fileCount": 177,
+      "lastAccessed": 1776696754350,
       "keyFiles": [
         "layer1_2025-48_20260103_220904.md",
         "layer1_2025-48_20260103_221450.md",
@@ -111,7 +111,7 @@
       "path": "pptdaddy",
       "purpose": null,
       "fileCount": 10,
-      "lastAccessed": 1776573214880,
+      "lastAccessed": 1776696754351,
       "keyFiles": [
         "CLAUDE.md",
         "INSTALL.md",
@@ -124,7 +124,7 @@
       "path": "themes",
       "purpose": null,
       "fileCount": 1,
-      "lastAccessed": 1776573214880,
+      "lastAccessed": 1776696754351,
       "keyFiles": [
         "default.json"
       ]
@@ -133,7 +133,7 @@
       "path": "wiki",
       "purpose": null,
       "fileCount": 2,
-      "lastAccessed": 1776573214880,
+      "lastAccessed": 1776696754351,
       "keyFiles": [
         "index.md"
       ]
@@ -142,20 +142,20 @@
   "hotPaths": [
     {
       "path": "generate_stitch_report.py",
-      "accessCount": 36,
-      "lastAccessed": 1776604809912,
+      "accessCount": 45,
+      "lastAccessed": 1776698077082,
       "type": "file"
     },
     {
       "path": "generate_outlook_report.py",
-      "accessCount": 14,
-      "lastAccessed": 1776604864944,
+      "accessCount": 28,
+      "lastAccessed": 1776698122981,
       "type": "file"
     },
     {
       "path": "",
-      "accessCount": 5,
-      "lastAccessed": 1776592635657,
+      "accessCount": 7,
+      "lastAccessed": 1776697171036,
       "type": "directory"
     },
     {
@@ -174,6 +174,12 @@
       "path": "output/stitch_2026-11_20260412_211929.html",
       "accessCount": 2,
       "lastAccessed": 1776584077671,
+      "type": "file"
+    },
+    {
+      "path": "pyproject.toml",
+      "accessCount": 2,
+      "lastAccessed": 1776697163016,
       "type": "file"
     },
     {
@@ -199,6 +205,24 @@
       "accessCount": 1,
       "lastAccessed": 1776592667576,
       "type": "file"
+    },
+    {
+      "path": "rag_api_opensearch_v3.py",
+      "accessCount": 1,
+      "lastAccessed": 1776696852204,
+      "type": "file"
+    },
+    {
+      "path": "rag_api.py",
+      "accessCount": 1,
+      "lastAccessed": 1776696852333,
+      "type": "file"
+    },
+    {
+      "path": "wiki/overview",
+      "accessCount": 1,
+      "lastAccessed": 1776697181091,
+      "type": "directory"
     }
   ],
   "userDirectives": []
