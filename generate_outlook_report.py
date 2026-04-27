@@ -309,6 +309,32 @@ CROSS_GROUP_HEADER_RE = re.compile(
 )
 CROSS_TEAM_SPLIT_RE = re.compile(r"\s*(?:<->|↔|⇄|⟷|,)\s*")
 SUMMARY_KEYS = {"종합", "요약", "Summary", "summary", "정리"}
+STATUS_KEYS = {"상태"}
+STATUS_CONT_RE = re.compile(
+    r"계속\s*\(\s*(?P<first>\d{4}-\d{2})\s*부터\s*(?P<n>\d+)\s*주\s*연속\s*\)"
+)
+
+STATUS_NEW_BG = "#e6f4ea"
+STATUS_NEW_TEXT = "#1e6f3b"
+STATUS_CONT_BG = "#fff1e6"
+STATUS_CONT_TEXT = "#92400e"
+
+
+def parse_status_label(status_raw: str) -> dict | None:
+    s = (status_raw or "").strip()
+    if not s:
+        return None
+    if s.startswith("신규"):
+        return {"kind": "신규", "label": "신규"}
+    m = STATUS_CONT_RE.search(s)
+    if m:
+        return {
+            "kind": "계속",
+            "first": m.group("first"),
+            "n": int(m.group("n")),
+            "label": f"계속 · {m.group('first')}~ · {m.group('n')}주",
+        }
+    return {"kind": "계속", "label": s}
 
 
 def parse_cross_team_groups(body: str) -> list[dict]:
@@ -333,28 +359,44 @@ def parse_cross_team_groups(body: str) -> list[dict]:
                 "related_teams": teams,
                 "entries": [],
                 "summary": "",
+                "status": None,
             }
             continue
         m = BULLET_RE.match(line.strip())
         if m and current is not None:
             content = m.group(1).strip()
             label, rest = split_labeled(content)
+            if label in STATUS_KEYS:
+                current["status"] = parse_status_label(rest or content)
+                continue
             if label in SUMMARY_KEYS:
                 current["summary"] = rest or content
                 continue
             stripped = content.lstrip("*").strip()
+            matched_status = False
+            for key in STATUS_KEYS:
+                if stripped.startswith(key):
+                    after = stripped[len(key):].lstrip(" *:：—–-").strip()
+                    current["status"] = parse_status_label(after)
+                    matched_status = True
+                    break
+            if matched_status:
+                continue
+            matched_summary = False
             for key in SUMMARY_KEYS:
                 if stripped.startswith(key):
                     after = stripped[len(key):].lstrip(" *:：—–-").strip()
                     if after:
                         current["summary"] = after
+                        matched_summary = True
                         break
-            else:
-                if label:
-                    current["entries"].append({"team": label, "content": rest})
-                else:
-                    current["entries"].append({"team": "", "content": content})
+            if matched_summary:
                 continue
+            if label:
+                current["entries"].append({"team": label, "content": rest})
+            else:
+                current["entries"].append({"team": "", "content": content})
+            continue
     if current is not None:
         groups.append(current)
     return [g for g in groups if g["entries"] or g["summary"]]
@@ -370,10 +412,23 @@ def render_cross_team_groups(groups: list[dict]) -> str:
                 f' <span style="color:{MUTED}; font-weight:normal; '
                 f'font-size:11px;">({pills_text})</span>'
             )
+        status_badge = ""
+        status = g.get("status")
+        if status:
+            if status.get("kind") == "신규":
+                badge_bg, badge_text = STATUS_NEW_BG, STATUS_NEW_TEXT
+            else:
+                badge_bg, badge_text = STATUS_CONT_BG, STATUS_CONT_TEXT
+            status_badge = (
+                f' <span style="display:inline-block; padding:1px 7px; '
+                f'border-radius:10px; background-color:{badge_bg}; '
+                f'color:{badge_text}; font-size:11px; font-weight:bold;">'
+                f'{esc_inline(status.get("label", ""))}</span>'
+            )
         title_row = (
             f'<tr><td style="padding:6px 12px; background-color:{YELLOW_BG}; '
             f'border-left:3px solid {YELLOW}; color:{YELLOW_TEXT}; '
-            f'font-weight:bold;">{esc_inline(g["title"])}{pills}</td></tr>'
+            f'font-weight:bold;">{esc_inline(g["title"])}{status_badge}{pills}</td></tr>'
         )
         entry_rows: list[str] = []
         for e in g["entries"]:

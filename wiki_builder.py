@@ -7,15 +7,23 @@ Wiki Builder: OpenSearch wiki_summaries 인덱스 생성 및 백필
 
 import os
 import json
+import re
 import argparse
 import time
 from pathlib import Path
-from typing import List, Dict, Optional
-from datetime import datetime
+from typing import List, Dict, Optional, Tuple
+from datetime import datetime, date, timedelta
 
 from opensearchpy import OpenSearch, helpers
 from openai import OpenAI
 from dotenv import load_dotenv
+from pydantic import BaseModel, Field
+
+try:
+    from langchain_openai import ChatOpenAI
+    _LANGCHAIN_AVAILABLE = True
+except ImportError:
+    _LANGCHAIN_AVAILABLE = False
 
 load_dotenv()
 
@@ -425,6 +433,379 @@ def generate_weekly_overview(week: str, team_summaries: Dict[str, str]) -> str:
     return content
 
 
+# ========== 크로스팀 이슈 상태 어노테이션 ==========
+# canonical regex copy: generate_outlook_report.py:302, generate_stitch_report.py:72
+LOOKBACK_WEEKS = 4
+SIMILARITY_FLOOR = 0.7
+
+_SECTION_RE = re.compile(
+    r"\*\*(\d+)\.\s*([^\*]+?)\*\*\s*(.*?)(?=\n\*\*\d+\.|\Z)",
+    re.DOTALL,
+)
+_CROSS_GROUP_HEADER_RE = re.compile(
+    r"^\s*#{2,4}\s*"
+    r"(?:[①②③④⑤⑥⑦⑧⑨⑩]\s*)?"
+    r"\**\s*"
+    r"(?P<title>[^(\n#][^(\n]*?)"
+    r"\s*\**\s*"
+    r"(?:\(\s*(?P<teams>[^)]+?)\s*\))?\s*$"
+)
+_CROSS_TEAM_SPLIT_RE = re.compile(r"\s*(?:<->|↔|⇄|⟷|,)\s*")
+_BULLET_RE = re.compile(r"^\s*-\s+(.*)$")
+_STATUS_CONT_RE = re.compile(
+    r"계속\s*\(\s*(?P<first>\d{4}-\d{2})\s*부터\s*(?P<n>\d+)\s*주\s*연속\s*\)"
+)
+
+_past_issue_embedding_cache: Dict[Tuple[str, str], List[float]] = {}
+
+
+class IssueMatchVerdict(BaseModel):
+    is_continuation: bool = Field(
+        description="두 이슈가 동일한 사안이 주차를 넘어 이어지는 경우만 true. 주제가 겹쳐도 원인/범위가 다르면 false."
+    )
+    reasoning: str = Field(description="한 문장 근거")
+
+
+def prev_iso_weeks(week: str, n: int) -> List[str]:
+    """`2026-11` → [`2026-10`, `2026-09`, ...] (최근→과거 순). 연도 경계 처리 포함."""
+    year_s, wk_s = week.split("-")
+    year, wk = int(year_s), int(wk_s)
+    monday = date.fromisocalendar(year, wk, 1)
+    out: List[str] = []
+    for i in range(1, n + 1):
+        d = monday - timedelta(weeks=i)
+        iso = d.isocalendar()
+        out.append(f"{iso.year:04d}-{iso.week:02d}")
+    return out
+
+
+def _extract_section_3(overview_md: str) -> Optional[str]:
+    for m in _SECTION_RE.finditer(overview_md):
+        if m.group(1) == "3":
+            return m.group(3)
+    return None
+
+
+def _parse_existing_status(bullets: List[str]) -> Optional[Dict]:
+    """블록 내 `- 상태: ...` bullet 을 파싱. None | {"kind":"신규"} | {"kind":"계속","first":...,"n":...}"""
+    for b in bullets:
+        stripped = b.strip()
+        if stripped.startswith("상태"):
+            body = stripped[len("상태"):].lstrip(" :：").strip()
+            if body.startswith("신규"):
+                return {"kind": "신규"}
+            m = _STATUS_CONT_RE.search(body)
+            if m:
+                return {
+                    "kind": "계속",
+                    "first": m.group("first"),
+                    "n": int(m.group("n")),
+                }
+    return None
+
+
+def _parse_cross_team_issues(overview_md: str) -> List[Dict]:
+    """section 3 의 `###` 블록을 파싱. 반환: 각 블록 dict (title, teams, bullets, summary, existing_status, block_start, block_end)"""
+    section = _extract_section_3(overview_md)
+    if not section:
+        return []
+    lines = section.split("\n")
+    issues: List[Dict] = []
+    current: Optional[Dict] = None
+    for idx, raw in enumerate(lines):
+        line = raw.rstrip()
+        stripped = line.lstrip()
+        if stripped.startswith("#"):
+            header_match = _CROSS_GROUP_HEADER_RE.match(line)
+            if header_match:
+                if current is not None:
+                    current["block_end"] = idx
+                    current["existing_status"] = _parse_existing_status(current["bullets"])
+                    issues.append(current)
+                teams_raw = header_match.group("teams") or ""
+                teams = [
+                    t.strip().strip("*").strip()
+                    for t in _CROSS_TEAM_SPLIT_RE.split(teams_raw)
+                    if t.strip()
+                ]
+                current = {
+                    "title": header_match.group("title").strip().strip("*").strip(),
+                    "teams": teams,
+                    "bullets": [],
+                    "summary": "",
+                    "block_start": idx,
+                    "block_end": len(lines),
+                }
+            continue
+        bm = _BULLET_RE.match(line)
+        if bm and current is not None:
+            content = bm.group(1).strip()
+            current["bullets"].append(content)
+            # summary 캡처
+            for key in ("종합", "요약", "Summary", "summary", "정리"):
+                if content.startswith(key):
+                    rest = content[len(key):].lstrip(" :：—–-").strip()
+                    if rest:
+                        current["summary"] = rest
+                    break
+    if current is not None:
+        current["block_end"] = len(lines)
+        current["existing_status"] = _parse_existing_status(current["bullets"])
+        issues.append(current)
+    return issues
+
+
+def _fetch_past_overview_texts(
+    os_client: OpenSearch, weeks: List[str]
+) -> Dict[str, str]:
+    """각 주차의 overview 문서를 조회. 없는 주차는 조용히 스킵."""
+    out: Dict[str, str] = {}
+    for w in weeks:
+        try:
+            doc = os_client.get(index=WIKI_INDEX, id=f"overview_{w}")
+            text = doc.get("_source", {}).get("text", "")
+            if text:
+                out[w] = text
+        except Exception:
+            continue
+    return out
+
+
+def _cosine(a: List[float], b: List[float]) -> float:
+    if not a or not b:
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b))
+    na = sum(x * x for x in a) ** 0.5
+    nb = sum(y * y for y in b) ** 0.5
+    if na == 0 or nb == 0:
+        return 0.0
+    return dot / (na * nb)
+
+
+def _issue_embed_text(issue: Dict) -> str:
+    teams = ", ".join(issue.get("teams", []))
+    summary = issue.get("summary", "") or " | ".join(issue.get("bullets", [])[:3])
+    return f"{issue['title']} | teams: {teams} | {summary}"
+
+
+def _get_issue_embedding(
+    embed_client: OpenAI, issue: Dict, week: Optional[str] = None
+) -> List[float]:
+    if week is not None:
+        cache_key = (week, issue["title"])
+        if cache_key in _past_issue_embedding_cache:
+            return _past_issue_embedding_cache[cache_key]
+    text = _issue_embed_text(issue)
+    emb = get_embedding(embed_client, text)
+    if week is not None:
+        _past_issue_embedding_cache[(week, issue["title"])] = emb
+    return emb
+
+
+def _verify_continuation(current_issue: Dict, past_issue: Dict, past_week: str) -> bool:
+    """LangChain ChatOpenAI + Pydantic structured output 으로 동일 사안 여부 검증."""
+    if not _LANGCHAIN_AVAILABLE:
+        return False
+
+    system = (
+        "당신은 주간 업무 보고서의 크로스팀 이슈가 이전 주차의 이슈와 "
+        "동일한 사안의 연속인지 판단하는 전문가입니다. "
+        "주제 키워드가 겹치더라도 원인·범위·대응이 다르면 별개 이슈입니다."
+    )
+    user = (
+        f"[이번 주 이슈]\n"
+        f"제목: {current_issue['title']}\n"
+        f"관련팀: {', '.join(current_issue.get('teams', []))}\n"
+        f"요약: {current_issue.get('summary', '')}\n"
+        f"세부: " + " / ".join(current_issue.get("bullets", [])[:4]) + "\n\n"
+        f"[{past_week} 과거 이슈]\n"
+        f"제목: {past_issue['title']}\n"
+        f"관련팀: {', '.join(past_issue.get('teams', []))}\n"
+        f"요약: {past_issue.get('summary', '')}\n"
+        f"세부: " + " / ".join(past_issue.get("bullets", [])[:4]) + "\n\n"
+        "동일 사안의 연속이면 is_continuation=true, 아니면 false."
+    )
+
+    def _invoke(method: Optional[str]) -> Optional[IssueMatchVerdict]:
+        kwargs = dict(
+            api_key=OPENROUTER_API_KEY,
+            base_url=OPENROUTER_BASE_URL,
+            model=LLM_MODEL,
+            temperature=0,
+            timeout=60.0,
+        )
+        llm = ChatOpenAI(**kwargs)
+        try:
+            if method is None:
+                structured = llm.with_structured_output(IssueMatchVerdict)
+            else:
+                structured = llm.with_structured_output(IssueMatchVerdict, method=method)
+            return structured.invoke(
+                [{"role": "system", "content": system}, {"role": "user", "content": user}]
+            )
+        except Exception as exc:
+            print(f"   [verifier error method={method}] {type(exc).__name__}: {exc}")
+            return None
+
+    verdict = _invoke(None)
+    if verdict is None:
+        verdict = _invoke("json_mode")
+    if verdict is None:
+        return False
+    return bool(verdict.is_continuation)
+
+
+def _format_status_bullet(status: Dict) -> str:
+    if status.get("kind") == "계속":
+        return f"- 상태: 계속 ({status['first']}부터 {status['n']}주 연속)"
+    return "- 상태: 신규"
+
+
+def _chain_from_past(past_status: Optional[Dict], past_week: str) -> Dict:
+    if past_status and past_status.get("kind") == "계속":
+        return {"kind": "계속", "first": past_status["first"], "n": past_status["n"] + 1}
+    return {"kind": "계속", "first": past_week, "n": 2}
+
+
+def _inject_status_bullet(
+    overview_md: str, issue: Dict, section3_line_offset: int, new_status: Dict
+) -> str:
+    """overview_md 의 해당 issue 블록에 상태 bullet 을 삽입/교체. idempotent."""
+    lines = overview_md.split("\n")
+    block_start = section3_line_offset + issue["block_start"]
+    block_end = section3_line_offset + issue["block_end"]
+    new_bullet = _format_status_bullet(new_status)
+
+    existing_idx: Optional[int] = None
+    summary_idx: Optional[int] = None
+    for i in range(block_start, min(block_end, len(lines))):
+        line = lines[i]
+        m = _BULLET_RE.match(line)
+        if not m:
+            continue
+        content = m.group(1).strip()
+        if content.startswith("상태") and existing_idx is None:
+            existing_idx = i
+        # 종합 bullet 탐지
+        for key in ("종합", "요약", "Summary", "summary", "정리"):
+            if content.startswith(key) and summary_idx is None:
+                summary_idx = i
+                break
+
+    if existing_idx is not None:
+        # idempotent replace — 들여쓰기 유지
+        orig = lines[existing_idx]
+        indent_match = re.match(r"^(\s*)", orig)
+        indent = indent_match.group(1) if indent_match else ""
+        lines[existing_idx] = indent + new_bullet.lstrip()
+    elif summary_idx is not None:
+        indent_match = re.match(r"^(\s*)", lines[summary_idx])
+        indent = indent_match.group(1) if indent_match else ""
+        lines.insert(summary_idx, indent + new_bullet.lstrip())
+    else:
+        # 종합이 없으면 블록 끝(공백 line 이 나오는 지점 직전)에 append
+        insert_at = block_end
+        # 블록 끝 이전의 빈 line 들을 건너뛰고 삽입
+        while insert_at > block_start and insert_at - 1 < len(lines) and not lines[insert_at - 1].strip():
+            insert_at -= 1
+        lines.insert(insert_at, new_bullet)
+
+    return "\n".join(lines)
+
+
+def _section3_line_offset(overview_md: str) -> int:
+    """overview_md 에서 section 3 내부 본문의 시작 line 번호를 반환."""
+    m = None
+    for match in _SECTION_RE.finditer(overview_md):
+        if match.group(1) == "3":
+            m = match
+            break
+    if m is None:
+        return 0
+    # section 3 의 body 는 match.start(3) 위치부터
+    body_start_char = m.start(3)
+    return overview_md[:body_start_char].count("\n")
+
+
+def annotate_cross_team_status(
+    overview_md: str,
+    week: str,
+    os_client: OpenSearch,
+    embed_client: OpenAI,
+) -> str:
+    """section 3 크로스팀 이슈 블록에 `- 상태: 신규 | 계속 (...)` bullet 을 삽입."""
+    current_issues = _parse_cross_team_issues(overview_md)
+    if not current_issues:
+        return overview_md
+
+    prev_weeks = prev_iso_weeks(week, LOOKBACK_WEEKS)
+    past_texts = _fetch_past_overview_texts(os_client, prev_weeks)
+    if not past_texts:
+        # 과거 주차 없음 → 모두 신규
+        result = overview_md
+        line_offset = _section3_line_offset(overview_md)
+        # 역순 삽입 (뒤에서부터 line idx 가 변하지 않도록)
+        for issue in sorted(current_issues, key=lambda x: x["block_start"], reverse=True):
+            result = _inject_status_bullet(result, issue, line_offset, {"kind": "신규"})
+        print(f"   [annotate] {week}: 과거 overview 없음 → {len(current_issues)}개 이슈 모두 신규")
+        return result
+
+    past_issues_by_week: Dict[str, List[Dict]] = {}
+    for w, text in past_texts.items():
+        past_issues_by_week[w] = _parse_cross_team_issues(text)
+
+    # 현재 issue 별 상태 결정
+    statuses: List[Dict] = []
+    immediate_prev = prev_weeks[0]  # 직전 주
+    for issue in current_issues:
+        try:
+            cur_emb = _get_issue_embedding(embed_client, issue)
+        except Exception as exc:
+            print(f"   [annotate embed error] {issue['title']}: {exc}")
+            statuses.append({"kind": "신규"})
+            continue
+
+        # 직전 주 후보만 체인 대상
+        prev_pool = past_issues_by_week.get(immediate_prev, [])
+        scored: List[Tuple[float, Dict]] = []
+        for past in prev_pool:
+            try:
+                past_emb = _get_issue_embedding(embed_client, past, week=immediate_prev)
+                sim = _cosine(cur_emb, past_emb)
+                scored.append((sim, past))
+            except Exception:
+                continue
+        scored.sort(key=lambda x: x[0], reverse=True)
+
+        matched = None
+        for sim, past in scored[:3]:
+            if sim < SIMILARITY_FLOOR:
+                break
+            if _verify_continuation(issue, past, immediate_prev):
+                matched = past
+                break
+        if matched is not None:
+            statuses.append(_chain_from_past(matched.get("existing_status"), immediate_prev))
+        else:
+            statuses.append({"kind": "신규"})
+
+    # 역순으로 주입 (앞쪽 인덱스 보존)
+    result = overview_md
+    line_offset = _section3_line_offset(overview_md)
+    for issue, status in sorted(
+        zip(current_issues, statuses),
+        key=lambda x: x[0]["block_start"],
+        reverse=True,
+    ):
+        result = _inject_status_bullet(result, issue, line_offset, status)
+
+    summary = ", ".join(
+        f"{i['title'][:20]}→{s['kind']}" for i, s in zip(current_issues, statuses)
+    )
+    print(f"   [annotate] {week}: {summary}")
+    return result
+
+
 # ========== Wiki 문서 저장 ==========
 def save_wiki_doc(
     os_client: OpenSearch,
@@ -525,6 +906,11 @@ def backfill_weekly_overview(
     if not overview:
         print(f"  ⚠️ 전체 요약 생성 실패: {week}")
         return
+
+    try:
+        overview = annotate_cross_team_status(overview, week, os_client, embed_client)
+    except Exception as exc:
+        print(f"  ⚠️ 상태 어노테이션 실패(원본 저장): {week} - {type(exc).__name__}: {exc}")
 
     doc_id = f"overview_{week}"
     title = f"{week} 전체 팀 종합 요약"
@@ -708,6 +1094,69 @@ def accumulate_query_result(
     )
 
 
+def reannotate_existing_overviews(weeks: Optional[List[str]] = None):
+    """기존 overview_{week} 문서에 상태 어노테이션을 소급 적용. LLM 재생성 없음."""
+    os_client = get_client()
+    embed_client = get_embedding_client()
+
+    if weeks:
+        target_weeks = sorted(set(weeks))
+    else:
+        body = {
+            "size": 500,
+            "query": {"term": {"summary_type": "overview"}},
+            "_source": ["week"],
+            "sort": [{"week": {"order": "asc"}}],
+        }
+        resp = os_client.search(index=WIKI_INDEX, body=body)
+        target_weeks = sorted({h["_source"]["week"] for h in resp["hits"]["hits"] if h["_source"].get("week")})
+
+    if not target_weeks:
+        print("⚠️ 어노테이션 대상 overview 없음")
+        return
+
+    print(f"🔁 상태 재어노테이션: {len(target_weeks)}개 주차 (오래된 순)")
+    print(f"   주차: {', '.join(target_weeks)}")
+
+    for week in target_weeks:
+        doc_id = f"overview_{week}"
+        try:
+            doc = os_client.get(index=WIKI_INDEX, id=doc_id)
+        except Exception as exc:
+            print(f"  ⚠️ {doc_id} 조회 실패: {exc}")
+            continue
+
+        src = doc.get("_source", {})
+        original = src.get("text", "")
+        if not original:
+            print(f"  ⚠️ {doc_id} text 비어있음")
+            continue
+
+        try:
+            updated = annotate_cross_team_status(original, week, os_client, embed_client)
+        except Exception as exc:
+            print(f"  ❌ {week} 어노테이션 실패: {type(exc).__name__}: {exc}")
+            continue
+
+        if updated == original:
+            print(f"  ⏭️ {week}: 변경 없음")
+            continue
+
+        title = src.get("title") or f"{week} 전체 팀 종합 요약"
+        save_wiki_doc(
+            os_client,
+            embed_client,
+            text=updated,
+            title=title,
+            summary_type="overview",
+            week=week,
+            doc_id=doc_id,
+        )
+        time.sleep(0.5)
+
+    print("✅ 재어노테이션 완료")
+
+
 # ========== CLI ==========
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -728,6 +1177,11 @@ if __name__ == "__main__":
     parser.add_argument(
         "--list-weeks", action="store_true", help="사용 가능한 주차 목록 출력"
     )
+    parser.add_argument(
+        "--reannotate-status",
+        action="store_true",
+        help="기존 overview 에 크로스팀 이슈 상태(신규/계속) 어노테이션만 재적용 (LLM 재생성 없음)",
+    )
 
     args = parser.parse_args()
 
@@ -738,6 +1192,8 @@ if __name__ == "__main__":
         for w in weeks:
             teams = get_teams_for_week(client, w)
             print(f"  {w}: {', '.join(teams)}")
+    elif args.reannotate_status:
+        reannotate_existing_overviews(weeks=args.week)
     else:
         backfill_all(
             weeks=args.week,

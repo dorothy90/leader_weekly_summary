@@ -79,6 +79,27 @@ _CROSS_GROUP_HEADER_RE = re.compile(
 )
 _CROSS_TEAM_SPLIT_RE = re.compile(r"\s*(?:<->|↔|⇄|⟷|,)\s*")
 _SUMMARY_KEYS = {"종합", "요약", "Summary", "summary", "정리"}
+_STATUS_KEYS = {"상태"}
+_STATUS_CONT_RE = re.compile(
+    r"계속\s*\(\s*(?P<first>\d{4}-\d{2})\s*부터\s*(?P<n>\d+)\s*주\s*연속\s*\)"
+)
+
+
+def _parse_status_label(status_raw: str) -> Optional[Dict]:
+    s = (status_raw or "").strip()
+    if not s:
+        return None
+    if s.startswith("신규"):
+        return {"kind": "신규", "label": "신규"}
+    m = _STATUS_CONT_RE.search(s)
+    if m:
+        return {
+            "kind": "계속",
+            "first": m.group("first"),
+            "n": int(m.group("n")),
+            "label": f"계속 · {m.group('first')}~ · {m.group('n')}주",
+        }
+    return {"kind": "계속", "label": s}
 
 
 def _strip_frontmatter(text: str) -> str:
@@ -177,6 +198,7 @@ def _parse_cross_team_groups(body: str) -> List[Dict]:
                 "related_teams": teams,
                 "entries": [],
                 "summary": "",
+                "status": None,
             }
             continue
         bullet_match = _BULLET_PREFIX_RE.match(line)
@@ -185,7 +207,9 @@ def _parse_cross_team_groups(body: str) -> List[Dict]:
             parsed = _split_title_desc(content)
             title = parsed["title"]
             desc = parsed["desc"]
-            if title in _SUMMARY_KEYS:
+            if title in _STATUS_KEYS:
+                current["status"] = _parse_status_label(desc or title)
+            elif title in _SUMMARY_KEYS:
                 current["summary"] = desc or title
             elif title:
                 current["entries"].append({"team": title, "content": desc or content})
@@ -361,10 +385,24 @@ def render_section_3(groups: List[Dict], fallback_bullets: Optional[List[Dict]] 
                 f'</p>'
             )
 
+        status = g.get("status") or None
+        status_badge = ""
+        if status:
+            if status.get("kind") == "신규":
+                badge_classes = "bg-tertiary-container text-on-tertiary-container"
+            else:
+                badge_classes = "bg-secondary-container text-on-secondary-container"
+            status_badge = (
+                f'<span class="inline-flex items-center gap-1 text-xs font-semibold '
+                f'{badge_classes} px-2 py-0.5 rounded-full whitespace-nowrap">'
+                f'{_esc(status.get("label", ""))}</span>'
+            )
+
         cards.append(f"""<div class="bg-surface-container-lowest p-8 rounded-xl shadow-[0_8px_30px_rgb(0,0,0,0.04)] border-l-4 border-secondary">
-<div class="flex items-center gap-3 mb-2">
+<div class="flex items-center gap-3 mb-2 flex-wrap">
 <span class="material-symbols-outlined text-secondary text-2xl">sync_problem</span>
 <h4 class="font-headline text-lg font-bold text-on-surface">{_esc(g['title'])}</h4>
+{status_badge}
 </div>
 {teams_pill}
 {entries_html}
