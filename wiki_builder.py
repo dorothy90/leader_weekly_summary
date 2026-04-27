@@ -11,7 +11,7 @@ import re
 import argparse
 import time
 from pathlib import Path
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Literal
 from datetime import datetime, date, timedelta
 
 from opensearchpy import OpenSearch, helpers
@@ -26,6 +26,24 @@ except ImportError:
     _LANGCHAIN_AVAILABLE = False
 
 load_dotenv()
+
+
+# ========== Pydantic 모델 (Phase 1: 엔티티/토픽) ==========
+class WikiEntity(BaseModel):
+    name: str = Field(
+        description="정규화된 엔티티명 (예: 'Procyon P6', 'Edge 수율'). 동일 사안이면 기존 카탈로그의 이름과 정확히 일치."
+    )
+    kind: Literal["project", "equipment", "metric", "risk", "process"] = Field(
+        description="엔티티 종류"
+    )
+    mention_excerpt: str = Field(
+        description="원본/요약에서 이 엔티티가 등장한 핵심 한 줄 인용 (수치/기간 포함이면 더 좋음)"
+    )
+
+
+class TeamWeekEntities(BaseModel):
+    entities: List[WikiEntity] = Field(default_factory=list)
+
 
 # ========== 설정 ==========
 OPENSEARCH_HOST = os.getenv("OPENSEARCH_HOST", "localhost")
@@ -143,12 +161,51 @@ def create_wiki_index(client: OpenSearch):
                 "source_doc_ids": {"type": "keyword"},  # 원본 문서 ID 참조
                 "created_at": {"type": "date"},
                 "updated_at": {"type": "date"},
+                # Phase 1 — 엔티티/토픽 레이어
+                "entities": {
+                    "type": "nested",
+                    "properties": {
+                        "name": {"type": "keyword"},
+                        "kind": {"type": "keyword"},
+                        "mention_excerpt": {"type": "text", "analyzer": "korean"},
+                    },
+                },
+                "topic_keys": {"type": "keyword"},
             }
         },
     }
 
     client.indices.create(index=WIKI_INDEX, body=index_body)
     print(f"✅ 인덱스 '{WIKI_INDEX}' 생성 완료")
+
+
+def ensure_entity_mapping(client: OpenSearch):
+    """기존 wiki_summaries 인덱스에 entities/topic_keys 매핑이 없으면 추가.
+    keyword/nested 추가는 매핑 진화로 안전하게 가능."""
+    if not client.indices.exists(index=WIKI_INDEX):
+        return
+    current = client.indices.get_mapping(index=WIKI_INDEX)
+    props = (
+        current.get(WIKI_INDEX, {})
+        .get("mappings", {})
+        .get("properties", {})
+    )
+    to_add: Dict = {}
+    if "entities" not in props:
+        to_add["entities"] = {
+            "type": "nested",
+            "properties": {
+                "name": {"type": "keyword"},
+                "kind": {"type": "keyword"},
+                "mention_excerpt": {"type": "text", "analyzer": "korean"},
+            },
+        }
+    if "topic_keys" not in props:
+        to_add["topic_keys"] = {"type": "keyword"}
+    if not to_add:
+        return
+    client.indices.put_mapping(index=WIKI_INDEX, body={"properties": to_add})
+    print(f"✅ 인덱스 매핑 진화: {', '.join(to_add.keys())}")
 
 
 def delete_wiki_index(client: OpenSearch):
@@ -433,6 +490,108 @@ def generate_weekly_overview(week: str, team_summaries: Dict[str, str]) -> str:
     return content
 
 
+# ========== 엔티티 추출 (Phase 1) ==========
+ENTITY_EXTRACTION_SYSTEM_PROMPT = """당신은 반도체 주간 보고서에서 핵심 엔티티를 추출하는 전문가입니다.
+
+추출 대상:
+- project: 프로젝트 코드/제품명 (예: Procyon P6, Edge program)
+- equipment: 장비/시스템 (예: EPM, PCSA, 특정 챔버 모델)
+- metric: 정량 지표 (예: Edge 수율, B/B/H 두께, ECC 카운트)
+- risk: 명시적 리스크 항목
+- process: 공정/단계 (예: ALD, Etch, EPM PCSA 단계)
+
+원칙:
+1. 일반 명사·팀명·일반 부서명은 제외. 고유명/프로젝트성/지표성 명칭만.
+2. 기존 카탈로그에 동일/유사 항목이 있으면 그 이름을 그대로 사용 (LLM-only 정규화).
+3. mention_excerpt 는 한 줄, 수치·기간·대상이 있으면 포함.
+4. 한 보고서당 최대 10개. 중복 금지.
+5. 핵심 엔티티가 없으면 빈 배열을 반환."""
+
+
+def fetch_entity_catalog(client: OpenSearch, size: int = 200) -> List[str]:
+    """기존 wiki_summaries 에서 등장 빈도 높은 엔티티명 목록 (LLM 정규화 컨텍스트용)."""
+    if not client.indices.exists(index=WIKI_INDEX):
+        return []
+    try:
+        body = {
+            "size": 0,
+            "aggs": {"top": {"terms": {"field": "topic_keys", "size": size}}},
+        }
+        resp = client.search(index=WIKI_INDEX, body=body)
+        return [b["key"] for b in resp["aggregations"]["top"]["buckets"]]
+    except Exception as exc:
+        print(f"   [entity catalog fetch error] {type(exc).__name__}: {exc}")
+        return []
+
+
+def extract_team_week_entities(
+    team: str,
+    week: str,
+    summary: str,
+    original_excerpt: str,
+    existing_catalog: List[str],
+) -> List[WikiEntity]:
+    """team-week 요약에서 엔티티 추출. langchain 미설치 시 graceful degrade."""
+    if not _LANGCHAIN_AVAILABLE:
+        return []
+    if not summary.strip():
+        return []
+
+    catalog_text = (
+        "\n".join(f"- {n}" for n in existing_catalog[:120])
+        if existing_catalog
+        else "(없음 — 새로 부여)"
+    )
+    user = (
+        f"[팀] {team}  [주차] {week}\n\n"
+        f"--- 요약 ---\n{summary[:8000]}\n\n"
+        f"--- 원본 발췌 ---\n{original_excerpt[:6000]}\n\n"
+        f"--- 기존 엔티티 카탈로그 ---\n{catalog_text}\n\n"
+        "위 보고서에서 핵심 엔티티만 추출. 카탈로그와 같은 사안이면 동일 name 사용."
+    )
+
+    def _invoke(method: Optional[str]) -> Optional[TeamWeekEntities]:
+        try:
+            llm = ChatOpenAI(
+                api_key=OPENROUTER_API_KEY,
+                base_url=OPENROUTER_BASE_URL,
+                model=LLM_MODEL,
+                temperature=0,
+                timeout=60.0,
+            )
+            structured = (
+                llm.with_structured_output(TeamWeekEntities)
+                if method is None
+                else llm.with_structured_output(TeamWeekEntities, method=method)
+            )
+            return structured.invoke(
+                [
+                    {"role": "system", "content": ENTITY_EXTRACTION_SYSTEM_PROMPT},
+                    {"role": "user", "content": user},
+                ]
+            )
+        except Exception as exc:
+            print(
+                f"   [entity extract error method={method}] team={team} week={week}: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            return None
+
+    result = _invoke(None) or _invoke("json_mode")
+    if result is None:
+        return []
+
+    seen: set = set()
+    deduped: List[WikiEntity] = []
+    for e in result.entities:
+        key = e.name.strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(e)
+    return deduped
+
+
 # ========== 크로스팀 이슈 상태 어노테이션 ==========
 # canonical regex copy: generate_outlook_report.py:302, generate_stitch_report.py:72
 LOOKBACK_WEEKS = 4
@@ -453,7 +612,7 @@ _CROSS_GROUP_HEADER_RE = re.compile(
 _CROSS_TEAM_SPLIT_RE = re.compile(r"\s*(?:<->|↔|⇄|⟷|,)\s*")
 _BULLET_RE = re.compile(r"^\s*-\s+(.*)$")
 _STATUS_CONT_RE = re.compile(
-    r"계속\s*\(\s*(?P<first>\d{4}-\d{2})\s*부터\s*(?P<n>\d+)\s*주\s*연속\s*\)"
+    r"(?:지속|계속)\s*\(\s*(?P<first>\d{4}-\d{2})\s*부터\s*(?P<n>\d+)\s*주\s*연속\s*\)"
 )
 
 _past_issue_embedding_cache: Dict[Tuple[str, str], List[float]] = {}
@@ -497,7 +656,7 @@ def _parse_existing_status(bullets: List[str]) -> Optional[Dict]:
             m = _STATUS_CONT_RE.search(body)
             if m:
                 return {
-                    "kind": "계속",
+                    "kind": "지속",
                     "first": m.group("first"),
                     "n": int(m.group("n")),
                 }
@@ -656,15 +815,15 @@ def _verify_continuation(current_issue: Dict, past_issue: Dict, past_week: str) 
 
 
 def _format_status_bullet(status: Dict) -> str:
-    if status.get("kind") == "계속":
-        return f"- 상태: 계속 ({status['first']}부터 {status['n']}주 연속)"
+    if status.get("kind") == "지속":
+        return f"- 상태: 지속 ({status['first']}부터 {status['n']}주 연속)"
     return "- 상태: 신규"
 
 
 def _chain_from_past(past_status: Optional[Dict], past_week: str) -> Dict:
-    if past_status and past_status.get("kind") == "계속":
-        return {"kind": "계속", "first": past_status["first"], "n": past_status["n"] + 1}
-    return {"kind": "계속", "first": past_week, "n": 2}
+    if past_status and past_status.get("kind") == "지속":
+        return {"kind": "지속", "first": past_status["first"], "n": past_status["n"] + 1}
+    return {"kind": "지속", "first": past_week, "n": 2}
 
 
 def _inject_status_bullet(
@@ -818,6 +977,7 @@ def save_wiki_doc(
     topic: Optional[str] = None,
     source_doc_ids: Optional[List[str]] = None,
     doc_id: Optional[str] = None,
+    entities: Optional[List[WikiEntity]] = None,
 ):
     """wiki 문서를 OpenSearch에 저장"""
     if not text.strip():
@@ -825,6 +985,13 @@ def save_wiki_doc(
 
     embedding = get_embedding(embed_client, text)
     now = datetime.now(tz=__import__("datetime").timezone.utc).isoformat()
+
+    entity_dicts = (
+        [{"name": e.name, "kind": e.kind, "mention_excerpt": e.mention_excerpt} for e in entities]
+        if entities
+        else []
+    )
+    topic_keys = [e["name"] for e in entity_dicts]
 
     doc = {
         "embedding": embedding,
@@ -835,6 +1002,8 @@ def save_wiki_doc(
         "week": week,
         "topic": topic,
         "source_doc_ids": source_doc_ids or [],
+        "entities": entity_dicts,
+        "topic_keys": topic_keys,
         "created_at": now,
         "updated_at": now,
     }
@@ -860,8 +1029,9 @@ def backfill_team_week(
     embed_client: OpenAI,
     team: str,
     week: str,
+    entity_catalog: Optional[List[str]] = None,
 ):
-    """특정 팀-주차의 wiki 요약 생성 및 저장"""
+    """특정 팀-주차의 wiki 요약 생성 및 저장 (엔티티 추출 포함)"""
     print(f"\n📝 [{team}] {week} 요약 생성 중...")
 
     chunks = fetch_chunks_for_team_week(os_client, team, week)
@@ -878,6 +1048,12 @@ def backfill_team_week(
     title = f"{week} {team} 주간 요약"
     source_ids = [c["id"] for c in chunks]
 
+    catalog = entity_catalog if entity_catalog is not None else fetch_entity_catalog(os_client)
+    original_excerpt = "\n".join(c["text"] for c in chunks[:6])
+    entities = extract_team_week_entities(team, week, summary, original_excerpt, catalog)
+    if entities:
+        print(f"  🔖 엔티티 {len(entities)}개: {', '.join(e.name for e in entities[:8])}")
+
     save_wiki_doc(
         os_client,
         embed_client,
@@ -888,6 +1064,7 @@ def backfill_team_week(
         week=week,
         source_doc_ids=source_ids,
         doc_id=doc_id,
+        entities=entities,
     )
 
     return summary
@@ -939,6 +1116,7 @@ def backfill_all(
     if recreate:
         delete_wiki_index(os_client)
     create_wiki_index(os_client)
+    ensure_entity_mapping(os_client)
 
     # 대상 주차
     available_weeks = get_available_weeks(os_client)
@@ -950,12 +1128,18 @@ def backfill_all(
     print(f"   팀: {', '.join(target_teams)}")
 
     total = 0
+    entity_catalog = fetch_entity_catalog(os_client)
+    if entity_catalog:
+        print(f"   기존 엔티티 카탈로그: {len(entity_catalog)}개 로드")
+
     for week in target_weeks:
         week_summaries = {}
 
         for team in target_teams:
             try:
-                summary = backfill_team_week(os_client, embed_client, team, week)
+                summary = backfill_team_week(
+                    os_client, embed_client, team, week, entity_catalog=entity_catalog
+                )
                 if summary:
                     week_summaries[team] = summary
                     total += 1
@@ -1094,6 +1278,226 @@ def accumulate_query_result(
     )
 
 
+# ========== Topic Timeline (Phase 1) ==========
+TOPIC_TIMELINE_SYSTEM_PROMPT = """당신은 반도체 조직의 주간 보고서를 종단 분석해 한 토픽(프로젝트/장비/지표/리스크 등)의 시계열 변화를 정리하는 전문가입니다.
+
+작성 원칙:
+1. 입력으로 주어진 주차별 발췌만 사용 (추측·외부 정보 금지).
+2. 시간 순서대로 변화·진행을 서술. 수치/기간/대상은 그대로 유지.
+3. 팀 간 관점 차이가 있으면 명시.
+
+출력 형식 — 정확히 아래 구조로:
+
+**1. 토픽 개요**
+- 토픽이 무엇이며 왜 추적되는지 1~2줄
+
+**2. 주차별 진행 (오래된 → 최신)**
+- 2026-XX (관련팀): 핵심 변화/이벤트 한 줄 (수치/기간 포함)
+- 2026-XX (관련팀): ...
+
+**3. 현재 상태 & 핵심 이슈**
+- 가장 최근 주차 기준 상태, 미해결 이슈, 임박한 일정
+
+**4. 관련 키워드**
+- 함께 자주 등장하는 엔티티/팀 (쉼표 구분)"""
+
+_TOPIC_SLUG_RE = re.compile(r"[^A-Za-z0-9가-힣]+")
+
+
+def _slugify_topic(name: str) -> str:
+    s = _TOPIC_SLUG_RE.sub("_", name).strip("_")
+    return s or "topic"
+
+
+def fetch_topic_frequencies(
+    client: OpenSearch, min_weeks: int = 2, size: int = 500
+) -> List[Tuple[str, int]]:
+    """topic_keys 별 등장 *주차 수* 집계. (name, distinct_week_count) 목록 반환."""
+    if not client.indices.exists(index=WIKI_INDEX):
+        return []
+    body = {
+        "size": 0,
+        "query": {"term": {"summary_type": "team-week"}},
+        "aggs": {
+            "topics": {
+                "terms": {"field": "topic_keys", "size": size},
+                "aggs": {"weeks": {"cardinality": {"field": "week"}}},
+            }
+        },
+    }
+    resp = client.search(index=WIKI_INDEX, body=body)
+    out: List[Tuple[str, int]] = []
+    for b in resp["aggregations"]["topics"]["buckets"]:
+        wks = int(b["weeks"]["value"])
+        if wks >= min_weeks:
+            out.append((b["key"], wks))
+    out.sort(key=lambda x: x[1], reverse=True)
+    return out
+
+
+def fetch_topic_mentions(client: OpenSearch, topic_key: str) -> List[Dict]:
+    """특정 topic_key 가 들어있는 team-week 문서들을 week 오름차순으로 반환."""
+    body = {
+        "size": 200,
+        "query": {
+            "bool": {
+                "filter": [
+                    {"term": {"summary_type": "team-week"}},
+                    {"term": {"topic_keys": topic_key}},
+                ]
+            }
+        },
+        "sort": [{"week": {"order": "asc"}}, {"team": {"order": "asc"}}],
+    }
+    resp = client.search(index=WIKI_INDEX, body=body)
+    out: List[Dict] = []
+    for hit in resp["hits"]["hits"]:
+        src = hit["_source"]
+        mention = ""
+        for e in src.get("entities") or []:
+            if e.get("name") == topic_key:
+                mention = e.get("mention_excerpt", "")
+                break
+        out.append(
+            {
+                "id": hit["_id"],
+                "team": src.get("team", ""),
+                "week": src.get("week", ""),
+                "summary_text": src.get("text", ""),
+                "mention_excerpt": mention,
+            }
+        )
+    return out
+
+
+def generate_topic_timeline(topic_key: str, mentions: List[Dict]) -> str:
+    """주차별 mention 들을 모아 LLM 으로 timeline 요약 생성."""
+    if not mentions:
+        return ""
+
+    blocks: List[str] = []
+    for m in mentions:
+        snippet = m["mention_excerpt"] or m["summary_text"][:600]
+        blocks.append(f"=== {m['week']} / {m['team']} ===\n{snippet}")
+    context = "\n\n".join(blocks)
+    if len(context) > MAX_CHARS_PER_CALL:
+        context = context[:MAX_CHARS_PER_CALL]
+
+    user = (
+        f"[토픽] {topic_key}\n\n"
+        f"--- 주차별 발췌 ---\n{context}\n--- 끝 ---\n\n"
+        "위 발췌만 근거로 시계열 요약을 작성하세요."
+    )
+
+    client = OpenAI(
+        api_key=OPENROUTER_API_KEY, base_url=OPENROUTER_BASE_URL, timeout=120.0
+    )
+    try:
+        response = client.chat.completions.create(
+            model=LLM_MODEL,
+            messages=[
+                {"role": "system", "content": TOPIC_TIMELINE_SYSTEM_PROMPT},
+                {"role": "user", "content": user},
+            ],
+            temperature=0.2,
+            max_tokens=3000,
+        )
+    except Exception as exc:
+        print(
+            f"   [topic LLM error] topic={topic_key} chars={len(context)}: "
+            f"{type(exc).__name__}: {exc}"
+        )
+        return ""
+
+    content = response.choices[0].message.content or ""
+    if not content.strip():
+        finish = getattr(response.choices[0], "finish_reason", "?")
+        print(f"   [topic empty] topic={topic_key} finish_reason={finish}")
+    return content
+
+
+def backfill_topic_timeline(
+    os_client: OpenSearch, embed_client: OpenAI, topic_key: str
+) -> bool:
+    """단일 topic timeline 생성 → grounding 검증 → 저장. 성공 여부 반환."""
+    print(f"\n🧵 토픽 timeline: {topic_key}")
+    mentions = fetch_topic_mentions(os_client, topic_key)
+    if len(mentions) < 2:
+        print(f"  ⚠️ 출현 주차 부족({len(mentions)}). 스킵")
+        return False
+
+    timeline = generate_topic_timeline(topic_key, mentions)
+    if not timeline:
+        return False
+
+    source_text = "\n\n".join(
+        f"[{m['week']} {m['team']}]\n{m['mention_excerpt'] or m['summary_text'][:1500]}"
+        for m in mentions
+    )
+    if not verify_answer_grounding(
+        question=f"{topic_key} 의 진행 경과", answer=timeline, source_chunks=source_text
+    ):
+        print(f"  🚫 grounding 검증 실패: {topic_key} (저장 스킵)")
+        return False
+
+    weeks_seen = sorted({m["week"] for m in mentions})
+    teams_seen = sorted({m["team"] for m in mentions})
+    title = f"토픽 타임라인: {topic_key}"
+    doc_id = f"topic_{_slugify_topic(topic_key)}"
+
+    save_wiki_doc(
+        os_client,
+        embed_client,
+        text=timeline,
+        title=title,
+        summary_type="topic",
+        topic=topic_key,
+        week=weeks_seen[-1] if weeks_seen else None,
+        source_doc_ids=[m["id"] for m in mentions],
+        doc_id=doc_id,
+    )
+    print(f"  ✅ 저장 ({len(weeks_seen)}주, 팀 {len(teams_seen)}개)")
+    return True
+
+
+def build_topic_timelines(
+    topic: Optional[str] = None, min_weeks: int = 2
+):
+    """CLI 진입점: 단일 topic 또는 빈도 threshold 이상의 모든 topic timeline 생성."""
+    os_client = get_client()
+    embed_client = get_embedding_client()
+
+    if not os_client.indices.exists(index=WIKI_INDEX):
+        print(f"❌ 인덱스 '{WIKI_INDEX}' 없음 — 먼저 backfill 실행 필요")
+        return
+
+    ensure_entity_mapping(os_client)
+
+    if topic:
+        targets = [(topic, 0)]
+    else:
+        targets = fetch_topic_frequencies(os_client, min_weeks=min_weeks)
+        if not targets:
+            print(f"⚠️ {min_weeks}주 이상 등장한 topic 없음")
+            return
+        print(f"🚀 topic timeline: {len(targets)}개 (min_weeks={min_weeks})")
+
+    ok, fail = 0, 0
+    for name, _ in targets:
+        try:
+            success = backfill_topic_timeline(os_client, embed_client, name)
+            if success:
+                ok += 1
+            else:
+                fail += 1
+            time.sleep(0.5)
+        except Exception as exc:
+            fail += 1
+            print(f"  ❌ {name} 실패: {type(exc).__name__}: {exc}")
+
+    print(f"\n✅ topic timeline 완료: 성공 {ok}개, 실패/스킵 {fail}개")
+
+
 def reannotate_existing_overviews(weeks: Optional[List[str]] = None):
     """기존 overview_{week} 문서에 상태 어노테이션을 소급 적용. LLM 재생성 없음."""
     os_client = get_client()
@@ -1182,6 +1586,23 @@ if __name__ == "__main__":
         action="store_true",
         help="기존 overview 에 크로스팀 이슈 상태(신규/계속) 어노테이션만 재적용 (LLM 재생성 없음)",
     )
+    parser.add_argument(
+        "--build-topics",
+        action="store_true",
+        help="기존 wiki 의 엔티티 빈도를 집계해 topic timeline 문서 생성/갱신",
+    )
+    parser.add_argument(
+        "--topic",
+        type=str,
+        default=None,
+        help="단일 topic 만 timeline 생성 (예: 'Procyon P6')",
+    )
+    parser.add_argument(
+        "--min-weeks",
+        type=int,
+        default=2,
+        help="--build-topics 시 timeline 생성 임계값 (출현 주차 수, 기본 2)",
+    )
 
     args = parser.parse_args()
 
@@ -1194,6 +1615,8 @@ if __name__ == "__main__":
             print(f"  {w}: {', '.join(teams)}")
     elif args.reannotate_status:
         reannotate_existing_overviews(weeks=args.week)
+    elif args.build_topics or args.topic:
+        build_topic_timelines(topic=args.topic, min_weeks=args.min_weeks)
     else:
         backfill_all(
             weeks=args.week,

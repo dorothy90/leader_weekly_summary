@@ -81,7 +81,7 @@ _CROSS_TEAM_SPLIT_RE = re.compile(r"\s*(?:<->|↔|⇄|⟷|,)\s*")
 _SUMMARY_KEYS = {"종합", "요약", "Summary", "summary", "정리"}
 _STATUS_KEYS = {"상태"}
 _STATUS_CONT_RE = re.compile(
-    r"계속\s*\(\s*(?P<first>\d{4}-\d{2})\s*부터\s*(?P<n>\d+)\s*주\s*연속\s*\)"
+    r"(?:지속|계속)\s*\(\s*(?P<first>\d{4}-\d{2})\s*부터\s*(?P<n>\d+)\s*주\s*연속\s*\)"
 )
 
 
@@ -94,12 +94,12 @@ def _parse_status_label(status_raw: str) -> Optional[Dict]:
     m = _STATUS_CONT_RE.search(s)
     if m:
         return {
-            "kind": "계속",
+            "kind": "지속",
             "first": m.group("first"),
             "n": int(m.group("n")),
-            "label": f"계속 · {m.group('first')}~ · {m.group('n')}주",
+            "label": f"{m.group('first')}부터 {m.group('n')}주 연속",
         }
-    return {"kind": "계속", "label": s}
+    return {"kind": "지속", "label": s}
 
 
 def _strip_frontmatter(text: str) -> str:
@@ -356,8 +356,20 @@ def render_section_3(groups: List[Dict], fallback_bullets: Optional[List[Dict]] 
             return '<div class="flex flex-col gap-6">' + "".join(cards) + "</div>"
     if not groups:
         return '<p class="text-on-surface-variant">크로스팀 이슈 없음</p>'
-    cards = []
+
+    bucket_new: List[Dict] = []
+    bucket_cont: List[Dict] = []
+    bucket_unknown: List[Dict] = []
     for g in groups:
+        kind = (g.get("status") or {}).get("kind")
+        if kind == "신규":
+            bucket_new.append(g)
+        elif kind == "지속":
+            bucket_cont.append(g)
+        else:
+            bucket_unknown.append(g)
+
+    def _card_html(g: Dict, accent_classes: str, icon: str) -> str:
         teams_pill = ""
         if g["related_teams"]:
             pills = "".join(
@@ -385,30 +397,78 @@ def render_section_3(groups: List[Dict], fallback_bullets: Optional[List[Dict]] 
                 f'</p>'
             )
 
-        status = g.get("status") or None
-        status_badge = ""
-        if status:
-            if status.get("kind") == "신규":
-                badge_classes = "bg-tertiary-container text-on-tertiary-container"
-            else:
-                badge_classes = "bg-secondary-container text-on-secondary-container"
-            status_badge = (
-                f'<span class="inline-flex items-center gap-1 text-xs font-semibold '
-                f'{badge_classes} px-2 py-0.5 rounded-full whitespace-nowrap">'
-                f'{_esc(status.get("label", ""))}</span>'
+        chain_subtitle = ""
+        status = g.get("status") or {}
+        if status.get("kind") == "지속" and status.get("first") and status.get("n"):
+            chain_subtitle = (
+                f'<p class="text-xs text-amber-700 font-semibold mb-2">'
+                f'⌛ {_esc(status["first"])}부터 {status["n"]}주 연속</p>'
             )
 
-        cards.append(f"""<div class="bg-surface-container-lowest p-8 rounded-xl shadow-[0_8px_30px_rgb(0,0,0,0.04)] border-l-4 border-secondary">
-<div class="flex items-center gap-3 mb-2 flex-wrap">
-<span class="material-symbols-outlined text-secondary text-2xl">sync_problem</span>
-<h4 class="font-headline text-lg font-bold text-on-surface">{_esc(g['title'])}</h4>
-{status_badge}
-</div>
-{teams_pill}
-{entries_html}
-{summary_html}
-</div>""")
-    return '<div class="flex flex-col gap-6">' + "".join(cards) + "</div>"
+        return (
+            f'<div class="bg-surface-container-lowest p-8 rounded-xl shadow-[0_8px_30px_rgb(0,0,0,0.04)] {accent_classes}">'
+            f'<div class="flex items-center gap-3 mb-1">'
+            f'<span class="material-symbols-outlined text-2xl">{icon}</span>'
+            f'<h4 class="font-headline text-lg font-bold text-on-surface">{_esc(g["title"])}</h4>'
+            f'</div>'
+            f'{chain_subtitle}'
+            f'{teams_pill}'
+            f'{entries_html}'
+            f'{summary_html}'
+            f'</div>'
+        )
+
+    def _section_block(title: str, badge_classes: str, count: int,
+                       cards_html: str, divider_classes: str) -> str:
+        return (
+            f'<div class="flex flex-col gap-4">'
+            f'<div class="flex items-center gap-3 pb-2 border-b-2 {divider_classes}">'
+            f'<h3 class="font-headline text-base font-bold uppercase tracking-wide">{_esc(title)}</h3>'
+            f'<span class="inline-flex items-center text-xs font-bold {badge_classes} px-2.5 py-0.5 rounded-full">{count}건</span>'
+            f'</div>'
+            f'{cards_html}'
+            f'</div>'
+        )
+
+    sections_html: List[str] = []
+    if bucket_new:
+        cards_html = "".join(
+            _card_html(g, "border-l-4 border-emerald-500", "fiber_new")
+            for g in bucket_new
+        )
+        sections_html.append(_section_block(
+            "신규 이슈",
+            "bg-emerald-100 text-emerald-800",
+            len(bucket_new),
+            cards_html,
+            "border-emerald-500",
+        ))
+    if bucket_cont:
+        cards_html = "".join(
+            _card_html(g, "border-l-4 border-amber-500", "history")
+            for g in bucket_cont
+        )
+        sections_html.append(_section_block(
+            "지속 이슈",
+            "bg-amber-100 text-amber-800",
+            len(bucket_cont),
+            cards_html,
+            "border-amber-500",
+        ))
+    if bucket_unknown:
+        cards_html = "".join(
+            _card_html(g, "border-l-4 border-secondary", "sync_problem")
+            for g in bucket_unknown
+        )
+        sections_html.append(_section_block(
+            "기타",
+            "bg-secondary-container text-on-secondary-container",
+            len(bucket_unknown),
+            cards_html,
+            "border-secondary",
+        ))
+
+    return '<div class="flex flex-col gap-8">' + "".join(sections_html) + "</div>"
 
 
 def _risk_cell(r: Dict[str, str]) -> str:

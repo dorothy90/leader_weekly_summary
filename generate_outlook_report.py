@@ -311,13 +311,15 @@ CROSS_TEAM_SPLIT_RE = re.compile(r"\s*(?:<->|↔|⇄|⟷|,)\s*")
 SUMMARY_KEYS = {"종합", "요약", "Summary", "summary", "정리"}
 STATUS_KEYS = {"상태"}
 STATUS_CONT_RE = re.compile(
-    r"계속\s*\(\s*(?P<first>\d{4}-\d{2})\s*부터\s*(?P<n>\d+)\s*주\s*연속\s*\)"
+    r"(?:지속|계속)\s*\(\s*(?P<first>\d{4}-\d{2})\s*부터\s*(?P<n>\d+)\s*주\s*연속\s*\)"
 )
 
 STATUS_NEW_BG = "#e6f4ea"
 STATUS_NEW_TEXT = "#1e6f3b"
+STATUS_NEW_ACCENT = "#34a853"
 STATUS_CONT_BG = "#fff1e6"
 STATUS_CONT_TEXT = "#92400e"
+STATUS_CONT_ACCENT = "#d97706"
 
 
 def parse_status_label(status_raw: str) -> dict | None:
@@ -329,12 +331,12 @@ def parse_status_label(status_raw: str) -> dict | None:
     m = STATUS_CONT_RE.search(s)
     if m:
         return {
-            "kind": "계속",
+            "kind": "지속",
             "first": m.group("first"),
             "n": int(m.group("n")),
-            "label": f"계속 · {m.group('first')}~ · {m.group('n')}주",
+            "label": f"{m.group('first')}부터 {m.group('n')}주 연속",
         }
-    return {"kind": "계속", "label": s}
+    return {"kind": "지속", "label": s}
 
 
 def parse_cross_team_groups(body: str) -> list[dict]:
@@ -402,60 +404,101 @@ def parse_cross_team_groups(body: str) -> list[dict]:
     return [g for g in groups if g["entries"] or g["summary"]]
 
 
-def render_cross_team_groups(groups: list[dict]) -> str:
-    blocks: list[str] = []
-    for gi, g in enumerate(groups):
-        pills = ""
-        if g["related_teams"]:
-            pills_text = " · ".join(esc_inline(t) for t in g["related_teams"])
-            pills = (
-                f' <span style="color:{MUTED}; font-weight:normal; '
-                f'font-size:11px;">({pills_text})</span>'
-            )
-        status_badge = ""
-        status = g.get("status")
-        if status:
-            if status.get("kind") == "신규":
-                badge_bg, badge_text = STATUS_NEW_BG, STATUS_NEW_TEXT
-            else:
-                badge_bg, badge_text = STATUS_CONT_BG, STATUS_CONT_TEXT
-            status_badge = (
-                f' <span style="display:inline-block; padding:1px 7px; '
-                f'border-radius:10px; background-color:{badge_bg}; '
-                f'color:{badge_text}; font-size:11px; font-weight:bold;">'
-                f'{esc_inline(status.get("label", ""))}</span>'
-            )
-        title_row = (
-            f'<tr><td style="padding:6px 12px; background-color:{YELLOW_BG}; '
-            f'border-left:3px solid {YELLOW}; color:{YELLOW_TEXT}; '
-            f'font-weight:bold;">{esc_inline(g["title"])}{status_badge}{pills}</td></tr>'
+def _render_status_section_header(kind: str, count: int) -> str:
+    if kind == "신규":
+        bg, text, accent, label = STATUS_NEW_BG, STATUS_NEW_TEXT, STATUS_NEW_ACCENT, "신규 이슈"
+    else:
+        bg, text, accent, label = STATUS_CONT_BG, STATUS_CONT_TEXT, STATUS_CONT_ACCENT, "지속 이슈"
+    return (
+        f'<tr><td style="padding:8px 12px; background-color:{bg}; '
+        f'border-left:4px solid {accent}; color:{text}; '
+        f'font-weight:bold; font-size:14px; text-transform:none;">'
+        f'{label} <span style="font-weight:normal; font-size:12px; opacity:0.85;">'
+        f'· {count}건</span></td></tr>'
+    )
+
+
+def _render_single_cross_card(g: dict, accent: str) -> str:
+    pills = ""
+    if g["related_teams"]:
+        pills_text = " · ".join(esc_inline(t) for t in g["related_teams"])
+        pills = (
+            f' <span style="color:{MUTED}; font-weight:normal; '
+            f'font-size:11px;">({pills_text})</span>'
         )
-        entry_rows: list[str] = []
-        for e in g["entries"]:
-            team = esc_inline(e.get("team", ""))
-            content = esc_inline(e.get("content", ""))
-            team_chip = (
-                f'<b style="color:{YELLOW_TEXT};">{team}</b> &middot; '
-                if team else ""
-            )
-            entry_rows.append(
-                f'<tr><td style="padding:6px 12px 6px 18px; '
-                f'background-color:{CARD_BG}; border-left:3px solid {YELLOW}; '
-                f'color:{INK};">{team_chip}{content}</td></tr>'
-            )
-        summary_row = ""
-        if g["summary"]:
-            summary_row = (
-                f'<tr><td style="padding:8px 12px; background-color:{PANEL_BG}; '
-                f'border-left:3px solid {NAVY}; color:{INK};">'
-                f'<b style="color:{NAVY};">종합 &middot; </b>'
-                f'{esc_inline(g["summary"])}</td></tr>'
-            )
-        blocks.append(title_row + "".join(entry_rows) + summary_row)
-        if gi < len(groups) - 1:
+    title_row = (
+        f'<tr><td style="padding:6px 12px; background-color:{YELLOW_BG}; '
+        f'border-left:3px solid {accent}; color:{YELLOW_TEXT}; '
+        f'font-weight:bold;">{esc_inline(g["title"])}{pills}</td></tr>'
+    )
+    chain_row = ""
+    status = g.get("status") or {}
+    if status.get("kind") == "지속" and status.get("first") and status.get("n"):
+        chain_row = (
+            f'<tr><td style="padding:2px 12px 6px 12px; background-color:{YELLOW_BG}; '
+            f'border-left:3px solid {accent}; color:{STATUS_CONT_TEXT}; '
+            f'font-size:11px;">'
+            f'⌛ {esc_inline(status["first"])}부터 {status["n"]}주 연속</td></tr>'
+        )
+    entry_rows: list[str] = []
+    for e in g["entries"]:
+        team = esc_inline(e.get("team", ""))
+        content = esc_inline(e.get("content", ""))
+        team_chip = (
+            f'<b style="color:{YELLOW_TEXT};">{team}</b> &middot; '
+            if team else ""
+        )
+        entry_rows.append(
+            f'<tr><td style="padding:6px 12px 6px 18px; '
+            f'background-color:{CARD_BG}; border-left:3px solid {accent}; '
+            f'color:{INK};">{team_chip}{content}</td></tr>'
+        )
+    summary_row = ""
+    if g["summary"]:
+        summary_row = (
+            f'<tr><td style="padding:8px 12px; background-color:{PANEL_BG}; '
+            f'border-left:3px solid {NAVY}; color:{INK};">'
+            f'<b style="color:{NAVY};">종합 &middot; </b>'
+            f'{esc_inline(g["summary"])}</td></tr>'
+        )
+    return title_row + chain_row + "".join(entry_rows) + summary_row
+
+
+def render_cross_team_groups(groups: list[dict]) -> str:
+    bucket_new: list[dict] = []
+    bucket_cont: list[dict] = []
+    bucket_unknown: list[dict] = []
+    for g in groups:
+        kind = (g.get("status") or {}).get("kind")
+        if kind == "신규":
+            bucket_new.append(g)
+        elif kind == "지속":
+            bucket_cont.append(g)
+        else:
+            bucket_unknown.append(g)
+
+    sections: list[tuple[str, list[dict], str]] = []
+    if bucket_new:
+        sections.append(("신규", bucket_new, STATUS_NEW_ACCENT))
+    if bucket_cont:
+        sections.append(("지속", bucket_cont, STATUS_CONT_ACCENT))
+    if bucket_unknown:
+        sections.append(("기타", bucket_unknown, YELLOW))
+
+    blocks: list[str] = []
+    for si, (kind, bucket, accent) in enumerate(sections):
+        if kind in ("신규", "지속"):
+            blocks.append(_render_status_section_header(kind, len(bucket)))
             blocks.append(
-                '<tr><td style="font-size:1px; line-height:10px;">&nbsp;</td></tr>'
+                '<tr><td style="font-size:1px; line-height:6px;">&nbsp;</td></tr>'
             )
+        for ci, g in enumerate(bucket):
+            blocks.append(_render_single_cross_card(g, accent))
+            is_last_card = (si == len(sections) - 1) and (ci == len(bucket) - 1)
+            if not is_last_card:
+                blocks.append(
+                    '<tr><td style="font-size:1px; line-height:10px;">&nbsp;</td></tr>'
+                )
     return (
         f'<tr><td style="padding:4px 28px 16px 28px;">'
         f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
