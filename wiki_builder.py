@@ -1103,6 +1103,353 @@ def backfill_weekly_overview(
     )
 
 
+# ========== Monthly Overview ==========
+try:
+    from team_dict import teams_by_group as _teams_by_group
+except ImportError:
+    _teams_by_group = {}
+
+CROSS_GROUPS_PROMPT_FRAGMENT = """### 이슈 제목 (관련팀A <-> 관련팀B <-> 관련팀C)
+- 관련팀A: 해당 팀 관점의 상세 내용 (수치/기간 포함)
+- 관련팀B: 해당 팀 관점의 상세 내용
+- 관련팀C: 해당 팀 관점의 상세 내용
+- 종합: 조직 차원의 해석과 필요 액션 (개별 팀 bullet에 이미 있는 문장을 반복하지 말 것)
+
+(여러 이슈가 있으면 `###` 블록을 반복. 각 블록은 반드시 `### 소제목 (팀 <-> 팀)` + 관련 팀별 bullet + 마지막에 `- 종합: ...` bullet 순서.)"""
+
+
+def month_to_weeks(month: str) -> List[str]:
+    """ISO 목요일 규칙: 해당 월에 Thursday가 속하는 ISO 주차 목록.
+
+    예: '2026-04' -> ['2026-14', '2026-15', '2026-16', '2026-17', '2026-18']
+    """
+    year_str, month_str = month.split("-")
+    y, m = int(year_str), int(month_str)
+    first = date(y, m, 1)
+    if m == 12:
+        last = date(y + 1, 1, 1) - timedelta(days=1)
+    else:
+        last = date(y, m + 1, 1) - timedelta(days=1)
+
+    seen: List[Tuple[int, int]] = []
+    cur = first - timedelta(days=7)
+    while cur <= last + timedelta(days=7):
+        thursday = cur + timedelta(days=(3 - cur.weekday()) % 7)
+        if first <= thursday <= last:
+            iso_year, iso_week, _ = thursday.isocalendar()
+            key = (iso_year, iso_week)
+            if key not in seen:
+                seen.append(key)
+        cur += timedelta(days=1)
+    return [f"{y_:04d}-{w_:02d}" for y_, w_ in sorted(seen)]
+
+
+def fetch_team_week_summaries_for_month(
+    os_client: OpenSearch, month: str
+) -> Dict[str, str]:
+    """OpenSearch wiki_summaries 에서 해당 월의 모든 team-week 요약 조회.
+
+    Returns: {"YYYY-WW__팀명": text}. 더미 격리를 위해 doc_id가 'dummy_'로 시작하는
+    문서도 그대로 포함 (정합 데이터와 더미를 같이 본 채로 검증할 때 유용).
+    """
+    weeks = month_to_weeks(month)
+    if not weeks:
+        return {}
+    body = {
+        "size": 500,
+        "query": {
+            "bool": {
+                "filter": [
+                    {"term": {"summary_type": "team-week"}},
+                    {"terms": {"week": weeks}},
+                ]
+            }
+        },
+        "_source": ["team", "week", "text"],
+    }
+    resp = os_client.search(index=WIKI_INDEX, body=body)
+    out: Dict[str, str] = {}
+    for hit in resp["hits"]["hits"]:
+        src = hit["_source"]
+        team = src.get("team") or ""
+        week = src.get("week") or ""
+        text = src.get("text") or ""
+        if not (team and week and text.strip()):
+            continue
+        out[f"{week}__{team}"] = text
+    print(f"   📚 team-week 로드: {len(out)}건 (대상 주차 {len(weeks)}개)")
+    return out
+
+
+def _format_group_mapping(teams_by_group: Dict[str, List[str]]) -> str:
+    """team_dict.teams_by_group 를 LLM 프롬프트용 자연어 markdown 블록으로 변환."""
+    lines: List[str] = []
+    for group, members in teams_by_group.items():
+        joined = ", ".join(members)
+        lines.append(f"- **{group}**: {joined}")
+    return "\n".join(lines)
+
+
+TEAM_MONTH_COMPRESS_SYSTEM_PROMPT = """당신은 반도체 한 팀의 한 달치 주간 보고를 압축하는 전문가입니다.
+
+작성 원칙:
+1. 입력은 동일 팀의 N주(통상 4~5주) 분량의 weekly 요약입니다.
+2. 한 달 흐름의 핵심을 5~10개 불릿으로 압축. 시간순 흐름·수치 변화·이슈 발전을 보존.
+3. 추측 금지. 원본에 없는 수치/사건은 만들지 말 것.
+4. 출력 형식:
+   - 1줄당 하나의 불릿. 형식: `- <한 달 핵심 한 줄>`
+   - 수치는 `XX.X%` 처럼 단위 포함, 기간은 `2026-14~17` 형식.
+   - 이슈/리스크는 `[리스크]` prefix 권장.
+"""
+
+
+def _call_team_month_compress_llm(team: str, month: str, weeks_text: str) -> str:
+    client = OpenAI(
+        api_key=OPENROUTER_API_KEY,
+        base_url=OPENROUTER_BASE_URL,
+        timeout=120.0,
+    )
+    user_prompt = f"""[{team}] {month} 한 달치 주간 요약을 5~10불릿으로 압축해주세요.
+
+--- 입력 (주차별 요약) ---
+{weeks_text}
+--- 끝 ---
+
+위 내용을 시간순 흐름과 수치를 보존하며 압축하세요."""
+    try:
+        response = client.chat.completions.create(
+            model=LLM_MODEL,
+            messages=[
+                {"role": "system", "content": TEAM_MONTH_COMPRESS_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.2,
+            max_tokens=2000,
+        )
+    except Exception as exc:
+        print(f"   [stage1 LLM error] team={team} month={month} chars={len(weeks_text)}: {type(exc).__name__}: {exc}")
+        return ""
+    content = response.choices[0].message.content or ""
+    if not content.strip():
+        finish = getattr(response.choices[0], "finish_reason", "?")
+        print(f"   [stage1 empty] team={team} month={month} finish={finish}")
+    return content
+
+
+def _build_monthly_system_prompt(month: str, weeks: List[str], teams_by_group: Dict[str, List[str]]) -> str:
+    group_mapping = _format_group_mapping(teams_by_group)
+    weeks_str = ", ".join(weeks)
+    return f"""당신은 반도체 조직의 월간 종합 리포트를 작성하는 전문가입니다.
+
+이번 달은 ISO {len(weeks)}주({weeks_str})에 걸쳐 있습니다. 모든 주차 데이터를 빠짐없이 종합하세요.
+
+## 그룹-팀 매핑 (ground truth)
+{group_mapping}
+
+## 출력 형식 — 아래 6개 섹션 구조를 한 글자도 바꾸지 말고 그대로 복제하세요.
+
+섹션 헤더는 반드시 `**숫자. 제목**` 형식이며, `#`/`##`/`###` 는 섹션 6의 토픽 헤더 외에는 사용 금지.
+불릿은 `- ` 로만 시작합니다.
+섹션 1~5는 `- **라벨**: 한 줄 핵심` 형식이며, 라벨은 반드시 아래 verbatim 라벨을 그대로 사용하세요(공백/표기 변경 금지).
+
+**1. 그룹별 핵심 (5)**
+- **DRAM PTE**: 한 달 핵심 한 줄 (DRAM PTE 그룹 소속 팀 내용을 종합)
+- **NAND PTE**: ...
+- **DRAM SRT**: ...
+- **NAND SRT**: ...
+- **우시 PTE**: ...
+
+**2. 수율 주요내용 (6)**
+- **Spica수율**: ...
+- **HBM수율**: ...
+- **LC_CP수율**: ...
+- **Olympus수율**: ...
+- **CL_PE수율**: ...
+- **우시수율PTE**: ...
+
+**3. 품질 주요내용 (2)**
+- **DRAM품질PTE**: ...
+- **NAND품질PTE**: ...
+
+**4. 증산TF수율분과 (4)**
+- **DRAM수율전략**: ...
+- **DRAM FA PTE**: ...
+- **NAND수율전략**: ...
+- **NAND FA PTE**: ...
+
+**5. 개발제품수율 및 양산성 (4)**
+- **DRAM SRT 개발공정**: HBM4E 관련 항목만 다룰 것.
+- **Heraion양산수율**: ...
+- **Procyon양산수율**: ...
+- **Robson양산수율**: ...
+
+**6. 크로스팀이슈 (한달치)**
+{CROSS_GROUPS_PROMPT_FRAGMENT}
+
+작성 원칙:
+1. 섹션 1의 그룹 1줄은 섹션 2~5의 그룹 소속 팀 내용을 종합해 도출.
+2. 라벨 표기는 위 verbatim 그대로. 임의 변형/축약 금지.
+3. 데이터가 부족한 라벨은 1줄을 비워두지 말고 `데이터 부족` 으로 명시.
+4. 섹션 6의 status는 신규/지속 표시 없이 핵심만 작성 (월간 cross-month status 어노테이션은 v2 작업).
+5. 섹션 6 토픽 헤더(`### 제목 (팀 <-> 팀)`)의 **제목 부분에는 절대 괄호 ( ) 를 사용하지 마세요.** 괄호는 팀 목록 표기 한 곳에만 사용. 예) ❌ `### 공정 이슈(Etch) (Spica <-> HBM)` → ✅ `### Etch 공정 이슈 (Spica <-> HBM)`. 괄호가 제목에 들어가면 파서가 토픽을 누락합니다.
+"""
+
+
+def generate_monthly_overview(
+    month: str,
+    team_week_summaries: Dict[str, str],
+    teams_by_group: Optional[Dict[str, List[str]]] = None,
+) -> str:
+    """2-stage 월간 종합 요약 생성.
+
+    Stage 1 (압축): 팀별로 N주치 요약을 한 번에 LLM에 보내 5~10 불릿 압축. 16번 호출.
+    Stage 2 (종합): Stage 1 결과 16개 + 그룹 매핑 가이드 → 6섹션 월간 markdown. 1번 호출.
+
+    Fallback: 입력이 짧으면 Stage 1 생략하고 Stage 2 직접 호출.
+    """
+    if not team_week_summaries:
+        return ""
+    tbg = teams_by_group if teams_by_group is not None else _teams_by_group
+    if not tbg:
+        print("⚠️ team_dict.teams_by_group 비어있음 — 매핑 가이드 없이 진행")
+    weeks = month_to_weeks(month)
+
+    # Stage 1: 팀별 압축
+    by_team: Dict[str, Dict[str, str]] = {}
+    for key, text in team_week_summaries.items():
+        if "__" not in key:
+            continue
+        week, team = key.split("__", 1)
+        by_team.setdefault(team, {})[week] = text
+
+    total_input_chars = sum(len(v) for v in team_week_summaries.values())
+    print(f"   ✏️  월간 요약 입력: {total_input_chars:,}자, {len(by_team)}팀, {len(weeks)}주차")
+
+    SINGLE_CALL_THRESHOLD = 60_000
+    use_two_stage = total_input_chars > SINGLE_CALL_THRESHOLD
+
+    if use_two_stage:
+        compressed: Dict[str, str] = {}
+        for team, weeks_map in sorted(by_team.items()):
+            joined = "\n\n".join(
+                f"=== {w} ===\n{weeks_map[w]}"
+                for w in sorted(weeks_map.keys())
+            )
+            print(f"   [stage1] {team}: {len(joined):,}자 → 압축 호출")
+            comp = _call_team_month_compress_llm(team, month, joined)
+            if comp.strip():
+                compressed[team] = comp
+            time.sleep(0.5)
+        if not compressed:
+            print("⚠️ Stage 1 결과 전부 비어있음")
+            return ""
+        stage2_input = "\n\n".join(
+            f"=== {team} ===\n{summary}"
+            for team, summary in sorted(compressed.items())
+        )
+    else:
+        print(f"   [single-call] 입력이 {SINGLE_CALL_THRESHOLD:,}자 이하 — Stage 1 생략")
+        stage2_input = "\n\n".join(
+            f"=== {team} ===\n"
+            + "\n\n".join(
+                f"--- {w} ---\n{by_team[team][w]}"
+                for w in sorted(by_team[team].keys())
+            )
+            for team in sorted(by_team.keys())
+        )
+
+    # Stage 2: 종합
+    system_prompt = _build_monthly_system_prompt(month, weeks, tbg)
+    user_prompt = f"""{month} 월간 종합 요약을 작성해주세요.
+
+--- 팀별 한달 요약 ---
+{stage2_input}
+--- 끝 ---
+
+위 입력을 바탕으로 6섹션 월간 markdown을 작성하세요."""
+
+    print(f"   [stage2] 종합 입력 {len(stage2_input):,}자 → LLM 호출")
+    client = OpenAI(
+        api_key=OPENROUTER_API_KEY,
+        base_url=OPENROUTER_BASE_URL,
+        timeout=180.0,
+    )
+    try:
+        response = client.chat.completions.create(
+            model=LLM_MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.2,
+            max_tokens=8000,
+        )
+    except Exception as exc:
+        print(f"   [stage2 LLM error] month={month}: {type(exc).__name__}: {exc}")
+        return ""
+
+    choice = response.choices[0]
+    content = choice.message.content or ""
+    finish = getattr(choice, "finish_reason", "?")
+    if not content.strip():
+        print(f"   [stage2 empty] month={month} finish_reason={finish}")
+    elif finish != "stop":
+        print(f"   [stage2 truncated] month={month} finish_reason={finish} output_chars={len(content)}")
+    else:
+        print(f"   ✅ stage2 완료: 출력 {len(content):,}자")
+    return content
+
+
+def backfill_monthly_overview(
+    os_client: OpenSearch,
+    embed_client: OpenAI,
+    month: str,
+    team_week_summaries: Dict[str, str],
+    teams_by_group: Optional[Dict[str, List[str]]] = None,
+):
+    """월간 종합 요약 생성 + OpenSearch 저장 + wiki/monthly md 사이드카 작성.
+
+    v1 한계:
+    - annotate_cross_team_status 호출 안 함 (주차 단위 강결합). 월간 status 어노테이션은 v2.
+    - save_wiki_doc 의 week 필드를 month 값으로 재사용 (스키마 변경 회피). summary_type='monthly' + doc_id='monthly_{month}' 로 분기.
+    """
+    print(f"\n📋 {month} 월간 요약 생성 중...")
+
+    overview = generate_monthly_overview(month, team_week_summaries, teams_by_group)
+    if not overview:
+        print(f"  ⚠️ 월간 요약 생성 실패: {month}")
+        return
+
+    doc_id = f"monthly_{month}"
+    title = f"{month} 전체 팀 월간 종합 요약"
+
+    save_wiki_doc(
+        os_client,
+        embed_client,
+        text=overview,
+        title=title,
+        summary_type="monthly",
+        week=month,
+        doc_id=doc_id,
+    )
+
+    out_dir = Path("wiki/monthly")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"{month}_월간요약.md"
+    now = datetime.now(tz=__import__("datetime").timezone.utc).isoformat()
+    frontmatter = (
+        "---\n"
+        f"title: \"{month} 전체 팀 월간 종합 요약\"\n"
+        f"summary_type: monthly\n"
+        f"month: {month}\n"
+        f"created_at: {now}\n"
+        f"updated_at: {now}\n"
+        "---\n\n"
+    )
+    out_path.write_text(frontmatter + overview, encoding="utf-8")
+    print(f"  💾 사이드카 작성: {out_path}")
+
+
 def backfill_all(
     weeks: Optional[List[str]] = None,
     teams: Optional[List[str]] = None,
@@ -1603,6 +1950,12 @@ if __name__ == "__main__":
         default=2,
         help="--build-topics 시 timeline 생성 임계값 (출현 주차 수, 기본 2)",
     )
+    parser.add_argument(
+        "--monthly",
+        type=str,
+        default=None,
+        help="월간 종합 요약 생성 (예: --monthly 2026-04). team_dict 매핑 + 2-stage LLM 요약.",
+    )
 
     args = parser.parse_args()
 
@@ -1617,6 +1970,17 @@ if __name__ == "__main__":
         reannotate_existing_overviews(weeks=args.week)
     elif args.build_topics or args.topic:
         build_topic_timelines(topic=args.topic, min_weeks=args.min_weeks)
+    elif args.monthly:
+        os_client = get_client()
+        embed_client = get_embedding_client()
+        if not os_client.indices.exists(index=WIKI_INDEX):
+            print(f"❌ 인덱스 '{WIKI_INDEX}' 없음 — 먼저 backfill 또는 더미 시드 실행 필요")
+            raise SystemExit(1)
+        summaries = fetch_team_week_summaries_for_month(os_client, args.monthly)
+        if not summaries:
+            print(f"⚠️ team-week 데이터 없음: {args.monthly} (해당 월 ISO 주차에 색인된 문서 없음)")
+            raise SystemExit(1)
+        backfill_monthly_overview(os_client, embed_client, args.monthly, summaries)
     else:
         backfill_all(
             weeks=args.week,
