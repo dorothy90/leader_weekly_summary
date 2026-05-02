@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "lastScanned": 1777296196528,
+  "lastScanned": 1777726418290,
   "projectRoot": "/Users/daehwankim/Documents/weekly_mail_agent",
   "techStack": {
     "languages": [
@@ -40,7 +40,9 @@
   "structure": {
     "isMonorepo": false,
     "workspaces": [],
-    "mainDirectories": [],
+    "mainDirectories": [
+      "docs"
+    ],
     "gitBranches": null
   },
   "customNotes": [],
@@ -48,21 +50,21 @@
     "__pycache__": {
       "path": "__pycache__",
       "purpose": null,
-      "fileCount": 20,
-      "lastAccessed": 1777296196514,
+      "fileCount": 23,
+      "lastAccessed": 1777726418271,
       "keyFiles": [
         "deep_mining_ppt.cpython-313.pyc",
         "deep_mining_schemas.cpython-313.pyc",
         "embed_chromadb.cpython-313.pyc",
         "embed_vectordb.cpython-313.pyc",
-        "generate_layer2.cpython-313.pyc"
+        "generate_dummy_team_weeks.cpython-313.pyc"
       ]
     },
     "chroma_db": {
       "path": "chroma_db",
       "purpose": null,
       "fileCount": 1,
-      "lastAccessed": 1777296196514,
+      "lastAccessed": 1777726418271,
       "keyFiles": [
         "chroma.sqlite3"
       ]
@@ -71,21 +73,30 @@
       "path": "data",
       "purpose": "Data files",
       "fileCount": 1,
-      "lastAccessed": 1777296196515,
+      "lastAccessed": 1777726418272,
       "keyFiles": []
+    },
+    "docs": {
+      "path": "docs",
+      "purpose": "Documentation",
+      "fileCount": 1,
+      "lastAccessed": 1777726418272,
+      "keyFiles": [
+        "monthly_report_build.md"
+      ]
     },
     "exports": {
       "path": "exports",
       "purpose": null,
       "fileCount": 0,
-      "lastAccessed": 1777296196515,
+      "lastAccessed": 1777726418272,
       "keyFiles": []
     },
     "mail": {
       "path": "mail",
       "purpose": null,
       "fileCount": 13,
-      "lastAccessed": 1777296196515,
+      "lastAccessed": 1777726418272,
       "keyFiles": [
         "2025-48_베네피아_mail_001.html",
         "2026-13_UNKNOWN_mail_0324_074705_0cf774b5.html",
@@ -98,7 +109,7 @@
       "path": "output",
       "purpose": null,
       "fileCount": 183,
-      "lastAccessed": 1777296196515,
+      "lastAccessed": 1777726418274,
       "keyFiles": [
         "layer1_2025-48_20260103_220904.md",
         "layer1_2025-48_20260103_221450.md",
@@ -111,7 +122,7 @@
       "path": "pptdaddy",
       "purpose": null,
       "fileCount": 10,
-      "lastAccessed": 1777296196515,
+      "lastAccessed": 1777726418275,
       "keyFiles": [
         "CLAUDE.md",
         "INSTALL.md",
@@ -124,7 +135,7 @@
       "path": "themes",
       "purpose": null,
       "fileCount": 1,
-      "lastAccessed": 1777296196516,
+      "lastAccessed": 1777726418275,
       "keyFiles": [
         "default.json"
       ]
@@ -133,7 +144,7 @@
       "path": "wiki",
       "purpose": null,
       "fileCount": 2,
-      "lastAccessed": 1777296196516,
+      "lastAccessed": 1777726418275,
       "keyFiles": [
         "index.md"
       ]
@@ -141,93 +152,99 @@
   },
   "hotPaths": [
     {
-      "path": "generate_stitch_report.py",
-      "accessCount": 49,
-      "lastAccessed": 1777296062820,
+      "path": "generate_monthly_report.py",
+      "accessCount": 19,
+      "lastAccessed": 1777728566161,
       "type": "file"
     },
     {
       "path": "generate_outlook_report.py",
-      "accessCount": 33,
-      "lastAccessed": 1777296386509,
+      "accessCount": 14,
+      "lastAccessed": 1777728571790,
       "type": "file"
     },
     {
-      "path": "",
+      "path": "generate_dummy_team_weeks.py",
       "accessCount": 7,
-      "lastAccessed": 1776697171036,
-      "type": "directory"
+      "lastAccessed": 1777727999071,
+      "type": "file"
     },
     {
-      "path": "wiki/overview/2026-11_전체요약.html",
-      "accessCount": 4,
-      "lastAccessed": 1776583800565,
+      "path": "team_dict.py",
+      "accessCount": 7,
+      "lastAccessed": 1777728526120,
+      "type": "file"
+    },
+    {
+      "path": "wiki/monthly/2026-04_월간요약.md",
+      "accessCount": 5,
+      "lastAccessed": 1777727997778,
       "type": "file"
     },
     {
       "path": "wiki/overview/2026-11_전체요약.md",
       "accessCount": 4,
-      "lastAccessed": 1776593570343,
+      "lastAccessed": 1777467718095,
       "type": "file"
     },
     {
-      "path": "output/stitch_2026-11_20260412_211929.html",
+      "path": "wiki/monthly/2026-04_월간요약_test.md",
+      "accessCount": 3,
+      "lastAccessed": 1777729067858,
+      "type": "file"
+    },
+    {
+      "path": "wiki/team-week/2026-11_PE팀.md",
       "accessCount": 2,
-      "lastAccessed": 1776584077671,
+      "lastAccessed": 1777467726046,
       "type": "file"
     },
     {
-      "path": "pyproject.toml",
+      "path": "generate_stitch_report.py",
       "accessCount": 2,
-      "lastAccessed": 1776697163016,
+      "lastAccessed": 1777727925607,
       "type": "file"
     },
     {
-      "path": "wiki_export.py",
-      "accessCount": 2,
-      "lastAccessed": 1777296411214,
-      "type": "file"
-    },
-    {
-      "path": "wiki/overview/_outlook_test_2026-11.html",
+      "path": "chunk_classify.py",
       "accessCount": 1,
-      "lastAccessed": 1776470655689,
+      "lastAccessed": 1777467097211,
       "type": "file"
     },
     {
-      "path": "output/layer3_v2_2025-48_20260211_204002.md",
+      "path": "deep_mining_schemas.py",
       "accessCount": 1,
-      "lastAccessed": 1776584069470,
+      "lastAccessed": 1777467114511,
       "type": "file"
-    },
-    {
-      "path": "summarize_chunks.py",
-      "accessCount": 1,
-      "lastAccessed": 1776585733584,
-      "type": "file"
-    },
-    {
-      "path": "rag_api_opensearch_v3.py",
-      "accessCount": 1,
-      "lastAccessed": 1776696852204,
-      "type": "file"
-    },
-    {
-      "path": "rag_api.py",
-      "accessCount": 1,
-      "lastAccessed": 1776696852333,
-      "type": "file"
-    },
-    {
-      "path": "wiki/overview",
-      "accessCount": 1,
-      "lastAccessed": 1776697181091,
-      "type": "directory"
     },
     {
       "path": "CLAUDE.md",
       "accessCount": 1,
-      "lastAccessed": 1777296411297,
+      "lastAccessed": 1777467718148,
+      "type": "file"
+    },
+    {
+      "path": "test_syldgpt_dummy.py",
+      "accessCount": 1,
+      "lastAccessed": 1777469662943,
+      "type": "file"
+    },
+    {
+      "path": "fetch_mail.py",
+      "accessCount": 1,
+      "lastAccessed": 1777727168392,
+      "type": "file"
+    },
+    {
+      "path": "generate_layer3_v2.py",
+      "accessCount": 1,
+      "lastAccessed": 1777727921923,
+      "type": "file"
+    },
+    {
+      "path": "generate_layer3.py",
+      "accessCount": 1,
+      "lastAccessed": 1777727921966,
       "type": "file"
     }
   ],
