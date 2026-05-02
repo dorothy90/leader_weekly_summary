@@ -45,6 +45,32 @@ class TeamWeekEntities(BaseModel):
     entities: List[WikiEntity] = Field(default_factory=list)
 
 
+# ========== Pydantic 모델 (Phase 2: 월간 cross-team chain) ==========
+class WeeklyCrossIssue(BaseModel):
+    title: str = Field(
+        description="이 주차에 두 팀 이상 함께 등장한 cross-team 이슈의 짧은 제목 (예: 'Edge Particle 확산')"
+    )
+    teams: List[str] = Field(
+        default_factory=list,
+        description="이슈에 함께 언급된 팀 이름 리스트 (입력 team-week에 등장한 팀명 그대로 사용)"
+    )
+    summary: str = Field(
+        default="",
+        description="이슈 한 줄 요약 (조직 차원 영향 또는 공통 패턴)"
+    )
+    bullets: List[str] = Field(
+        default_factory=list,
+        description="팀별 관점 1줄씩 (예: ['Spica수율: D0 ↑', 'HBM수율: ECC fail 증가']). 최대 5개."
+    )
+
+
+class WeeklyCrossExtraction(BaseModel):
+    issues: List[WeeklyCrossIssue] = Field(
+        default_factory=list,
+        description="이번 주차에서 식별한 cross-team 이슈 0~6건. 단일 팀 이슈는 포함하지 말 것."
+    )
+
+
 # ========== 설정 ==========
 OPENSEARCH_HOST = os.getenv("OPENSEARCH_HOST", "localhost")
 OPENSEARCH_PORT = int(os.getenv("OPENSEARCH_PORT", "9200"))
@@ -638,9 +664,10 @@ def prev_iso_weeks(week: str, n: int) -> List[str]:
     return out
 
 
-def _extract_section_3(overview_md: str) -> Optional[str]:
+def _extract_section(overview_md: str, num: int = 3) -> Optional[str]:
+    target = str(num)
     for m in _SECTION_RE.finditer(overview_md):
-        if m.group(1) == "3":
+        if m.group(1) == target:
             return m.group(3)
     return None
 
@@ -663,9 +690,12 @@ def _parse_existing_status(bullets: List[str]) -> Optional[Dict]:
     return None
 
 
-def _parse_cross_team_issues(overview_md: str) -> List[Dict]:
-    """section 3 의 `###` 블록을 파싱. 반환: 각 블록 dict (title, teams, bullets, summary, existing_status, block_start, block_end)"""
-    section = _extract_section_3(overview_md)
+def _parse_cross_team_issues(overview_md: str, section_num: int = 3) -> List[Dict]:
+    """주어진 섹션 번호의 `###` 블록을 파싱. 반환: 각 블록 dict (title, teams, bullets, summary, existing_status, block_start, block_end).
+
+    weekly overview 는 section_num=3, monthly overview 는 section_num=6 사용.
+    """
+    section = _extract_section(overview_md, section_num)
     if not section:
         return []
     lines = section.split("\n")
@@ -761,11 +791,61 @@ def _get_issue_embedding(
     return emb
 
 
-def _verify_continuation(current_issue: Dict, past_issue: Dict, past_week: str) -> bool:
-    """LangChain ChatOpenAI + Pydantic structured output 으로 동일 사안 여부 검증."""
-    if not _LANGCHAIN_AVAILABLE:
-        return False
+def _call_structured_tool(
+    system: str,
+    user: str,
+    schema_name: str,
+    schema_description: str,
+    schema_cls,
+    *,
+    timeout: float = 60.0,
+    max_tokens: int = 2000,
+) -> Optional[Dict]:
+    """raw OpenAI SDK + tools 로 structured output 호출. 성공 시 dict, 실패 시 None.
 
+    LangChain `with_structured_output` 가 OpenRouter+GLM-4.7 조합에서 `tool_calls` 를
+    `message.parsed` 로 매핑하지 못해 깨지는 문제를 우회 (직접 tool_calls 파싱).
+    """
+    client = OpenAI(api_key=OPENROUTER_API_KEY, base_url=OPENROUTER_BASE_URL, timeout=timeout)
+    tool_def = {
+        "type": "function",
+        "function": {
+            "name": schema_name,
+            "description": schema_description,
+            "parameters": schema_cls.model_json_schema(),
+        },
+    }
+    try:
+        resp = client.chat.completions.create(
+            model=LLM_MODEL,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            tools=[tool_def],
+            tool_choice={"type": "function", "function": {"name": schema_name}},
+            temperature=0,
+            max_tokens=max_tokens,
+        )
+    except Exception as exc:
+        print(f"   [{schema_name} api error] {type(exc).__name__}: {exc}")
+        return None
+
+    choice = resp.choices[0]
+    msg = choice.message
+    if not msg.tool_calls:
+        print(f"   [{schema_name} empty tool_calls] finish={choice.finish_reason}")
+        return None
+    args = msg.tool_calls[0].function.arguments
+    try:
+        return json.loads(args)
+    except json.JSONDecodeError as exc:
+        print(f"   [{schema_name} json parse error] {exc}: {args[:200]}")
+        return None
+
+
+def _verify_continuation(current_issue: Dict, past_issue: Dict, past_week: str) -> bool:
+    """동일 사안 여부 검증 (raw OpenAI tools)."""
     system = (
         "당신은 주간 업무 보고서의 크로스팀 이슈가 이전 주차의 이슈와 "
         "동일한 사안의 연속인지 판단하는 전문가입니다. "
@@ -784,34 +864,17 @@ def _verify_continuation(current_issue: Dict, past_issue: Dict, past_week: str) 
         f"세부: " + " / ".join(past_issue.get("bullets", [])[:4]) + "\n\n"
         "동일 사안의 연속이면 is_continuation=true, 아니면 false."
     )
-
-    def _invoke(method: Optional[str]) -> Optional[IssueMatchVerdict]:
-        kwargs = dict(
-            api_key=OPENROUTER_API_KEY,
-            base_url=OPENROUTER_BASE_URL,
-            model=LLM_MODEL,
-            temperature=0,
-            timeout=60.0,
-        )
-        llm = ChatOpenAI(**kwargs)
-        try:
-            if method is None:
-                structured = llm.with_structured_output(IssueMatchVerdict)
-            else:
-                structured = llm.with_structured_output(IssueMatchVerdict, method=method)
-            return structured.invoke(
-                [{"role": "system", "content": system}, {"role": "user", "content": user}]
-            )
-        except Exception as exc:
-            print(f"   [verifier error method={method}] {type(exc).__name__}: {exc}")
-            return None
-
-    verdict = _invoke(None)
-    if verdict is None:
-        verdict = _invoke("json_mode")
-    if verdict is None:
+    parsed = _call_structured_tool(
+        system,
+        user,
+        schema_name="IssueMatchVerdict",
+        schema_description="두 이슈가 동일 사안의 연속인지 판단",
+        schema_cls=IssueMatchVerdict,
+        max_tokens=2000,  # GLM-4.7 reasoning 토큰 고려
+    )
+    if not parsed:
         return False
-    return bool(verdict.is_continuation)
+    return bool(parsed.get("is_continuation", False))
 
 
 def _format_status_bullet(status: Dict) -> str:
@@ -872,16 +935,16 @@ def _inject_status_bullet(
     return "\n".join(lines)
 
 
-def _section3_line_offset(overview_md: str) -> int:
-    """overview_md 에서 section 3 내부 본문의 시작 line 번호를 반환."""
+def _section_line_offset(overview_md: str, num: int = 3) -> int:
+    """overview_md 에서 지정 섹션 내부 본문의 시작 line 번호를 반환."""
+    target = str(num)
     m = None
     for match in _SECTION_RE.finditer(overview_md):
-        if match.group(1) == "3":
+        if match.group(1) == target:
             m = match
             break
     if m is None:
         return 0
-    # section 3 의 body 는 match.start(3) 위치부터
     body_start_char = m.start(3)
     return overview_md[:body_start_char].count("\n")
 
@@ -902,7 +965,7 @@ def annotate_cross_team_status(
     if not past_texts:
         # 과거 주차 없음 → 모두 신규
         result = overview_md
-        line_offset = _section3_line_offset(overview_md)
+        line_offset = _section_line_offset(overview_md, 3)
         # 역순 삽입 (뒤에서부터 line idx 가 변하지 않도록)
         for issue in sorted(current_issues, key=lambda x: x["block_start"], reverse=True):
             result = _inject_status_bullet(result, issue, line_offset, {"kind": "신규"})
@@ -950,7 +1013,7 @@ def annotate_cross_team_status(
 
     # 역순으로 주입 (앞쪽 인덱스 보존)
     result = overview_md
-    line_offset = _section3_line_offset(overview_md)
+    line_offset = _section_line_offset(overview_md, 3)
     for issue, status in sorted(
         zip(current_issues, statuses),
         key=lambda x: x[0]["block_start"],
@@ -1240,6 +1303,387 @@ def _call_team_month_compress_llm(team: str, month: str, weeks_text: str) -> str
     return content
 
 
+# ========== Monthly cross-team chain (Stage 1A/1B/4) ==========
+WEEKLY_CROSS_EXTRACT_SYSTEM_PROMPT = """당신은 주간 보고에서 cross-team 이슈를 식별하는 전문가입니다.
+
+입력은 한 주차의 N개 팀별 weekly 요약입니다.
+서로 다른 팀 두 개 이상의 weekly 요약에서 **공통으로 등장하는 사안 (cross-team issue)** 만 추출합니다.
+
+규칙:
+1. 한 팀에서만 언급된 단일 팀 이슈는 추출하지 말 것.
+2. 두 팀 이상이 같은 키워드/현상/공정/제품에 대해 언급하면 cross-team 이슈로 간주.
+3. 제목은 짧고 행동지향적으로 (예: 'Etch 잔류물 확산', 'Particle 영향 증가').
+4. teams 필드에는 입력 weekly에 등장한 **팀명을 그대로** 사용 (그룹명 금지: DRAM PTE/NAND PTE/DRAM SRT/NAND SRT/우시 PTE).
+5. summary 는 조직 차원 영향 1줄.
+6. bullets 는 팀별 1줄씩 (관점 차이가 명확할 때).
+7. 0~6 건. 너무 많이 만들지 말 것.
+
+출력은 structured JSON (WeeklyCrossExtraction).
+"""
+
+
+def _format_team_summaries_for_extract(team_summaries: Dict[str, str]) -> str:
+    parts: List[str] = []
+    for team in sorted(team_summaries.keys()):
+        body = (team_summaries[team] or "").strip()
+        if not body:
+            continue
+        parts.append(f"=== {team} ===\n{body}")
+    return "\n\n".join(parts)
+
+
+def _call_weekly_cross_extract_llm(week: str, team_summaries: Dict[str, str]) -> Optional["WeeklyCrossExtraction"]:
+    """Stage 1A: raw OpenAI tools 로 주차 단위 cross-team 이슈 추출."""
+    if not team_summaries:
+        return WeeklyCrossExtraction(issues=[])
+
+    user = (
+        f"[{week}] 주차의 팀별 weekly 요약 {len(team_summaries)}건 입니다. "
+        "두 팀 이상에 공통으로 등장한 cross-team 이슈만 추출하세요.\n\n"
+        f"{_format_team_summaries_for_extract(team_summaries)}\n\n"
+        "출력은 WeeklyCrossExtraction JSON."
+    )
+    parsed = _call_structured_tool(
+        WEEKLY_CROSS_EXTRACT_SYSTEM_PROMPT,
+        user,
+        schema_name="WeeklyCrossExtraction",
+        schema_description="이번 주차의 cross-team 이슈 목록",
+        schema_cls=WeeklyCrossExtraction,
+        timeout=120.0,
+        max_tokens=4000,
+    )
+    if parsed is None:
+        return None
+    try:
+        return WeeklyCrossExtraction.model_validate(parsed)
+    except Exception as exc:
+        print(f"   [stage1a validation error] {week}: {type(exc).__name__}: {exc}")
+        return None
+
+
+def _weekly_cross_doc_id(week: str) -> str:
+    return f"weekly-cross_{week}"
+
+
+def extract_weekly_cross_team_issues(
+    week: str,
+    team_summaries: Dict[str, str],
+    os_client: OpenSearch,
+    embed_client: OpenAI,
+    *,
+    use_cache: bool = True,
+) -> WeeklyCrossExtraction:
+    """Stage 1A 진입점. OpenSearch 캐시 hit 시 LLM 호출 생략."""
+    doc_id = _weekly_cross_doc_id(week)
+    if use_cache:
+        try:
+            doc = os_client.get(index=WIKI_INDEX, id=doc_id)
+            cached_text = doc.get("_source", {}).get("text", "")
+            if cached_text.strip():
+                return WeeklyCrossExtraction.model_validate_json(cached_text)
+        except Exception:
+            pass
+
+    extraction = _call_weekly_cross_extract_llm(week, team_summaries)
+    if extraction is None:
+        return WeeklyCrossExtraction(issues=[])
+
+    payload = extraction.model_dump_json()
+    try:
+        save_wiki_doc(
+            os_client,
+            embed_client,
+            text=payload,
+            title=f"{week} 주차 cross-team 이슈 추출 (Stage 1A)",
+            summary_type="weekly-cross-issues",
+            week=week,
+            doc_id=doc_id,
+        )
+    except Exception as exc:
+        print(f"   [stage1a cache write error] {week}: {type(exc).__name__}: {exc}")
+    return extraction
+
+
+def _team_summaries_for_week(team_week_summaries: Dict[str, str], week: str) -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    for key, text in team_week_summaries.items():
+        if "__" not in key:
+            continue
+        w, team = key.split("__", 1)
+        if w == week:
+            out[team] = text
+    return out
+
+
+def compute_monthly_issue_chains(
+    month: str,
+    team_week_summaries: Dict[str, str],
+    os_client: OpenSearch,
+    embed_client: OpenAI,
+    *,
+    use_cache: bool = True,
+) -> List[Dict]:
+    """Stage 1A + 1B 오케스트레이션. 월의 모든 주차 cross-team 이슈를 추출하고 체인 통합."""
+    weeks = month_to_weeks(month)
+    if not weeks:
+        return []
+    weekly_issues_by_week: Dict[str, List[Dict]] = {}
+    for w in weeks:
+        ts = _team_summaries_for_week(team_week_summaries, w)
+        if not ts:
+            print(f"   [stage1a] {w}: team-week 데이터 없음 — 건너뜀")
+            weekly_issues_by_week[w] = []
+            continue
+        extraction = extract_weekly_cross_team_issues(w, ts, os_client, embed_client, use_cache=use_cache)
+        weekly_issues_by_week[w] = [iss.model_dump() for iss in extraction.issues]
+        print(f"   [stage1a] {w}: cross-team 이슈 {len(extraction.issues)}건")
+    return _assemble_monthly_issue_chain(month, weekly_issues_by_week, embed_client)
+
+
+def _assemble_monthly_issue_chain(
+    month: str,
+    weekly_issues_by_week: Dict[str, List[Dict]],
+    embed_client: OpenAI,
+) -> List[Dict]:
+    """Stage 1B: 주차별 이슈를 시간순으로 매칭해 chain 생성."""
+    weeks_in_month = month_to_weeks(month)
+    if not weeks_in_month:
+        return []
+
+    chains: List[Dict] = []
+    chain_embeddings: List[Optional[List[float]]] = []
+
+    for w in weeks_in_month:
+        for iss in weekly_issues_by_week.get(w, []):
+            iss_view = {
+                "title": iss.get("title", "").strip(),
+                "teams": [t.strip() for t in iss.get("teams", []) if t and t.strip()],
+                "summary": iss.get("summary", ""),
+                "bullets": iss.get("bullets", []),
+            }
+            if not iss_view["title"] or len(iss_view["teams"]) < 2:
+                continue
+
+            try:
+                iss_emb = _get_issue_embedding(embed_client, iss_view)
+            except Exception:
+                iss_emb = None
+
+            best_idx = -1
+            best_sim = 0.0
+            for ci, ch in enumerate(chains):
+                if not (set(iss_view["teams"]) & set(ch["teams"])):
+                    continue
+                ch_emb = chain_embeddings[ci]
+                if iss_emb and ch_emb:
+                    sim = _cosine(iss_emb, ch_emb)
+                else:
+                    a = iss_view["title"].lower()
+                    b = ch["title"].lower()
+                    sim = 0.7 if (a and b and (a in b or b in a)) else 0.0
+                if sim > best_sim:
+                    best_sim = sim
+                    best_idx = ci
+
+            matched_idx = -1
+            if best_idx >= 0 and best_sim >= SIMILARITY_FLOOR:
+                ch = chains[best_idx]
+                ch_proxy = {
+                    "title": ch["title"],
+                    "teams": ch["teams"],
+                    "summary": ch["weekly_summaries"].get(ch["last_week"], ""),
+                    "bullets": [],
+                }
+                if _verify_continuation(iss_view, ch_proxy, ch["last_week"]):
+                    matched_idx = best_idx
+
+            week_summary = (iss_view["summary"] or iss_view["title"]).strip()
+            if matched_idx >= 0:
+                ch = chains[matched_idx]
+                if w not in ch["weeks_present"]:
+                    ch["weeks_present"].append(w)
+                ch["weeks_present"].sort()
+                ch["last_week"] = ch["weeks_present"][-1]
+                ch["teams"] = list(dict.fromkeys(list(ch["teams"]) + list(iss_view["teams"])))
+                # 같은 주차 내 중복 등장은 더 긴 summary 로 갱신
+                prior = ch["weekly_summaries"].get(w, "")
+                if not prior or len(week_summary) > len(prior):
+                    ch["weekly_summaries"][w] = week_summary
+            else:
+                chains.append(
+                    {
+                        "title": iss_view["title"],
+                        "teams": list(iss_view["teams"]),
+                        "weeks_present": [w],
+                        "last_week": w,
+                        "weekly_summaries": {w: week_summary},
+                    }
+                )
+                chain_embeddings.append(iss_emb)
+
+    return chains
+
+
+def _match_block_to_chain(block: Dict, chains: List[Dict]) -> Optional[Dict]:
+    """team Jaccard + title 부분일치로 가장 적합한 chain 매칭. threshold 미달이면 None."""
+    block_teams = {t for t in block.get("teams", []) if t}
+    if not block_teams:
+        return None
+    block_title = (block.get("title") or "").lower()
+    best: Optional[Dict] = None
+    best_score = 0.0
+    for ch in chains:
+        ch_teams = {t for t in ch.get("teams", []) if t}
+        if not ch_teams:
+            continue
+        inter = block_teams & ch_teams
+        if not inter:
+            continue
+        union = block_teams | ch_teams
+        jac = len(inter) / len(union)
+        title_bonus = 0.0
+        ch_title = (ch.get("title") or "").lower()
+        if block_title and ch_title:
+            tokens = [w for w in re.split(r"[\s,/()]+", ch_title) if len(w) > 1]
+            if any(tok in block_title for tok in tokens):
+                title_bonus = 0.15
+        score = jac + title_bonus
+        if score > best_score:
+            best_score = score
+            best = ch
+    return best if best_score >= 0.3 else None
+
+
+_WEEK_LABEL_RE = re.compile(r"^\d{4}-\d{2}$")
+
+
+def _inject_weekly_timeline_bullets(
+    overview_md: str,
+    issue: Dict,
+    section_offset: int,
+    weekly_summaries: Dict[str, str],
+) -> str:
+    """블록에 `- {YYYY-WW}: {summary}` bullet 들을 idempotent 하게 주입.
+
+    weekly_summaries: 주차→그 주의 cross-team 요약. 정렬된 주차 순으로 종합 bullet 직전에
+    (없으면 블록 끝에) 일괄 삽입. 기존 동일 패턴 bullet 들은 먼저 모두 제거 후 재삽입.
+    """
+    if not weekly_summaries:
+        return overview_md
+    lines = overview_md.split("\n")
+    block_start = section_offset + issue["block_start"]
+    block_end = min(section_offset + issue["block_end"], len(lines))
+
+    summary_idx: Optional[int] = None
+    week_bullet_idxs: List[int] = []
+    for i in range(block_start, block_end):
+        m = _BULLET_RE.match(lines[i])
+        if not m:
+            continue
+        content = m.group(1).strip()
+        head = content.split(":", 1)[0].strip()
+        if _WEEK_LABEL_RE.match(head):
+            week_bullet_idxs.append(i)
+            continue
+        for key in ("종합", "요약", "Summary", "summary", "정리"):
+            if content.startswith(key) and summary_idx is None:
+                summary_idx = i
+                break
+
+    # 기존 주차 bullet 들 제거 (역순)
+    for i in sorted(week_bullet_idxs, reverse=True):
+        del lines[i]
+        if summary_idx is not None and i < summary_idx:
+            summary_idx -= 1
+        block_end -= 1
+
+    indent = ""
+    if summary_idx is not None:
+        indent_m = re.match(r"^(\s*)", lines[summary_idx])
+        indent = indent_m.group(1) if indent_m else ""
+
+    new_bullets = [
+        f"{indent}- {w}: {weekly_summaries[w]}"
+        for w in sorted(weekly_summaries.keys())
+        if weekly_summaries[w]
+    ]
+    if not new_bullets:
+        return "\n".join(lines)
+
+    if summary_idx is not None:
+        for offset, b in enumerate(new_bullets):
+            lines.insert(summary_idx + offset, b)
+    else:
+        insert_at = block_end
+        while (
+            insert_at > block_start
+            and insert_at - 1 < len(lines)
+            and not lines[insert_at - 1].strip()
+        ):
+            insert_at -= 1
+        for offset, b in enumerate(new_bullets):
+            lines.insert(insert_at + offset, b)
+
+    return "\n".join(lines)
+
+
+def inject_monthly_chain_timeline(
+    overview_md: str,
+    chains: List[Dict],
+    *,
+    section_num: int = 6,
+) -> str:
+    """월간 overview md 의 cross-team 섹션 블록에 주차별 timeline bullet 주입. idempotent."""
+    if not chains:
+        return overview_md
+    issues = _parse_cross_team_issues(overview_md, section_num=section_num)
+    if not issues:
+        return overview_md
+    line_offset = _section_line_offset(overview_md, section_num)
+
+    matched_count = 0
+    bullet_total = 0
+    result = overview_md
+    for issue in sorted(issues, key=lambda x: x["block_start"], reverse=True):
+        chain = _match_block_to_chain(issue, chains)
+        if chain is None:
+            continue
+        weekly = chain.get("weekly_summaries") or {}
+        if not weekly:
+            continue
+        result = _inject_weekly_timeline_bullets(result, issue, line_offset, weekly)
+        matched_count += 1
+        bullet_total += len(weekly)
+    print(
+        f"   [stage4 inject] {matched_count}/{len(issues)} 블록에 timeline 주입 "
+        f"(주차 bullet 총 {bullet_total}건, chain 총 {len(chains)}건)"
+    )
+    return result
+
+
+def annotate_monthly_chain_status(
+    overview_md: str,
+    month: str,
+    team_week_summaries: Dict[str, str],
+    os_client: OpenSearch,
+    embed_client: OpenAI,
+    *,
+    use_cache: bool = True,
+) -> str:
+    """편의 래퍼: chain 계산 + injection 한 번에."""
+    chains = compute_monthly_issue_chains(
+        month, team_week_summaries, os_client, embed_client, use_cache=use_cache
+    )
+    if not chains:
+        print(f"   [stage4 skip] {month}: chain 0건")
+        return overview_md
+    summary = ", ".join(
+        f"{ch['title'][:14]}({len(ch['weeks_present'])}주)" for ch in chains[:6]
+    )
+    print(f"   [stage4] chain 산출 {len(chains)}건 — {summary}")
+    return inject_monthly_chain_timeline(overview_md, chains, section_num=6)
+
+
 def _build_monthly_system_prompt(month: str, weeks: List[str], teams_by_group: Dict[str, List[str]]) -> str:
     group_mapping = _format_group_mapping(teams_by_group)
     weeks_str = ", ".join(weeks)
@@ -1299,7 +1743,7 @@ def _build_monthly_system_prompt(month: str, weeks: List[str], teams_by_group: D
 1. 섹션 1의 그룹 1줄은 섹션 2~5의 그룹 소속 팀 내용을 종합해 도출.
 2. 라벨 표기는 위 verbatim 그대로. 임의 변형/축약 금지.
 3. 데이터가 부족한 라벨은 1줄을 비워두지 말고 `데이터 부족` 으로 명시.
-4. 섹션 6의 status는 신규/지속 표시 없이 핵심만 작성 (월간 cross-month status 어노테이션은 v2 작업).
+4. 섹션 6 각 블록의 `- 2026-WW: ...` 형식 timeline bullet 은 후처리 단계에서 자동 주입됩니다. LLM 은 절대 만들지 말고 팀별 bullet 과 마지막 종합 bullet 만 작성하세요.
 5. 섹션 6 헤더의 팀 목록과 본문 bullet 라벨은 반드시 **입력에 등장한 팀명**(예: Spica수율, NAND FA PTE, ...)만 사용. 그룹명(DRAM PTE, NAND PTE, DRAM SRT, NAND SRT, 우시 PTE) 절대 금지. 또한 입력에 없는 팀명을 새로 만들어내는 것도 금지(있는 그대로의 팀명만 인용).
 6. 섹션 6 토픽 헤더(`### 제목 (팀 <-> 팀)`)의 **제목 부분에는 절대 괄호 ( ) 를 사용하지 마세요.** 괄호는 팀 목록 표기 한 곳에만 사용. 예) ❌ `### 공정 이슈(Etch) (Spica <-> HBM)` → ✅ `### Etch 공정 이슈 (Spica <-> HBM)`. 괄호가 제목에 들어가면 파서가 토픽을 누락합니다.
 """
@@ -1392,7 +1836,7 @@ def generate_monthly_overview(
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.2,
-            max_tokens=8000,
+            max_tokens=16000,
         )
     except Exception as exc:
         print(f"   [stage2 LLM error] month={month}: {type(exc).__name__}: {exc}")
@@ -1417,11 +1861,11 @@ def backfill_monthly_overview(
     team_week_summaries: Dict[str, str],
     teams_by_group: Optional[Dict[str, List[str]]] = None,
 ):
-    """월간 종합 요약 생성 + OpenSearch 저장 + wiki/monthly md 사이드카 작성.
+    """월간 종합 요약 생성 + Stage 1A/1B/4 (주차별 timeline 주입) + OpenSearch 저장 + wiki/monthly md 사이드카.
 
-    v1 한계:
-    - annotate_cross_team_status 호출 안 함 (주차 단위 강결합). 월간 status 어노테이션은 v2.
-    - save_wiki_doc 의 week 필드를 month 값으로 재사용 (스키마 변경 회피). summary_type='monthly' + doc_id='monthly_{month}' 로 분기.
+    - annotate_monthly_chain_status 가 섹션 6 cross-team 블록에 `- 2026-WW: ...` 주차별 bullet 을 후처리 주입.
+    - ENV `MONTHLY_CHAIN_ANNOTATE=0` 으로 우회 가능 (롤백 토글).
+    - save_wiki_doc 의 week 필드는 month 값으로 재사용 (summary_type='monthly').
     """
     print(f"\n📋 {month} 월간 요약 생성 중...")
 
@@ -1429,6 +1873,14 @@ def backfill_monthly_overview(
     if not overview:
         print(f"  ⚠️ 월간 요약 생성 실패: {month}")
         return
+
+    if os.getenv("MONTHLY_CHAIN_ANNOTATE", "1") != "0":
+        try:
+            overview = annotate_monthly_chain_status(
+                overview, month, team_week_summaries, os_client, embed_client
+            )
+        except Exception as exc:
+            print(f"  ⚠️ chain 어노테이션 실패(원본 저장): {month} - {type(exc).__name__}: {exc}")
 
     doc_id = f"monthly_{month}"
     title = f"{month} 전체 팀 월간 종합 요약"

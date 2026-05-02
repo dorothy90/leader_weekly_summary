@@ -309,34 +309,7 @@ CROSS_GROUP_HEADER_RE = re.compile(
 )
 CROSS_TEAM_SPLIT_RE = re.compile(r"\s*(?:<->|↔|⇄|⟷|,)\s*")
 SUMMARY_KEYS = {"종합", "요약", "Summary", "summary", "정리"}
-STATUS_KEYS = {"상태"}
-STATUS_CONT_RE = re.compile(
-    r"(?:지속|계속)\s*\(\s*(?P<first>\d{4}-\d{2})\s*부터\s*(?P<n>\d+)\s*주\s*연속\s*\)"
-)
-
-STATUS_NEW_BG = "#e6f4ea"
-STATUS_NEW_TEXT = "#1e6f3b"
-STATUS_NEW_ACCENT = "#34a853"
-STATUS_CONT_BG = "#fff1e6"
-STATUS_CONT_TEXT = "#92400e"
-STATUS_CONT_ACCENT = "#d97706"
-
-
-def parse_status_label(status_raw: str) -> dict | None:
-    s = (status_raw or "").strip()
-    if not s:
-        return None
-    if s.startswith("신규"):
-        return {"kind": "신규", "label": "신규"}
-    m = STATUS_CONT_RE.search(s)
-    if m:
-        return {
-            "kind": "지속",
-            "first": m.group("first"),
-            "n": int(m.group("n")),
-            "label": f"{m.group('first')}부터 {m.group('n')}주 연속",
-        }
-    return {"kind": "지속", "label": s}
+WEEK_LABEL_RE = re.compile(r"^\d{4}-\d{2}$")
 
 
 def parse_cross_team_groups(body: str) -> list[dict]:
@@ -360,30 +333,18 @@ def parse_cross_team_groups(body: str) -> list[dict]:
                 "title": header_match.group("title").strip().strip("*").strip(),
                 "related_teams": teams,
                 "entries": [],
+                "timeline_entries": [],
                 "summary": "",
-                "status": None,
             }
             continue
         m = BULLET_RE.match(line.strip())
         if m and current is not None:
             content = m.group(1).strip()
             label, rest = split_labeled(content)
-            if label in STATUS_KEYS:
-                current["status"] = parse_status_label(rest or content)
-                continue
             if label in SUMMARY_KEYS:
                 current["summary"] = rest or content
                 continue
             stripped = content.lstrip("*").strip()
-            matched_status = False
-            for key in STATUS_KEYS:
-                if stripped.startswith(key):
-                    after = stripped[len(key):].lstrip(" *:：—–-").strip()
-                    current["status"] = parse_status_label(after)
-                    matched_status = True
-                    break
-            if matched_status:
-                continue
             matched_summary = False
             for key in SUMMARY_KEYS:
                 if stripped.startswith(key):
@@ -394,28 +355,16 @@ def parse_cross_team_groups(body: str) -> list[dict]:
                         break
             if matched_summary:
                 continue
-            if label:
+            if label and WEEK_LABEL_RE.match(label):
+                current["timeline_entries"].append({"week": label, "content": rest})
+            elif label:
                 current["entries"].append({"team": label, "content": rest})
             else:
                 current["entries"].append({"team": "", "content": content})
             continue
     if current is not None:
         groups.append(current)
-    return [g for g in groups if g["entries"] or g["summary"]]
-
-
-def _render_status_section_header(kind: str, count: int) -> str:
-    if kind == "신규":
-        bg, text, accent, label = STATUS_NEW_BG, STATUS_NEW_TEXT, STATUS_NEW_ACCENT, "신규 이슈"
-    else:
-        bg, text, accent, label = STATUS_CONT_BG, STATUS_CONT_TEXT, STATUS_CONT_ACCENT, "지속 이슈"
-    return (
-        f'<tr><td style="padding:8px 12px; background-color:{bg}; '
-        f'border-left:4px solid {accent}; color:{text}; '
-        f'font-weight:bold; font-size:14px; text-transform:none;">'
-        f'{label} <span style="font-weight:normal; font-size:12px; opacity:0.85;">'
-        f'· {count}건</span></td></tr>'
-    )
+    return [g for g in groups if g["entries"] or g["timeline_entries"] or g["summary"]]
 
 
 def _render_single_cross_card(g: dict, accent: str) -> str:
@@ -431,15 +380,6 @@ def _render_single_cross_card(g: dict, accent: str) -> str:
         f'border-left:3px solid {accent}; color:{YELLOW_TEXT}; '
         f'font-weight:bold;">{esc_inline(g["title"])}{pills}</td></tr>'
     )
-    chain_row = ""
-    status = g.get("status") or {}
-    if status.get("kind") == "지속" and status.get("first") and status.get("n"):
-        chain_row = (
-            f'<tr><td style="padding:2px 12px 6px 12px; background-color:{YELLOW_BG}; '
-            f'border-left:3px solid {accent}; color:{STATUS_CONT_TEXT}; '
-            f'font-size:11px;">'
-            f'⌛ {esc_inline(status["first"])}부터 {status["n"]}주 연속</td></tr>'
-        )
     entry_rows: list[str] = []
     for e in g["entries"]:
         team = esc_inline(e.get("team", ""))
@@ -453,6 +393,25 @@ def _render_single_cross_card(g: dict, accent: str) -> str:
             f'background-color:{CARD_BG}; border-left:3px solid {accent}; '
             f'color:{INK};">{team_chip}{content}</td></tr>'
         )
+    timeline_rows: list[str] = []
+    timeline_entries = g.get("timeline_entries") or []
+    if timeline_entries:
+        timeline_rows.append(
+            f'<tr><td style="padding:8px 12px 2px 18px; '
+            f'background-color:{CARD_BG}; border-left:3px solid {accent}; '
+            f'border-top:1px solid {BORDER}; color:{MUTED}; '
+            f'font-size:10px; letter-spacing:1px; text-transform:uppercase;">'
+            f'주차별 흐름</td></tr>'
+        )
+        for t in timeline_entries:
+            week = esc_inline(t.get("week", ""))
+            content = esc_inline(t.get("content", ""))
+            timeline_rows.append(
+                f'<tr><td style="padding:2px 12px 2px 18px; '
+                f'background-color:{CARD_BG}; border-left:3px solid {accent}; '
+                f'color:{MUTED}; font-size:11px;">'
+                f'<b style="color:{YELLOW_TEXT};">{week}</b> &middot; {content}</td></tr>'
+            )
     summary_row = ""
     if g["summary"]:
         summary_row = (
@@ -461,44 +420,17 @@ def _render_single_cross_card(g: dict, accent: str) -> str:
             f'<b style="color:{NAVY};">종합 &middot; </b>'
             f'{esc_inline(g["summary"])}</td></tr>'
         )
-    return title_row + chain_row + "".join(entry_rows) + summary_row
+    return title_row + "".join(entry_rows) + "".join(timeline_rows) + summary_row
 
 
 def render_cross_team_groups(groups: list[dict]) -> str:
-    bucket_new: list[dict] = []
-    bucket_cont: list[dict] = []
-    bucket_unknown: list[dict] = []
-    for g in groups:
-        kind = (g.get("status") or {}).get("kind")
-        if kind == "신규":
-            bucket_new.append(g)
-        elif kind == "지속":
-            bucket_cont.append(g)
-        else:
-            bucket_unknown.append(g)
-
-    sections: list[tuple[str, list[dict], str]] = []
-    if bucket_new:
-        sections.append(("신규", bucket_new, STATUS_NEW_ACCENT))
-    if bucket_cont:
-        sections.append(("지속", bucket_cont, STATUS_CONT_ACCENT))
-    if bucket_unknown:
-        sections.append(("기타", bucket_unknown, YELLOW))
-
     blocks: list[str] = []
-    for si, (kind, bucket, accent) in enumerate(sections):
-        if kind in ("신규", "지속"):
-            blocks.append(_render_status_section_header(kind, len(bucket)))
+    for ci, g in enumerate(groups):
+        blocks.append(_render_single_cross_card(g, YELLOW))
+        if ci < len(groups) - 1:
             blocks.append(
-                '<tr><td style="font-size:1px; line-height:6px;">&nbsp;</td></tr>'
+                '<tr><td style="font-size:1px; line-height:10px;">&nbsp;</td></tr>'
             )
-        for ci, g in enumerate(bucket):
-            blocks.append(_render_single_cross_card(g, accent))
-            is_last_card = (si == len(sections) - 1) and (ci == len(bucket) - 1)
-            if not is_last_card:
-                blocks.append(
-                    '<tr><td style="font-size:1px; line-height:10px;">&nbsp;</td></tr>'
-                )
     return (
         f'<tr><td style="padding:4px 28px 16px 28px;">'
         f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
