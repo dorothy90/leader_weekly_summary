@@ -11,7 +11,7 @@ import re
 import argparse
 import time
 from pathlib import Path
-from typing import List, Dict, Optional, Tuple, Literal
+from typing import List, Dict, Optional, Tuple, Literal, Set
 from datetime import datetime, date, timedelta
 
 from opensearchpy import OpenSearch, helpers
@@ -557,9 +557,7 @@ def extract_team_week_entities(
     original_excerpt: str,
     existing_catalog: List[str],
 ) -> List[WikiEntity]:
-    """team-week 요약에서 엔티티 추출. langchain 미설치 시 graceful degrade."""
-    if not _LANGCHAIN_AVAILABLE:
-        return []
+    """team-week 요약에서 엔티티 추출. raw OpenAI tool_calls (LangChain GLM 호환 우회)."""
     if not summary.strip():
         return []
 
@@ -576,35 +574,24 @@ def extract_team_week_entities(
         "위 보고서에서 핵심 엔티티만 추출. 카탈로그와 같은 사안이면 동일 name 사용."
     )
 
-    def _invoke(method: Optional[str]) -> Optional[TeamWeekEntities]:
-        try:
-            llm = ChatOpenAI(
-                api_key=OPENROUTER_API_KEY,
-                base_url=OPENROUTER_BASE_URL,
-                model=LLM_MODEL,
-                temperature=0,
-                timeout=60.0,
-            )
-            structured = (
-                llm.with_structured_output(TeamWeekEntities)
-                if method is None
-                else llm.with_structured_output(TeamWeekEntities, method=method)
-            )
-            return structured.invoke(
-                [
-                    {"role": "system", "content": ENTITY_EXTRACTION_SYSTEM_PROMPT},
-                    {"role": "user", "content": user},
-                ]
-            )
-        except Exception as exc:
-            print(
-                f"   [entity extract error method={method}] team={team} week={week}: "
-                f"{type(exc).__name__}: {exc}"
-            )
-            return None
-
-    result = _invoke(None) or _invoke("json_mode")
-    if result is None:
+    data = _call_structured_tool(
+        system=ENTITY_EXTRACTION_SYSTEM_PROMPT,
+        user=user,
+        schema_name="extract_team_week_entities",
+        schema_description="team-week 보고서에서 핵심 엔티티 추출",
+        schema_cls=TeamWeekEntities,
+        timeout=60.0,
+        max_tokens=2000,
+    )
+    if data is None:
+        return []
+    try:
+        result = TeamWeekEntities(**data)
+    except Exception as exc:
+        print(
+            f"   [entity extract validate error] team={team} week={week}: "
+            f"{type(exc).__name__}: {exc}"
+        )
         return []
 
     seen: set = set()
@@ -1415,6 +1402,36 @@ def _team_summaries_for_week(team_week_summaries: Dict[str, str], week: str) -> 
     return out
 
 
+def _format_monthly_cross_candidates(
+    weekly_issues_by_week: Dict[str, List[Dict]]
+) -> str:
+    """Stage 1A 결과(주차→이슈 dict 리스트)를 Stage 2 LLM 입력용 markdown 으로 직렬화.
+    teams 2개 미만 또는 title 누락은 제외."""
+    lines: List[str] = []
+    for week in sorted(weekly_issues_by_week.keys()):
+        issues = weekly_issues_by_week[week]
+        rendered: List[str] = []
+        for iss in issues:
+            title = (iss.get("title") or "").strip()
+            teams = [t.strip() for t in (iss.get("teams") or []) if t and t.strip()]
+            if not title or len(teams) < 2:
+                continue
+            block = [f"- 제목: {title}", f"  팀: {' <-> '.join(teams)}"]
+            summary = (iss.get("summary") or "").strip()
+            if summary:
+                block.append(f"  요약: {summary}")
+            for b in (iss.get("bullets") or [])[:5]:
+                b = (b or "").strip()
+                if b:
+                    block.append(f"  - {b}")
+            rendered.append("\n".join(block))
+        if rendered:
+            lines.append(f"### {week}")
+            lines.extend(rendered)
+            lines.append("")
+    return "\n".join(lines).strip()
+
+
 def compute_monthly_issue_chains(
     month: str,
     team_week_summaries: Dict[str, str],
@@ -1422,21 +1439,26 @@ def compute_monthly_issue_chains(
     embed_client: OpenAI,
     *,
     use_cache: bool = True,
+    weekly_issues_by_week: Optional[Dict[str, List[Dict]]] = None,
 ) -> List[Dict]:
-    """Stage 1A + 1B 오케스트레이션. 월의 모든 주차 cross-team 이슈를 추출하고 체인 통합."""
+    """Stage 1A + 1B 오케스트레이션. 월의 모든 주차 cross-team 이슈를 추출하고 체인 통합.
+
+    weekly_issues_by_week 가 주어지면 Stage 1A 호출을 생략하고 1B 만 실행 (호출자에서
+    이미 1A 결과를 보유하고 있을 때 LLM 중복 호출 방지)."""
     weeks = month_to_weeks(month)
     if not weeks:
         return []
-    weekly_issues_by_week: Dict[str, List[Dict]] = {}
-    for w in weeks:
-        ts = _team_summaries_for_week(team_week_summaries, w)
-        if not ts:
-            print(f"   [stage1a] {w}: team-week 데이터 없음 — 건너뜀")
-            weekly_issues_by_week[w] = []
-            continue
-        extraction = extract_weekly_cross_team_issues(w, ts, os_client, embed_client, use_cache=use_cache)
-        weekly_issues_by_week[w] = [iss.model_dump() for iss in extraction.issues]
-        print(f"   [stage1a] {w}: cross-team 이슈 {len(extraction.issues)}건")
+    if weekly_issues_by_week is None:
+        weekly_issues_by_week = {}
+        for w in weeks:
+            ts = _team_summaries_for_week(team_week_summaries, w)
+            if not ts:
+                print(f"   [stage1a] {w}: team-week 데이터 없음 — 건너뜀")
+                weekly_issues_by_week[w] = []
+                continue
+            extraction = extract_weekly_cross_team_issues(w, ts, os_client, embed_client, use_cache=use_cache)
+            weekly_issues_by_week[w] = [iss.model_dump() for iss in extraction.issues]
+            print(f"   [stage1a] {w}: cross-team 이슈 {len(extraction.issues)}건")
     return _assemble_monthly_issue_chain(month, weekly_issues_by_week, embed_client)
 
 
@@ -1669,10 +1691,12 @@ def annotate_monthly_chain_status(
     embed_client: OpenAI,
     *,
     use_cache: bool = True,
+    weekly_issues_by_week: Optional[Dict[str, List[Dict]]] = None,
 ) -> str:
-    """편의 래퍼: chain 계산 + injection 한 번에."""
+    """편의 래퍼: chain 계산 + injection 한 번에. weekly_issues_by_week 가 있으면 1A 재사용."""
     chains = compute_monthly_issue_chains(
-        month, team_week_summaries, os_client, embed_client, use_cache=use_cache
+        month, team_week_summaries, os_client, embed_client,
+        use_cache=use_cache, weekly_issues_by_week=weekly_issues_by_week,
     )
     if not chains:
         print(f"   [stage4 skip] {month}: chain 0건")
@@ -1753,6 +1777,8 @@ def generate_monthly_overview(
     month: str,
     team_week_summaries: Dict[str, str],
     teams_by_group: Optional[Dict[str, List[str]]] = None,
+    *,
+    cross_candidates_md: str = "",
 ) -> str:
     """2-stage 월간 종합 요약 생성.
 
@@ -1760,6 +1786,10 @@ def generate_monthly_overview(
     Stage 2 (종합): Stage 1 결과(팀 수만큼) + 그룹 매핑 가이드 → 6섹션 월간 markdown. 1번 호출.
 
     Fallback: 입력이 짧으면 Stage 1 생략하고 Stage 2 직접 호출.
+
+    cross_candidates_md: Stage 1A 에서 사전 추출한 주차별 cross-team 후보 markdown
+    (`_format_monthly_cross_candidates` 출력). Stage 2 LLM 이 섹션 6 작성 시 보수적
+    재발견 대신 후보를 통합/확장하도록 user_prompt 에 주입.
     """
     if not team_week_summaries:
         return ""
@@ -1814,11 +1844,22 @@ def generate_monthly_overview(
 
     # Stage 2: 종합
     system_prompt = _build_monthly_system_prompt(month, weeks, tbg)
+    candidates_block = cross_candidates_md or "(후보 없음 — 팀별 요약에서 직접 도출)"
     user_prompt = f"""{month} 월간 종합 요약을 작성해주세요.
+
+--- 섹션 6용 cross-team 후보 (Stage 1A, 우선 근거) ---
+{candidates_block}
+--- 끝 ---
 
 --- 팀별 한달 요약 ---
 {stage2_input}
 --- 끝 ---
+
+중요:
+- 위 cross-team 후보는 주차별로 이미 추출된 근거이므로, 섹션 6에서는 보수적으로 재탐색하지 말고 우선 이 후보들을 통합/확장하세요.
+- 의미적으로 같은 후보(예: 여러 주차에 같은 사안)는 하나의 블록으로 병합 가능.
+- 근거가 충분한 후보는 가능한 한 누락하지 말 것 (월간 관점 8~15개 목표).
+- 후보에 없는 내용은 팀별 한달 요약에 명확한 근거가 있을 때만 추가.
 
 위 입력을 바탕으로 6섹션 월간 markdown을 작성하세요."""
 
@@ -1851,6 +1892,17 @@ def generate_monthly_overview(
         print(f"   [stage2 truncated] month={month} finish_reason={finish} output_chars={len(content)}")
     else:
         print(f"   ✅ stage2 완료: 출력 {len(content):,}자")
+
+    if content.strip():
+        try:
+            parsed_blocks = _parse_cross_team_issues(content, section_num=6)
+            candidate_total = candidates_block.count("- 제목:") if cross_candidates_md else 0
+            print(
+                f"   [stage2 섹션6] LLM 작성 cross-team 블록 {len(parsed_blocks)}건 "
+                f"(1A 후보 {candidate_total}건 대비)"
+            )
+        except Exception as exc:
+            print(f"   [stage2 섹션6 파싱 실패] {type(exc).__name__}: {exc}")
     return content
 
 
@@ -1860,16 +1912,51 @@ def backfill_monthly_overview(
     month: str,
     team_week_summaries: Dict[str, str],
     teams_by_group: Optional[Dict[str, List[str]]] = None,
+    force: bool = False,
 ):
     """월간 종합 요약 생성 + Stage 1A/1B/4 (주차별 timeline 주입) + OpenSearch 저장 + wiki/monthly md 사이드카.
 
     - annotate_monthly_chain_status 가 섹션 6 cross-team 블록에 `- 2026-WW: ...` 주차별 bullet 을 후처리 주입.
     - ENV `MONTHLY_CHAIN_ANNOTATE=0` 으로 우회 가능 (롤백 토글).
     - save_wiki_doc 의 week 필드는 month 값으로 재사용 (summary_type='monthly').
+    - force=False(기본) 이고 monthly_{month} 가 이미 존재하면 skip (resume).
     """
+    doc_id = f"monthly_{month}"
+    if not force:
+        try:
+            if os_client.exists(index=WIKI_INDEX, id=doc_id):
+                print(f"⏭️ skip monthly (resume): {month} (--force 로 재생성)")
+                return
+        except Exception as e:
+            print(f"  ⚠️ monthly 존재 확인 실패, 진행: {month} - {e}")
     print(f"\n📋 {month} 월간 요약 생성 중...")
 
-    overview = generate_monthly_overview(month, team_week_summaries, teams_by_group)
+    # Stage 1A 를 먼저 1회 실행 → (a) Stage 2 후보 주입, (b) chain 어노테이션 양쪽에 재사용
+    weeks_in_month = month_to_weeks(month)
+    weekly_issues_by_week: Dict[str, List[Dict]] = {}
+    for w in weeks_in_month:
+        ts = _team_summaries_for_week(team_week_summaries, w)
+        if not ts:
+            print(f"   [stage1a] {w}: team-week 데이터 없음 — 건너뜀")
+            weekly_issues_by_week[w] = []
+            continue
+        extraction = extract_weekly_cross_team_issues(
+            w, ts, os_client, embed_client, use_cache=True
+        )
+        weekly_issues_by_week[w] = [iss.model_dump() for iss in extraction.issues]
+        print(f"   [stage1a] {w}: cross-team 이슈 {len(extraction.issues)}건")
+
+    candidates_md = _format_monthly_cross_candidates(weekly_issues_by_week)
+    total_1a = sum(len(v) for v in weekly_issues_by_week.values())
+    print(
+        f"   [stage1a→stage2] 후보 총 {total_1a}건 → Stage 2 프롬프트에 주입 "
+        f"({len(candidates_md):,}자)"
+    )
+
+    overview = generate_monthly_overview(
+        month, team_week_summaries, teams_by_group,
+        cross_candidates_md=candidates_md,
+    )
     if not overview:
         print(f"  ⚠️ 월간 요약 생성 실패: {month}")
         return
@@ -1877,12 +1964,12 @@ def backfill_monthly_overview(
     if os.getenv("MONTHLY_CHAIN_ANNOTATE", "1") != "0":
         try:
             overview = annotate_monthly_chain_status(
-                overview, month, team_week_summaries, os_client, embed_client
+                overview, month, team_week_summaries, os_client, embed_client,
+                weekly_issues_by_week=weekly_issues_by_week,
             )
         except Exception as exc:
             print(f"  ⚠️ chain 어노테이션 실패(원본 저장): {month} - {type(exc).__name__}: {exc}")
 
-    doc_id = f"monthly_{month}"
     title = f"{month} 전체 팀 월간 종합 요약"
 
     save_wiki_doc(
@@ -1917,8 +2004,9 @@ def backfill_all(
     teams: Optional[List[str]] = None,
     skip_overview: bool = False,
     recreate: bool = False,
+    force: bool = False,
 ):
-    """전체 백필 실행"""
+    """전체 백필 실행. force=False(기본) 면 OpenSearch 에 이미 있는 (team,week)/overview 는 skip (resume)."""
     os_client = get_client()
     embed_client = get_embedding_client()
 
@@ -1936,6 +2024,24 @@ def backfill_all(
     print(f"   주차: {', '.join(target_weeks)}")
     print(f"   팀: {', '.join(target_teams)}")
 
+    # resume: 이미 완료된 doc_id 사전 조회 (mget 1회)
+    existing_doc_ids: Set[str] = set()
+    if not force:
+        expected_ids = [f"team-week_{w}_{t}" for w in target_weeks for t in target_teams]
+        if not skip_overview:
+            expected_ids += [f"overview_{w}" for w in target_weeks]
+        if expected_ids:
+            try:
+                resp = os_client.mget(index=WIKI_INDEX, body={"ids": expected_ids})
+                existing_doc_ids = {d["_id"] for d in resp.get("docs", []) if d.get("found")}
+            except Exception as e:
+                print(f"   ⚠️ 기존 doc 조회 실패 (전체 재생성): {e}")
+                existing_doc_ids = set()
+        tw_done = sum(1 for i in existing_doc_ids if i.startswith("team-week_"))
+        ov_done = sum(1 for i in existing_doc_ids if i.startswith("overview_"))
+        if tw_done or ov_done:
+            print(f"   ⏭️ resume: 이미 완료 team-week {tw_done}개 / overview {ov_done}개 → 건너뜀 (--force 로 재생성)")
+
     total = 0
     entity_catalog = fetch_entity_catalog(os_client)
     if entity_catalog:
@@ -1943,8 +2049,20 @@ def backfill_all(
 
     for week in target_weeks:
         week_summaries = {}
+        new_in_week = 0
 
         for team in target_teams:
+            doc_id = f"team-week_{week}_{team}"
+            if doc_id in existing_doc_ids:
+                try:
+                    existing = os_client.get(index=WIKI_INDEX, id=doc_id)
+                    week_summaries[team] = existing["_source"]["text"]
+                    print(f"  ⏭️ skip (resume): {team} {week}")
+                    continue
+                except Exception as e:
+                    print(f"  ⚠️ skip 후 재조회 실패, 재생성: {team} {week} - {e}")
+                    # fall through → 재생성
+
             try:
                 summary = backfill_team_week(
                     os_client, embed_client, team, week, entity_catalog=entity_catalog
@@ -1952,19 +2070,24 @@ def backfill_all(
                 if summary:
                     week_summaries[team] = summary
                     total += 1
+                    new_in_week += 1
                 # API rate limit 방지
                 time.sleep(1)
             except Exception as e:
                 print(f"  ❌ 실패: {team} {week} - {e}")
 
-        # 주차별 전체 요약
+        # 주차별 전체 요약: 신규 team-week 가 하나라도 있거나 overview 자체가 없으면 (재)생성
         if not skip_overview and week_summaries:
-            try:
-                backfill_weekly_overview(os_client, embed_client, week, week_summaries)
-                total += 1
-                time.sleep(1)
-            except Exception as e:
-                print(f"  ❌ 전체 요약 실패: {week} - {e}")
+            overview_id = f"overview_{week}"
+            if overview_id in existing_doc_ids and new_in_week == 0:
+                print(f"  ⏭️ skip overview (resume): {week}")
+            else:
+                try:
+                    backfill_weekly_overview(os_client, embed_client, week, week_summaries)
+                    total += 1
+                    time.sleep(1)
+                except Exception as e:
+                    print(f"  ❌ 전체 요약 실패: {week} - {e}")
 
     print(f"\n✅ 백필 완료: {total}개 wiki 문서 생성")
 
@@ -2418,6 +2541,11 @@ if __name__ == "__main__":
         default=None,
         help="월간 종합 요약 생성 (예: --monthly 2026-04). team_dict 매핑 + 2-stage LLM 요약.",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="이미 완료된 (team, week)/overview/monthly 도 강제로 재생성 (기본은 resume)",
+    )
 
     args = parser.parse_args()
 
@@ -2442,11 +2570,14 @@ if __name__ == "__main__":
         if not summaries:
             print(f"⚠️ team-week 데이터 없음: {args.monthly} (해당 월 ISO 주차에 색인된 문서 없음)")
             raise SystemExit(1)
-        backfill_monthly_overview(os_client, embed_client, args.monthly, summaries)
+        backfill_monthly_overview(
+            os_client, embed_client, args.monthly, summaries, force=args.force
+        )
     else:
         backfill_all(
             weeks=args.week,
             teams=args.team,
             skip_overview=args.skip_overview,
             recreate=args.recreate,
+            force=args.force,
         )
