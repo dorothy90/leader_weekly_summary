@@ -140,8 +140,65 @@ def _render_minimal_rows(
     )
 
 
-REPORT_WIDTH_PX = 800
+REPORT_WIDTH_PX = 1100
 BADGE_WIDTH_PX = 170
+
+
+def render_cross_team_groups_summary(groups: list[dict]) -> str:
+    """월간 전용: 크로스팀 그룹을 '제목(+공동 대응 라벨) · 협업 팀 칩 · 종합'으로 렌더."""
+    blocks: list[str] = []
+    for ci, g in enumerate(groups):
+        teams = g.get("related_teams") or []
+        is_multi = len(teams) >= 2
+
+        collab_label = ""
+        if is_multi:
+            collab_label = (
+                f' <span style="font-weight:normal; font-size:11px; '
+                f'color:{NAVY}; padding-left:8px;">'
+                f'&middot; {len(teams)}팀 공동 대응</span>'
+            )
+        title_row = (
+            f'<tr><td style="padding:6px 12px; background-color:{YELLOW_BG}; '
+            f'border-left:3px solid {YELLOW}; color:{YELLOW_TEXT}; '
+            f'font-weight:bold;">{esc_inline(g["title"])}{collab_label}</td></tr>'
+        )
+
+        chips_row = ""
+        if is_multi:
+            chips = "".join(
+                f'<span style="display:inline-block; padding:2px 8px; '
+                f'margin:2px 4px 2px 0; border:1px solid {BORDER}; color:{MUTED}; '
+                f'font-size:11px; font-weight:normal; line-height:16px; '
+                f'mso-padding-alt:0;">{esc_inline(t)}</span>'
+                for t in teams
+            )
+            chips_row = (
+                f'<tr><td style="padding:6px 12px; background-color:{CARD_BG}; '
+                f'border-left:3px solid {YELLOW};">{chips}</td></tr>'
+            )
+
+        summary_row = ""
+        if g.get("summary"):
+            summary_row = (
+                f'<tr><td style="padding:8px 12px; background-color:{PANEL_BG}; '
+                f'border-left:3px solid {NAVY}; color:{INK};">'
+                f'<b style="color:{NAVY};">종합 &middot; </b>'
+                f'{esc_inline(g["summary"])}</td></tr>'
+            )
+        blocks.append(title_row + chips_row + summary_row)
+        if ci < len(groups) - 1:
+            blocks.append(
+                '<tr><td style="font-size:1px; line-height:10px;">&nbsp;</td></tr>'
+            )
+    return (
+        f'<tr><td style="padding:4px 28px 16px 28px;">'
+        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
+        f'style="border-collapse:collapse; font-family:{FONT}; font-size:13px; '
+        f'line-height:20px; color:{INK};">'
+        f'{"".join(blocks)}'
+        f'</table></td></tr>'
+    )
 
 
 def render_label_table(bullets: list[str], expected_canonical: list[str] | None = None) -> str:
@@ -221,7 +278,7 @@ def render_section(num: int, title: str, content: str) -> str:
     if kind == "cross_groups":
         groups = parse_cross_team_groups(content)
         if groups:
-            return section_header(num, title, accent) + render_cross_team_groups(groups)
+            return section_header(num, title, accent) + render_cross_team_groups_summary(groups)
         bullets = parse_bullets(content)
         return (
             section_header(num, title, accent)
@@ -237,7 +294,12 @@ def render_section(num: int, title: str, content: str) -> str:
     return section_header(num, title, accent) + render_label_table(bullets, expected)
 
 
-def render_html_monthly(meta: dict, sections: list[tuple[int, str, str]]) -> str:
+def render_html_monthly(
+    meta: dict,
+    sections: list[tuple[int, str, str]],
+    *,
+    dashboard_html: str | None = None,
+) -> str:
     title_text = str(meta.get("title", "월간 요약"))
     month = str(meta.get("month", ""))
     updated = str(meta.get("updated_at") or meta.get("created_at") or "")
@@ -252,6 +314,8 @@ def render_html_monthly(meta: dict, sections: list[tuple[int, str, str]]) -> str
         render_section(num, title, content)
         for num, title, content in sections
     )
+    if dashboard_html:
+        body_rows = body_rows + dashboard_html
 
     head = HEAD_TEMPLATE.format(title=html.escape(title_text))
 
@@ -302,14 +366,29 @@ def render_html_monthly(meta: dict, sections: list[tuple[int, str, str]]) -> str
     return head + body
 
 
-def convert(input_path: Path, output_path: Path) -> None:
+CHART_MODES = ("chartjs", "svg", "outlook_html", "outlook_png")
+
+
+def _suffixed(path: Path, suffix: str) -> Path:
+    """``foo.html`` + ``chartjs`` → ``foo_chartjs.html``."""
+    return path.with_name(f"{path.stem}_{suffix}{path.suffix}")
+
+
+def convert(input_path: Path, output_path: Path, *, charts: str = "none") -> None:
     text = input_path.read_text(encoding="utf-8")
     meta, body = parse_frontmatter(text)
     sections = split_sections(body)
     if not sections:
         print(f"warning: no '**N. Title**' sections found in {input_path}", file=sys.stderr)
-    html_out = render_html_monthly(meta, sections)
+
+    dashboard_html: str | None = None
+    if charts != "none":
+        from monthly_dashboard import render_dashboard
+        dashboard_html = render_dashboard(kind=charts)
+
+    html_out = render_html_monthly(meta, sections, dashboard_html=dashboard_html)
     output_path.write_text(html_out, encoding="utf-8")
+    print(f"written: {output_path}")
 
 
 def main() -> int:
@@ -319,14 +398,27 @@ def main() -> int:
         "-o", "--output", type=Path, default=None,
         help="Output HTML file (default: <input>.html sibling)",
     )
+    ap.add_argument(
+        "--charts",
+        choices=("none", *CHART_MODES, "all"),
+        default="none",
+        help="Append a dashboard cards section. 'all' generates 4 sibling files.",
+    )
     args = ap.parse_args()
     inp: Path = args.input
     if not inp.exists():
         print(f"error: file not found: {inp}", file=sys.stderr)
         return 2
-    out: Path = args.output if args.output else inp.with_suffix(".html")
-    convert(inp, out)
-    print(f"written: {out}")
+
+    base_out: Path = args.output if args.output else inp.with_suffix(".html")
+
+    if args.charts == "all":
+        for mode in CHART_MODES:
+            convert(inp, _suffixed(base_out, mode), charts=mode)
+    elif args.charts == "none":
+        convert(inp, base_out, charts="none")
+    else:
+        convert(inp, _suffixed(base_out, args.charts), charts=args.charts)
     return 0
 
 
