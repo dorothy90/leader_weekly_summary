@@ -1749,10 +1749,10 @@ def _build_monthly_system_prompt(month: str, weeks: List[str], teams_by_group: D
 - **NAND품질PTE**: ...
 
 **4. 증산TF수율분과 (4)**
-- **DRAM수율전략**: ...
-- **DRAM FA PTE**: ...
-- **NAND수율전략**: ...
-- **NAND FA PTE**: ...
+- **DRAM수율전략**: 증산TF(증산 목표·라인 확장·신규 라인 셋업·증산 ramp) 관련 활동만 한 줄.
+- **DRAM FA PTE**: 증산TF 관련 활동만 한 줄 (증산 라인 FA 지원·증산 ramp 관련 분석 등).
+- **NAND수율전략**: 증산TF 관련 활동만 한 줄.
+- **NAND FA PTE**: 증산TF 관련 활동만 한 줄.
 
 **5. 개발제품수율 및 양산성 (4)**
 - **DRAM SRT 개발공정**: HBM4E 관련 항목만 다룰 것.
@@ -1770,6 +1770,9 @@ def _build_monthly_system_prompt(month: str, weeks: List[str], teams_by_group: D
 4. 섹션 6 각 블록의 `- 2026-WW: ...` 형식 timeline bullet 은 후처리 단계에서 자동 주입됩니다. LLM 은 절대 만들지 말고 팀별 bullet 과 마지막 종합 bullet 만 작성하세요.
 5. 섹션 6 헤더의 팀 목록과 본문 bullet 라벨은 반드시 **입력에 등장한 팀명**(예: Spica수율, NAND FA PTE, ...)만 사용. 그룹명(DRAM PTE, NAND PTE, DRAM SRT, NAND SRT, 우시 PTE) 절대 금지. 또한 입력에 없는 팀명을 새로 만들어내는 것도 금지(있는 그대로의 팀명만 인용).
 6. 섹션 6 토픽 헤더(`### 제목 (팀 <-> 팀)`)의 **제목 부분에는 절대 괄호 ( ) 를 사용하지 마세요.** 괄호는 팀 목록 표기 한 곳에만 사용. 예) ❌ `### 공정 이슈(Etch) (Spica <-> HBM)` → ✅ `### Etch 공정 이슈 (Spica <-> HBM)`. 괄호가 제목에 들어가면 파서가 토픽을 누락합니다.
+7. 섹션 4 의 4개 팀(DRAM수율전략·DRAM FA PTE·NAND수율전략·NAND FA PTE) 한 줄은 **증산TF 관련 활동**(증산 목표 달성률, 신규 라인 셋업·라인 확장 일정, 증산 ramp, 증산 라인 FA 지원 등 증산 일정·물량 확장에 직접 연관된 사안)만 다룬다.
+   - 해당 팀의 일반 FA / 수율 / 품질 / 분석 활동(예: 일반 8D Report, FA 분석 백로그, Reliability margin 등)은 섹션 4 에서 제외하고, 섹션 1 그룹 한 줄·섹션 6 크로스팀이슈로만 노출.
+   - 팀의 한 달 요약에 증산TF 관련 활동 데이터가 없으면 해당 팀 한 줄을 `데이터 부족` 으로 표기 (3번 원칙 그대로 적용).
 """
 
 

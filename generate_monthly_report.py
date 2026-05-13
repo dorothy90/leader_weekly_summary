@@ -5,7 +5,7 @@ Usage:
     python generate_monthly_report.py input.md -o output.html
 
 월간 리포트는 6개 섹션:
-  1. 그룹별 핵심 1줄 (DRAM PTE / NAND PTE / DRAM SRT / NAND SRT / 우시 PTE)
+  1. SYLD 핵심 현안 (DRAM PTE / NAND PTE / DRAM SRT / NAND SRT / 우시 PTE)
   2. 수율 주요내용
   3. 품질 주요내용
   4. 증산TF수율분과
@@ -53,7 +53,20 @@ SECTION3_CANONICAL = ["DRAM품질PTE", "NAND품질PTE"]
 SECTION4_CANONICAL = ["DRAM수율전략", "DRAM FA PTE", "NAND수율전략", "NAND FA PTE"]
 SECTION5_CANONICAL = ["DRAM SRT 개발공정", "Heraion양산수율", "Procyon양산수율", "Robson양산수율"]
 
+SECTION2_DISPLAY = {
+    "Spica수율": "Spica",
+    "HBM수율": "HBM",
+    "LC_CP수율": "LC_CP",
+    "Olympus수율": "Olympus",
+    "CL_PE수율": "CL_PE",
+    "우시수율PTE": "우시",
+}
+
 SECTION5_DISPLAY = {"DRAM SRT 개발공정": "DRAM SRT 개발공정(@HBM4E만)"}
+
+SECTION_TITLE_OVERRIDES = {
+    1: "SYLD 핵심 현안",
+}
 
 
 def _all_team_dict_teams() -> set[str]:
@@ -81,6 +94,8 @@ DASH = "—"
 
 
 def _display_for(canonical: str) -> str:
+    if canonical in SECTION2_DISPLAY:
+        return SECTION2_DISPLAY[canonical]
     return SECTION5_DISPLAY.get(canonical, canonical)
 
 
@@ -380,6 +395,11 @@ def convert(input_path: Path, output_path: Path, *, charts: str = "none") -> Non
     sections = split_sections(body)
     if not sections:
         print(f"warning: no '**N. Title**' sections found in {input_path}", file=sys.stderr)
+
+    sections = [
+        (num, SECTION_TITLE_OVERRIDES.get(num, title), content)
+        for num, title, content in sections
+    ]
 
     dashboard_html: str | None = None
     if charts != "none":

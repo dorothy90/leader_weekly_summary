@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "lastScanned": 1777726418290,
+  "lastScanned": 1778676877318,
   "projectRoot": "/Users/daehwankim/Documents/weekly_mail_agent",
   "techStack": {
     "languages": [
@@ -41,7 +41,8 @@
     "isMonorepo": false,
     "workspaces": [],
     "mainDirectories": [
-      "docs"
+      "docs",
+      "scripts"
     ],
     "gitBranches": null
   },
@@ -50,8 +51,8 @@
     "__pycache__": {
       "path": "__pycache__",
       "purpose": null,
-      "fileCount": 23,
-      "lastAccessed": 1777726418271,
+      "fileCount": 24,
+      "lastAccessed": 1778676877302,
       "keyFiles": [
         "deep_mining_ppt.cpython-313.pyc",
         "deep_mining_schemas.cpython-313.pyc",
@@ -64,7 +65,7 @@
       "path": "chroma_db",
       "purpose": null,
       "fileCount": 1,
-      "lastAccessed": 1777726418271,
+      "lastAccessed": 1778676877302,
       "keyFiles": [
         "chroma.sqlite3"
       ]
@@ -73,15 +74,16 @@
       "path": "data",
       "purpose": "Data files",
       "fileCount": 1,
-      "lastAccessed": 1777726418272,
+      "lastAccessed": 1778676877302,
       "keyFiles": []
     },
     "docs": {
       "path": "docs",
       "purpose": "Documentation",
-      "fileCount": 1,
-      "lastAccessed": 1777726418272,
+      "fileCount": 2,
+      "lastAccessed": 1778676877303,
       "keyFiles": [
+        "monthly_chain_migration.md",
         "monthly_report_build.md"
       ]
     },
@@ -89,14 +91,14 @@
       "path": "exports",
       "purpose": null,
       "fileCount": 0,
-      "lastAccessed": 1777726418272,
+      "lastAccessed": 1778676877303,
       "keyFiles": []
     },
     "mail": {
       "path": "mail",
       "purpose": null,
       "fileCount": 13,
-      "lastAccessed": 1777726418272,
+      "lastAccessed": 1778676877303,
       "keyFiles": [
         "2025-48_베네피아_mail_001.html",
         "2026-13_UNKNOWN_mail_0324_074705_0cf774b5.html",
@@ -109,7 +111,7 @@
       "path": "output",
       "purpose": null,
       "fileCount": 183,
-      "lastAccessed": 1777726418274,
+      "lastAccessed": 1778676877304,
       "keyFiles": [
         "layer1_2025-48_20260103_220904.md",
         "layer1_2025-48_20260103_221450.md",
@@ -122,7 +124,7 @@
       "path": "pptdaddy",
       "purpose": null,
       "fileCount": 10,
-      "lastAccessed": 1777726418275,
+      "lastAccessed": 1778676877304,
       "keyFiles": [
         "CLAUDE.md",
         "INSTALL.md",
@@ -131,11 +133,20 @@
         "base-styles.css"
       ]
     },
+    "scripts": {
+      "path": "scripts",
+      "purpose": "Build/utility scripts",
+      "fileCount": 1,
+      "lastAccessed": 1778676877304,
+      "keyFiles": [
+        "eval_monthly_v2.py"
+      ]
+    },
     "themes": {
       "path": "themes",
       "purpose": null,
       "fileCount": 1,
-      "lastAccessed": 1777726418275,
+      "lastAccessed": 1778676877305,
       "keyFiles": [
         "default.json"
       ]
@@ -144,7 +155,7 @@
       "path": "wiki",
       "purpose": null,
       "fileCount": 2,
-      "lastAccessed": 1777726418275,
+      "lastAccessed": 1778676877305,
       "keyFiles": [
         "index.md"
       ]
@@ -153,56 +164,74 @@
   "hotPaths": [
     {
       "path": "generate_monthly_report.py",
-      "accessCount": 19,
-      "lastAccessed": 1777728566161,
+      "accessCount": 39,
+      "lastAccessed": 1778679040543,
       "type": "file"
     },
     {
       "path": "generate_outlook_report.py",
-      "accessCount": 14,
-      "lastAccessed": 1777728571790,
-      "type": "file"
-    },
-    {
-      "path": "generate_dummy_team_weeks.py",
-      "accessCount": 7,
-      "lastAccessed": 1777727999071,
+      "accessCount": 38,
+      "lastAccessed": 1778419063650,
       "type": "file"
     },
     {
       "path": "team_dict.py",
-      "accessCount": 7,
-      "lastAccessed": 1777728526120,
+      "accessCount": 10,
+      "lastAccessed": 1778676986287,
+      "type": "file"
+    },
+    {
+      "path": "generate_dummy_team_weeks.py",
+      "accessCount": 9,
+      "lastAccessed": 1778677077719,
       "type": "file"
     },
     {
       "path": "wiki/monthly/2026-04_월간요약.md",
-      "accessCount": 5,
-      "lastAccessed": 1777727997778,
+      "accessCount": 7,
+      "lastAccessed": 1778677016264,
       "type": "file"
     },
     {
-      "path": "wiki/overview/2026-11_전체요약.md",
-      "accessCount": 4,
-      "lastAccessed": 1777467718095,
+      "path": "generate_layer3_v2.py",
+      "accessCount": 6,
+      "lastAccessed": 1778414516189,
       "type": "file"
     },
     {
       "path": "wiki/monthly/2026-04_월간요약_test.md",
+      "accessCount": 5,
+      "lastAccessed": 1777730518206,
+      "type": "file"
+    },
+    {
+      "path": "scripts/eval_monthly_v2.py",
+      "accessCount": 5,
+      "lastAccessed": 1777738359519,
+      "type": "file"
+    },
+    {
+      "path": "wiki/overview/2026-11_전체요약.md",
+      "accessCount": 5,
+      "lastAccessed": 1778414513708,
+      "type": "file"
+    },
+    {
+      "path": "monthly_dashboard.py",
+      "accessCount": 4,
+      "lastAccessed": 1778418476286,
+      "type": "file"
+    },
+    {
+      "path": "generate_stitch_report.py",
       "accessCount": 3,
-      "lastAccessed": 1777729067858,
+      "lastAccessed": 1778414498506,
       "type": "file"
     },
     {
       "path": "wiki/team-week/2026-11_PE팀.md",
       "accessCount": 2,
       "lastAccessed": 1777467726046,
-      "type": "file"
-    },
-    {
-      "path": "generate_stitch_report.py",
-      "accessCount": 2,
-      "lastAccessed": 1777727925607,
       "type": "file"
     },
     {
@@ -236,15 +265,45 @@
       "type": "file"
     },
     {
-      "path": "generate_layer3_v2.py",
-      "accessCount": 1,
-      "lastAccessed": 1777727921923,
-      "type": "file"
-    },
-    {
       "path": "generate_layer3.py",
       "accessCount": 1,
       "lastAccessed": 1777727921966,
+      "type": "file"
+    },
+    {
+      "path": "docs/monthly_chain_migration.md",
+      "accessCount": 1,
+      "lastAccessed": 1777738857800,
+      "type": "file"
+    },
+    {
+      "path": "create_dummy_data.py",
+      "accessCount": 1,
+      "lastAccessed": 1778414502921,
+      "type": "file"
+    },
+    {
+      "path": "output/dashboard/dummy_data.js",
+      "accessCount": 1,
+      "lastAccessed": 1778415212452,
+      "type": "file"
+    },
+    {
+      "path": "output/dashboard/dashboard_chartjs.html",
+      "accessCount": 1,
+      "lastAccessed": 1778415233463,
+      "type": "file"
+    },
+    {
+      "path": "output/dashboard/dashboard_echarts.html",
+      "accessCount": 1,
+      "lastAccessed": 1778415248611,
+      "type": "file"
+    },
+    {
+      "path": "output/dashboard/dashboard_svg.html",
+      "accessCount": 1,
+      "lastAccessed": 1778415273779,
       "type": "file"
     }
   ],
