@@ -610,6 +610,9 @@ def extract_team_week_entities(
 LOOKBACK_WEEKS = 4
 SIMILARITY_FLOOR = 0.7
 MAX_CROSS_TEAM_COUNT = 4  # 섹션 6 cross-team 블록 협업팀 수 상한 (2~4팀만 노출)
+MAX_CROSS_BLOCKS = 5      # 섹션 6 최종 `###` 블록 상한 (월 3~5개 목표)
+MIN_CROSS_BLOCKS = 3      # 가급적 채울 하한 (참고용)
+DEDUP_TEAM_JACCARD = 0.5  # 두 블록 병합 임계값 (팀 집합 Jaccard)
 
 _SECTION_RE = re.compile(
     r"\*\*(\d+)\.\s*([^\*]+?)\*\*\s*(.*?)(?=\n\*\*\d+\.|\Z)",
@@ -1434,6 +1437,40 @@ def _format_monthly_cross_candidates(
     return "\n".join(lines).strip()
 
 
+def _format_monthly_chain_candidates(chains: List[Dict]) -> str:
+    """chain 리스트를 Stage 2 LLM 용 markdown 으로 직렬화 (주차별 raw 후보 대체).
+
+    주차별 후보를 그대로 보내면 동일 사안이 4~5주에 걸쳐 중복 노출되어 LLM 이 별개 블록으로
+    출력하기 쉬움. chain 단위(1A→1B 임베딩+팀overlap+LLM verify 로 이미 dedup)로 변환해
+    Stage 2 가 보는 후보 자체를 줄인다. 등장 주차 수가 많고 팀 수가 많은 chain 을 위로 정렬.
+    """
+    sorted_chains = sorted(
+        chains,
+        key=lambda ch: (len(ch.get("weeks_present", [])), len(ch.get("teams", []))),
+        reverse=True,
+    )
+    parts: List[str] = []
+    for ch in sorted_chains:
+        title = (ch.get("title") or "").strip()
+        teams = [t for t in ch.get("teams", []) if t]
+        weeks = ch.get("weeks_present") or []
+        if not title or len(teams) < 2 or len(teams) > MAX_CROSS_TEAM_COUNT:
+            continue
+        block = [
+            f"- 제목: {title}",
+            f"  팀: {' <-> '.join(teams)}",
+            f"  등장 주차: {len(weeks)}주 ({', '.join(weeks)})",
+        ]
+        weekly = ch.get("weekly_summaries") or {}
+        if weekly:
+            recent_week = sorted(weekly.keys())[-1]
+            recent_summary = (weekly.get(recent_week) or "").strip()
+            if recent_summary:
+                block.append(f"  요약(최근): {recent_summary}")
+        parts.append("\n".join(block))
+    return "\n\n".join(parts).strip()
+
+
 def compute_monthly_issue_chains(
     month: str,
     team_week_summaries: Dict[str, str],
@@ -1692,6 +1729,103 @@ def _strip_oversized_cross_blocks(
     return "\n".join(lines)
 
 
+_TITLE_TOKEN_RE = re.compile(r"[A-Za-z0-9가-힣]{2,}")
+
+
+def _title_tokens(title: str) -> set:
+    return {t.lower() for t in _TITLE_TOKEN_RE.findall(title or "")}
+
+
+def _block_weight(issue: Dict) -> Tuple[int, int, int]:
+    """블록 중요도 가중치: (timeline bullet 수, 팀 수, 전체 bullet 수). 큰 게 더 중요."""
+    bullets = issue.get("bullets") or []
+    timeline_count = 0
+    for b in bullets:
+        head = (b or "").split(":", 1)[0].strip()
+        if _WEEK_LABEL_RE.match(head):
+            timeline_count += 1
+    return (timeline_count, len(issue.get("teams") or []), len(bullets))
+
+
+def _dedup_cross_blocks(
+    overview_md: str,
+    *,
+    section_num: int = 6,
+    max_blocks: int = MAX_CROSS_BLOCKS,
+    team_jaccard: float = DEDUP_TEAM_JACCARD,
+) -> str:
+    """섹션 N 의 `###` 블록 중 의미가 유사한 쌍을 병합(약한 쪽 drop). 잔여 블록도 max_blocks 로 제한.
+
+    유사 판정: 팀 집합 Jaccard ≥ team_jaccard AND 제목 토큰 1개 이상 공유.
+    survivor 선정: _block_weight 가 더 큰 쪽.
+    """
+    issues = _parse_cross_team_issues(overview_md, section_num=section_num)
+    if not issues:
+        return overview_md
+    section_offset = _section_line_offset(overview_md, section_num)
+
+    # 1) 의미 유사 블록 dedup
+    keep_idx = list(range(len(issues)))
+    drop_set: set = set()
+    for i in range(len(issues)):
+        if i in drop_set:
+            continue
+        for j in range(i + 1, len(issues)):
+            if j in drop_set:
+                continue
+            ti = set(issues[i].get("teams") or [])
+            tj = set(issues[j].get("teams") or [])
+            if not ti or not tj:
+                continue
+            inter = ti & tj
+            union = ti | tj
+            jac = len(inter) / len(union) if union else 0.0
+            if jac < team_jaccard:
+                continue
+            tok_i = _title_tokens(issues[i].get("title", ""))
+            tok_j = _title_tokens(issues[j].get("title", ""))
+            if not (tok_i & tok_j):
+                continue
+            wi = _block_weight(issues[i])
+            wj = _block_weight(issues[j])
+            loser = j if wi >= wj else i
+            drop_set.add(loser)
+            if loser == i:
+                break
+    keep_idx = [k for k in keep_idx if k not in drop_set]
+
+    # 2) 블록 수 캡: 약한 가중치 순으로 추가 drop
+    if len(keep_idx) > max_blocks:
+        keep_idx_sorted = sorted(keep_idx, key=lambda k: _block_weight(issues[k]), reverse=True)
+        kept = set(keep_idx_sorted[:max_blocks])
+        extra_drop = [k for k in keep_idx if k not in kept]
+        for k in extra_drop:
+            drop_set.add(k)
+        keep_idx = [k for k in keep_idx if k in kept]
+
+    if not drop_set:
+        return overview_md
+
+    lines = overview_md.split("\n")
+    dropped_titles: List[str] = []
+    for k in sorted(drop_set, key=lambda x: issues[x]["block_start"], reverse=True):
+        issue = issues[k]
+        start = section_offset + issue["block_start"]
+        end = min(section_offset + issue["block_end"], len(lines))
+        while end < len(lines) and not lines[end].strip():
+            end += 1
+        del lines[start:end]
+        dropped_titles.append(issue.get("title", "?"))
+
+    if dropped_titles:
+        preview = ", ".join(dropped_titles[:3]) + (" ..." if len(dropped_titles) > 3 else "")
+        print(
+            f"   [dedup] 유사/초과 cross-team 블록 {len(dropped_titles)}건 제거, "
+            f"잔여 {len(keep_idx)}건: {preview}"
+        )
+    return "\n".join(lines)
+
+
 def inject_monthly_chain_timeline(
     overview_md: str,
     chains: List[Dict],
@@ -1821,6 +1955,12 @@ def _build_monthly_system_prompt(month: str, weeks: List[str], teams_by_group: D
    - 부수 활동 나열·복수 사안 병기 금지. 두 핵심은 `;` 또는 `,` 한 번으로만 연결.
    - 한 줄 길이는 한국어 100자 이내 권장.
 9. 섹션 6 각 `###` 블록의 협업팀 수는 **2~4개**. 5팀 이상 묶지 말 것 (필요하면 핵심 팀만 추려 별개 블록으로 분리). 단일 팀 블록도 금지.
+10. 섹션 6 전체 `###` 블록 개수는 **3~5개**. 5개 초과 금지. 후보가 많아도 가장 중요한 3~5개로 통합한다.
+11. 의미적으로 유사한 사안(동일 결함 유형이 여러 라인에서 반복, 동일 백로그/일정 리스크가 부서별로 재진술 등)은 **반드시 하나의 `###` 블록으로 병합**.
+    - 별도 블록으로 쪼개지 말 것.
+    - 병합 판정: 제목 핵심 키워드 공유 + 팀 집합 overlap.
+    - 표현만 다르고 본질이 같으면 1개 블록으로 통합하고 팀 라인업·timeline 으로 차이를 표현.
+12. 사소한 부수 이슈·단발성 사안은 섹션 6 에서 제외하고 섹션 1~5 한 줄에서만 다룬다.
 """
 
 
@@ -1907,9 +2047,9 @@ def generate_monthly_overview(
 --- 끝 ---
 
 중요:
-- 위 cross-team 후보는 주차별로 이미 추출된 근거이므로, 섹션 6에서는 보수적으로 재탐색하지 말고 우선 이 후보들을 통합/확장하세요.
-- 의미적으로 같은 후보(예: 여러 주차에 같은 사안)는 하나의 블록으로 병합 가능.
-- 근거가 충분한 후보는 가능한 한 누락하지 말 것 (월간 관점 8~15개 목표).
+- 위 cross-team 후보는 이미 한 달치 chain 으로 dedup 된 근거이므로, 섹션 6에서는 보수적으로 재탐색하지 말고 이 후보들을 그대로 통합/요약하세요.
+- 섹션 6 최종 `###` 블록은 **3~5개**. 후보가 많아도 가장 중요한 3~5개로 통합 (5개 초과 금지).
+- 의미적으로 같은 사안(제목·표현만 다른 경우 포함)은 반드시 하나의 블록으로 병합.
 - 후보에 없는 내용은 팀별 한달 요약에 명확한 근거가 있을 때만 추가.
 
 위 입력을 바탕으로 6섹션 월간 markdown을 작성하세요."""
@@ -1955,6 +2095,7 @@ def generate_monthly_overview(
         except Exception as exc:
             print(f"   [stage2 섹션6 파싱 실패] {type(exc).__name__}: {exc}")
         content = _strip_oversized_cross_blocks(content, max_teams=MAX_CROSS_TEAM_COUNT)
+        content = _dedup_cross_blocks(content, max_blocks=MAX_CROSS_BLOCKS)
     return content
 
 
@@ -1998,12 +2139,24 @@ def backfill_monthly_overview(
         weekly_issues_by_week[w] = [iss.model_dump() for iss in extraction.issues]
         print(f"   [stage1a] {w}: cross-team 이슈 {len(extraction.issues)}건")
 
-    candidates_md = _format_monthly_cross_candidates(weekly_issues_by_week)
+    # Stage 1B chain 사전 빌드 — Stage 2 입력과 Stage 4 timeline 주입에 공통 재사용
     total_1a = sum(len(v) for v in weekly_issues_by_week.values())
-    print(
-        f"   [stage1a→stage2] 후보 총 {total_1a}건 → Stage 2 프롬프트에 주입 "
-        f"({len(candidates_md):,}자)"
+    chains = compute_monthly_issue_chains(
+        month, team_week_summaries, os_client, embed_client,
+        use_cache=True, weekly_issues_by_week=weekly_issues_by_week,
     )
+    if chains:
+        candidates_md = _format_monthly_chain_candidates(chains)
+        print(
+            f"   [stage1b→stage2] chain {len(chains)}건 → Stage 2 입력 "
+            f"({len(candidates_md):,}자, 1A 원본 {total_1a}건)"
+        )
+    else:
+        candidates_md = _format_monthly_cross_candidates(weekly_issues_by_week)
+        print(
+            f"   [stage1a→stage2] chain 0건, 폴백: 주차별 후보 {total_1a}건 → Stage 2 "
+            f"({len(candidates_md):,}자)"
+        )
 
     overview = generate_monthly_overview(
         month, team_week_summaries, teams_by_group,
@@ -2013,14 +2166,11 @@ def backfill_monthly_overview(
         print(f"  ⚠️ 월간 요약 생성 실패: {month}")
         return
 
-    if os.getenv("MONTHLY_CHAIN_ANNOTATE", "1") != "0":
+    if chains and os.getenv("MONTHLY_CHAIN_ANNOTATE", "1") != "0":
         try:
-            overview = annotate_monthly_chain_status(
-                overview, month, team_week_summaries, os_client, embed_client,
-                weekly_issues_by_week=weekly_issues_by_week,
-            )
+            overview = inject_monthly_chain_timeline(overview, chains, section_num=6)
         except Exception as exc:
-            print(f"  ⚠️ chain 어노테이션 실패(원본 저장): {month} - {type(exc).__name__}: {exc}")
+            print(f"  ⚠️ timeline 주입 실패(원본 저장): {month} - {type(exc).__name__}: {exc}")
 
     title = f"{month} 전체 팀 월간 종합 요약"
 
