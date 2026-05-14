@@ -609,6 +609,7 @@ def extract_team_week_entities(
 # canonical regex copy: generate_outlook_report.py:302, generate_stitch_report.py:72
 LOOKBACK_WEEKS = 4
 SIMILARITY_FLOOR = 0.7
+MAX_CROSS_TEAM_COUNT = 4  # 섹션 6 cross-team 블록 협업팀 수 상한 (2~4팀만 노출)
 
 _SECTION_RE = re.compile(
     r"\*\*(\d+)\.\s*([^\*]+?)\*\*\s*(.*?)(?=\n\*\*\d+\.|\Z)",
@@ -1168,6 +1169,7 @@ CROSS_GROUPS_PROMPT_FRAGMENT = """### 이슈 제목 (관련팀A <-> 관련팀B <
 라벨 규칙(엄수):
 - 헤더 괄호 안과 bullet 라벨은 반드시 입력 team-week에 등장한 **팀명**만 사용. 그룹명(DRAM PTE / NAND PTE / DRAM SRT / NAND SRT / 우시 PTE) 절대 사용 금지.
 - 한 그룹 전체에 걸친 이슈도 그룹명 대신 해당 그룹 소속 팀 중 실제 입력에 데이터가 있는 팀명으로 나열.
+- **헤더 괄호 안 팀 개수는 2~4개로 제한 (5팀 이상 금지).** 광범위한 공통 사안은 가장 핵심적인 2~4팀으로 좁혀 표현하고, 나머지 팀의 동일 사안은 별도 블록으로 쪼개거나 섹션 1~5 한 줄에서만 다룬다.
 
 (여러 이슈가 있으면 `###` 블록을 반복. 각 블록은 반드시 `### 소제목 (팀 <-> 팀)` + 관련 팀별 bullet + 마지막에 `- 종합: ...` bullet 순서.)"""
 
@@ -1406,7 +1408,7 @@ def _format_monthly_cross_candidates(
     weekly_issues_by_week: Dict[str, List[Dict]]
 ) -> str:
     """Stage 1A 결과(주차→이슈 dict 리스트)를 Stage 2 LLM 입력용 markdown 으로 직렬화.
-    teams 2개 미만 또는 title 누락은 제외."""
+    teams 2개 미만/MAX_CROSS_TEAM_COUNT 초과 또는 title 누락은 제외."""
     lines: List[str] = []
     for week in sorted(weekly_issues_by_week.keys()):
         issues = weekly_issues_by_week[week]
@@ -1414,7 +1416,7 @@ def _format_monthly_cross_candidates(
         for iss in issues:
             title = (iss.get("title") or "").strip()
             teams = [t.strip() for t in (iss.get("teams") or []) if t and t.strip()]
-            if not title or len(teams) < 2:
+            if not title or len(teams) < 2 or len(teams) > MAX_CROSS_TEAM_COUNT:
                 continue
             block = [f"- 제목: {title}", f"  팀: {' <-> '.join(teams)}"]
             summary = (iss.get("summary") or "").strip()
@@ -1543,7 +1545,11 @@ def _assemble_monthly_issue_chain(
                 )
                 chain_embeddings.append(iss_emb)
 
-    return chains
+    filtered = [ch for ch in chains if 2 <= len(ch["teams"]) <= MAX_CROSS_TEAM_COUNT]
+    dropped = len(chains) - len(filtered)
+    if dropped:
+        print(f"   [stage1b filter] 협업팀 {MAX_CROSS_TEAM_COUNT}개 초과 chain {dropped}건 제외")
+    return filtered
 
 
 def _match_block_to_chain(block: Dict, chains: List[Dict]) -> Optional[Dict]:
@@ -1649,6 +1655,43 @@ def _inject_weekly_timeline_bullets(
     return "\n".join(lines)
 
 
+def _strip_oversized_cross_blocks(
+    overview_md: str,
+    *,
+    max_teams: int = MAX_CROSS_TEAM_COUNT,
+    section_num: int = 6,
+) -> str:
+    """섹션 N 의 `###` 크로스팀 블록 중 협업팀 수가 max_teams 초과인 것을 제거.
+
+    LLM 이 프롬프트의 팀 수 캡(2~max_teams)을 어기고 5팀+ 블록을 만들었을 때 최종 마크다운에서
+    안전망으로 잘라낸다. 잘려나간 블록 수/제목은 콘솔에 기록.
+    """
+    issues = _parse_cross_team_issues(overview_md, section_num=section_num)
+    if not issues:
+        return overview_md
+
+    section_offset = _section_line_offset(overview_md, section_num)
+    if section_offset < 0:
+        return overview_md
+
+    lines = overview_md.split("\n")
+    dropped: List[str] = []
+    for issue in sorted(issues, key=lambda x: x["block_start"], reverse=True):
+        if len(issue.get("teams", [])) <= max_teams:
+            continue
+        start = section_offset + issue["block_start"]
+        end = min(section_offset + issue["block_end"], len(lines))
+        while end < len(lines) and not lines[end].strip():
+            end += 1
+        del lines[start:end]
+        dropped.append(issue.get("title", "?"))
+
+    if dropped:
+        preview = ", ".join(dropped[:3]) + (" ..." if len(dropped) > 3 else "")
+        print(f"   [stage2 후처리] 협업팀 {max_teams}개 초과 cross-team 블록 {len(dropped)}건 제거: {preview}")
+    return "\n".join(lines)
+
+
 def inject_monthly_chain_timeline(
     overview_md: str,
     chains: List[Dict],
@@ -1737,28 +1780,28 @@ def _build_monthly_system_prompt(month: str, weeks: List[str], teams_by_group: D
 - **우시 PTE**: ...
 
 **2. 수율 주요내용 (6)**
-- **Spica수율**: ...
-- **HBM수율**: ...
-- **LC_CP수율**: ...
-- **Olympus수율**: ...
-- **CL_PE수율**: ...
-- **우시수율PTE**: ...
+- **Spica수율**: 핵심 1~2개 (최대 2). 한달 핵심 수치 1개 + 가장 큰 이슈/리스크 1개.
+- **HBM수율**: 핵심 1~2개 (최대 2).
+- **LC_CP수율**: 핵심 1~2개 (최대 2).
+- **Olympus수율**: 핵심 1~2개 (최대 2).
+- **CL_PE수율**: 핵심 1~2개 (최대 2).
+- **우시수율PTE**: 핵심 1~2개 (최대 2).
 
 **3. 품질 주요내용 (2)**
-- **DRAM품질PTE**: ...
-- **NAND품질PTE**: ...
+- **DRAM품질PTE**: 핵심 1~2개 (최대 2).
+- **NAND품질PTE**: 핵심 1~2개 (최대 2).
 
 **4. 증산TF수율분과 (4)**
-- **DRAM수율전략**: 증산TF(증산 목표·라인 확장·신규 라인 셋업·증산 ramp) 관련 활동만 한 줄.
-- **DRAM FA PTE**: 증산TF 관련 활동만 한 줄 (증산 라인 FA 지원·증산 ramp 관련 분석 등).
-- **NAND수율전략**: 증산TF 관련 활동만 한 줄.
-- **NAND FA PTE**: 증산TF 관련 활동만 한 줄.
+- **DRAM수율전략**: 증산TF(증산 목표·라인 확장·신규 라인 셋업·증산 ramp) 관련 핵심 1~2개 (최대 2).
+- **DRAM FA PTE**: 증산TF 관련 핵심 1~2개 (최대 2) (증산 라인 FA 지원·증산 ramp 관련 분석 등).
+- **NAND수율전략**: 증산TF 관련 핵심 1~2개 (최대 2).
+- **NAND FA PTE**: 증산TF 관련 핵심 1~2개 (최대 2).
 
 **5. 개발제품수율 및 양산성 (4)**
-- **DRAM SRT 개발공정**: HBM4E 관련 항목만 다룰 것.
-- **Heraion양산수율**: ...
-- **Procyon양산수율**: ...
-- **Robson양산수율**: ...
+- **DRAM SRT 개발공정**: HBM4E 관련 핵심 1~2개 (최대 2).
+- **Heraion양산수율**: 핵심 1~2개 (최대 2).
+- **Procyon양산수율**: 핵심 1~2개 (최대 2).
+- **Robson양산수율**: 핵심 1~2개 (최대 2).
 
 **6. 크로스팀이슈 (한달치)**
 {CROSS_GROUPS_PROMPT_FRAGMENT}
@@ -1773,6 +1816,11 @@ def _build_monthly_system_prompt(month: str, weeks: List[str], teams_by_group: D
 7. 섹션 4 의 4개 팀(DRAM수율전략·DRAM FA PTE·NAND수율전략·NAND FA PTE) 한 줄은 **증산TF 관련 활동**(증산 목표 달성률, 신규 라인 셋업·라인 확장 일정, 증산 ramp, 증산 라인 FA 지원 등 증산 일정·물량 확장에 직접 연관된 사안)만 다룬다.
    - 해당 팀의 일반 FA / 수율 / 품질 / 분석 활동(예: 일반 8D Report, FA 분석 백로그, Reliability margin 등)은 섹션 4 에서 제외하고, 섹션 1 그룹 한 줄·섹션 6 크로스팀이슈로만 노출.
    - 팀의 한 달 요약에 증산TF 관련 활동 데이터가 없으면 해당 팀 한 줄을 `데이터 부족` 으로 표기 (3번 원칙 그대로 적용).
+8. 섹션 2~5 의 각 팀 한 줄에는 **가장 중요한 1~2 핵심**(최대 2개)만 담는다.
+   - 우선순위: (i) 한달 핵심 수치/지표 1개, (ii) 가장 큰 이슈/리스크 1개.
+   - 부수 활동 나열·복수 사안 병기 금지. 두 핵심은 `;` 또는 `,` 한 번으로만 연결.
+   - 한 줄 길이는 한국어 100자 이내 권장.
+9. 섹션 6 각 `###` 블록의 협업팀 수는 **2~4개**. 5팀 이상 묶지 말 것 (필요하면 핵심 팀만 추려 별개 블록으로 분리). 단일 팀 블록도 금지.
 """
 
 
@@ -1906,6 +1954,7 @@ def generate_monthly_overview(
             )
         except Exception as exc:
             print(f"   [stage2 섹션6 파싱 실패] {type(exc).__name__}: {exc}")
+        content = _strip_oversized_cross_blocks(content, max_teams=MAX_CROSS_TEAM_COUNT)
     return content
 
 
