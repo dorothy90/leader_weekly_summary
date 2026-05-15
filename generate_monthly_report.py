@@ -159,63 +159,6 @@ REPORT_WIDTH_PX = 1100
 BADGE_WIDTH_PX = 170
 
 
-def render_cross_team_groups_summary(groups: list[dict]) -> str:
-    """월간 전용: 크로스팀 그룹을 '제목(+공동 대응 라벨) · 협업 팀 칩 · 종합'으로 렌더."""
-    blocks: list[str] = []
-    for ci, g in enumerate(groups):
-        teams = g.get("related_teams") or []
-        is_multi = len(teams) >= 2
-
-        collab_label = ""
-        if is_multi:
-            collab_label = (
-                f' <span style="font-weight:normal; font-size:11px; '
-                f'color:{NAVY}; padding-left:8px;">'
-                f'&middot; {len(teams)}팀 공동 대응</span>'
-            )
-        title_row = (
-            f'<tr><td style="padding:6px 12px; background-color:{YELLOW_BG}; '
-            f'border-left:3px solid {YELLOW}; color:{YELLOW_TEXT}; '
-            f'font-weight:bold;">{esc_inline(g["title"])}{collab_label}</td></tr>'
-        )
-
-        chips_row = ""
-        if is_multi:
-            chips = "".join(
-                f'<span style="display:inline-block; padding:2px 8px; '
-                f'margin:2px 4px 2px 0; border:1px solid {BORDER}; color:{MUTED}; '
-                f'font-size:11px; font-weight:normal; line-height:16px; '
-                f'mso-padding-alt:0;">{esc_inline(t)}</span>'
-                for t in teams
-            )
-            chips_row = (
-                f'<tr><td style="padding:6px 12px; background-color:{CARD_BG}; '
-                f'border-left:3px solid {YELLOW};">{chips}</td></tr>'
-            )
-
-        summary_row = ""
-        if g.get("summary"):
-            summary_row = (
-                f'<tr><td style="padding:8px 12px; background-color:{PANEL_BG}; '
-                f'border-left:3px solid {NAVY}; color:{INK};">'
-                f'<b style="color:{NAVY};">종합 &middot; </b>'
-                f'{esc_inline(g["summary"])}</td></tr>'
-            )
-        blocks.append(title_row + chips_row + summary_row)
-        if ci < len(groups) - 1:
-            blocks.append(
-                '<tr><td style="font-size:1px; line-height:10px;">&nbsp;</td></tr>'
-            )
-    return (
-        f'<tr><td style="padding:4px 28px 16px 28px;">'
-        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
-        f'style="border-collapse:collapse; font-family:{FONT}; font-size:13px; '
-        f'line-height:20px; color:{INK};">'
-        f'{"".join(blocks)}'
-        f'</table></td></tr>'
-    )
-
-
 def render_label_table(bullets: list[str], expected_canonical: list[str] | None = None) -> str:
     """섹션 2~5: NAVY filled 배지 + 흰 본문 (이전 스타일 유지)."""
     rows: list[str] = []
@@ -293,7 +236,7 @@ def render_section(num: int, title: str, content: str) -> str:
     if kind == "cross_groups":
         groups = parse_cross_team_groups(content)
         if groups:
-            return section_header(num, title, accent) + render_cross_team_groups_summary(groups)
+            return section_header(num, title, accent) + render_cross_team_groups(groups)
         bullets = parse_bullets(content)
         return (
             section_header(num, title, accent)
