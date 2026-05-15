@@ -262,3 +262,4 @@ exports/deep_mining/test_refactored.pptx
 .omc/state/subagent-tracking.json
 pptdaddy
 wiki
+__pycache__/
