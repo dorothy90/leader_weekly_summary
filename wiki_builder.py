@@ -48,11 +48,28 @@ class TeamWeekEntities(BaseModel):
 # ========== Pydantic 모델 (Phase 2: 월간 cross-team chain) ==========
 class WeeklyCrossIssue(BaseModel):
     title: str = Field(
-        description="이 주차에 두 팀 이상 함께 등장한 cross-team 이슈의 짧은 제목 (예: 'Edge Particle 확산')"
+        description=(
+            "구체적인 cross-team 이슈 제목. 반드시 제품 코드(Spica/Procyon/HBM/D5/D6 등) · "
+            "공정 단계(Etch/CMP/Photo/Implant/SN/SAC 등) · 구체 현상명 중 **하나 이상**을 포함. "
+            "'CMP 이슈', '불량 개선', '산포 대응' 같은 generic 표현 금지."
+        )
     )
     teams: List[str] = Field(
         default_factory=list,
-        description="이슈에 함께 언급된 팀 이름 리스트 (입력 team-week에 등장한 팀명 그대로 사용)"
+        description=(
+            "이슈에 함께 언급된 팀 이름 리스트. 실제로 동일 사안(같은 제품·공정·원인)에 대해 "
+            "협업/의존/대응 중인 팀만 포함. 단순히 같은 단어가 등장한다는 이유로 무관한 팀을 "
+            "끼워 넣지 말 것. 최소 2개 ~ 최대 4개. 입력 team-week에 등장한 팀명 그대로 사용."
+        )
+    )
+    shared_root_cause: str = Field(
+        default="",
+        description=(
+            "해당 팀들이 공유하는 구체적 root cause 또는 공통 대상 한 문장 "
+            "(예: 'Spica 16G D5 SN module 열화로 인한 D0 저하'). "
+            "한 문장으로 공통 원인·공통 대상을 적을 수 없으면 cross-team 이슈가 아니므로 "
+            "추출하지 말 것."
+        )
     )
     summary: str = Field(
         default="",
@@ -60,7 +77,11 @@ class WeeklyCrossIssue(BaseModel):
     )
     bullets: List[str] = Field(
         default_factory=list,
-        description="팀별 관점 1줄씩 (예: ['Spica수율: D0 ↑', 'HBM수율: ECC fail 증가']). 최대 5개."
+        description=(
+            "팀별 관점 1줄씩. 반드시 형식: '<팀명>: <title 핵심 키워드를 포함한 구체 내용>'. "
+            "title의 핵심 키워드(제품/공정/현상)가 각 bullet 내용에도 등장해야 함. "
+            "키워드가 등장하지 않는 팀은 teams/bullets 양쪽에서 제외. teams 와 1:1 대응."
+        )
     )
 
 
@@ -444,7 +465,12 @@ def generate_weekly_overview(week: str, team_summaries: Dict[str, str]) -> str:
 
 작성 원칙:
 1. 각 팀 요약을 바탕으로 조직 전체 관점에서 종합
-2. 팀 간 연관 이슈가 있으면 크로스 레퍼런스, 여러 팀에 걸친 공통 공통 이슈나 연관 사항
+2. 팀 간 연관 이슈가 있을 때만 크로스 레퍼런스. **다음 조건 중 하나를 충족할 때만 크로스팀으로 묶는다**:
+   (a) 동일 제품(Spica/Procyon/HBM/D5/D6 등) + 동일 공정/모듈(SN/SAC/CMP/Etch/Photo 등) 조합,
+   (b) 한 팀의 액션·이슈가 다른 팀에 직접 영향(의존/입력/원인),
+   (c) 동일 root cause(불량 모드/장비/재료/일정).
+   **단순히 '불량/산포/개선/이슈/모듈/열화/대응' 같은 generic 단어가 겹친다고 묶지 말 것.** 단어만 같고
+   제품·공정·원인이 다르면 별개 이슈로 분리하고, 크로스팀 섹션이 아닌 섹션 2(팀별 하이라이트) 에서만 다룬다.
 3. 조직 차원의 핵심 이슈와 리스크 도출
 
 출력 형식 — 아래 예시의 구조를 한 글자도 바꾸지 말고 그대로 복제하세요.
@@ -461,10 +487,16 @@ def generate_weekly_overview(week: str, team_summaries: Dict[str, str]) -> str:
 
 **3. 크로스팀 이슈**
 ### 이슈 제목 (관련팀A <-> 관련팀B <-> 관련팀C)
-- 관련팀A: 해당 팀 관점의 상세 내용 (수치/기간 포함)
-- 관련팀B: 해당 팀 관점의 상세 내용
-- 관련팀C: 해당 팀 관점의 상세 내용
+- 관련팀A: 해당 팀 관점의 상세 내용 (수치/기간 포함, **이슈 제목의 핵심 키워드(제품/공정/현상)를 본문에 반드시 포함**)
+- 관련팀B: 해당 팀 관점의 상세 내용 (동일 — 제목 핵심 키워드 포함)
+- 관련팀C: 해당 팀 관점의 상세 내용 (동일 — 제목 핵심 키워드 포함)
 - 종합: 조직 차원의 해석과 필요 액션 (개별 팀 bullet에 이미 있는 문장을 반복하지 말 것)
+
+**크로스팀 블록 작성 규칙(엄수)**:
+- 제목은 구체적이어야 함: 제품 코드 / 공정 단계 / 구체 현상명 중 하나 이상을 포함. 'CMP 이슈', '불량 개선' 같은 추상 제목 금지.
+- 각 팀 bullet 본문에 제목의 핵심 키워드(제품/공정/현상)가 반드시 등장해야 함. 제목과 무관한 팀 내용을 끼워 넣지 말 것.
+- 헤더 괄호 안 팀 개수는 2~4개. 5팀 이상으로 묶지 말 것 — 무리하게 넓히면 별개 이슈로 분리.
+- 동일 root cause/제품/공정 매칭을 한 문장으로 설명할 수 없는 묶음은 만들지 말 것. 차라리 섹션 3 을 비워두는 편이 낫다.
 
 (여러 이슈가 있으면 `###` 블록을 반복. 각 블록은 반드시 `### 소제목 (팀 <-> 팀)` + 관련 팀별 bullet + 마지막에 `- 종합: ...` bullet 순서.)
 
@@ -1299,16 +1331,40 @@ def _call_team_month_compress_llm(team: str, month: str, weeks_text: str) -> str
 WEEKLY_CROSS_EXTRACT_SYSTEM_PROMPT = """당신은 주간 보고에서 cross-team 이슈를 식별하는 전문가입니다.
 
 입력은 한 주차의 N개 팀별 weekly 요약입니다.
-서로 다른 팀 두 개 이상의 weekly 요약에서 **공통으로 등장하는 사안 (cross-team issue)** 만 추출합니다.
+서로 다른 팀 두 개 이상의 weekly 요약에서 **실제로 공유되는 사안 (cross-team issue)** 만 추출합니다.
 
-규칙:
+# 핵심 원칙 — "키워드가 겹친다"는 cross-team 이슈가 아닙니다.
+다음 세 조건 중 **최소 하나 이상**을 충족할 때만 cross-team 으로 인정합니다.
+  (A) 동일 제품(Spica/Procyon/HBM/D5/D6/16G 등) + 동일 공정/모듈(SN/SAC/CMP/Etch/Photo 등) 조합
+  (B) 한 팀의 액션·이슈가 다른 팀의 액션·이슈에 직접 영향(의존/입력/원인)을 주는 사안
+  (C) 동일 root cause(불량 모드/장비/재료/일정)에서 발생한 사안
+
+# 엄격 규칙
 1. 한 팀에서만 언급된 단일 팀 이슈는 추출하지 말 것.
-2. 두 팀 이상이 같은 키워드/현상/공정/제품에 대해 언급하면 cross-team 이슈로 간주.
-3. 제목은 짧고 행동지향적으로 (예: 'Etch 잔류물 확산', 'Particle 영향 증가').
-4. teams 필드에는 입력 weekly에 등장한 **팀명을 그대로** 사용 (그룹명 금지: DRAM PTE/NAND PTE/DRAM SRT/NAND SRT/우시 PTE).
-5. summary 는 조직 차원 영향 1줄.
-6. bullets 는 팀별 1줄씩 (관점 차이가 명확할 때).
-7. 0~6 건. 너무 많이 만들지 말 것.
+2. **단순 키워드 중복으로 묶지 말 것.** 특히 '산포', '불량', '개선', '이슈', '열화', '모듈',
+   '안정화', '특성', '품질', '이상', '문제', '대응' 같은 generic 단어는 그 자체만으로 cross-team
+   근거가 될 수 없음. 같은 단어가 등장해도 **제품/공정/원인이 다르면 별개 이슈**.
+   예) CMP팀의 'CMP 경시성 및 산포 이슈' 와 DRAM PI PTE팀의 'Spica 16G D5 SN module 열화' 는
+       '산포/모듈' 단어가 겹쳐도 제품·공정·원인이 달라 동일 cross-team 이슈가 아님.
+3. 각 이슈마다 `shared_root_cause` 한 문장을 반드시 작성. 한 문장으로 공통 원인이나 공통 대상을
+   적을 수 없다면 그 이슈는 추출하지 말고 제외 (cross-team 이 아님).
+4. `title` 은 구체적이어야 함: 제품 코드 / 공정 단계 / 구체 현상명 중 하나 이상을 포함.
+   'CMP 이슈', '불량 개선', '산포 대응' 같은 추상 제목 금지.
+5. `bullets` 의 각 항목은 반드시 `<팀명>: <title 핵심 키워드를 포함한 구체 내용 (수치/기간/대상)>` 형식.
+   title 의 핵심 키워드(제품/공정/현상) 중 하나 이상이 각 bullet 본문에도 등장해야 함.
+   키워드가 등장하지 않는 팀은 teams/bullets 양쪽에서 제외할 것.
+6. `teams` 필드에는 입력 weekly 에 등장한 **팀명을 그대로** 사용
+   (그룹명 금지: DRAM PTE / NAND PTE / DRAM SRT / NAND SRT / 우시 PTE).
+7. `teams` 는 최소 2개 ~ 최대 4개. 5팀 이상이면 가장 핵심적인 2~4팀으로 좁히거나 별도 이슈로 쪼갤 것.
+8. `summary` 는 조직 차원 영향 1줄.
+9. 0~6 건. 확신 없는 이슈는 만들지 말 것 — **recall 보다 precision 우선**.
+   애매하면 단일 팀 이슈로 남겨두는 것이 낫습니다.
+
+# 자체 점검 (출력 전 마지막에 검사)
+각 이슈에 대해 다음 질문에 모두 'Yes' 가 아니면 그 이슈는 출력에서 제외하세요.
+- (a) shared_root_cause 가 제품/공정/현상 중 하나를 구체적으로 가리키는가?
+- (b) 모든 bullet 의 본문에 title 핵심 키워드가 등장하는가?
+- (c) generic 단어(산포/불량/개선/모듈/열화 등)만으로 팀을 묶은 것은 아닌가?
 
 출력은 structured JSON (WeeklyCrossExtraction).
 """
@@ -1324,6 +1380,66 @@ def _format_team_summaries_for_extract(team_summaries: Dict[str, str]) -> str:
     return "\n\n".join(parts)
 
 
+# 단독으로는 cross-team 근거가 될 수 없는 generic 키워드 (룰 기반 검증용).
+# 같은 단어가 두 팀에 등장해도, 제품/공정/원인이 다르면 별개 이슈로 분리되어야 함.
+_CROSS_ISSUE_GENERIC_TOKENS: Set[str] = {
+    "산포", "불량", "개선", "이슈", "열화", "모듈", "module",
+    "안정화", "특성", "품질", "이상", "문제", "대응", "수율",
+    "분석", "관리", "검토", "확인", "진행", "원인", "현상",
+}
+
+# title 토큰 분할용 (공백/괄호/슬래시/콤마 등 기준)
+_CROSS_ISSUE_TITLE_SPLIT_RE = re.compile(r"[\s/()\[\]·,&]+")
+
+
+def _normalize_token(tok: str) -> str:
+    return tok.strip().strip(".,:;").lower()
+
+
+def _title_non_generic_tokens(title: str) -> List[str]:
+    """title 에서 generic 단어와 1글자 토큰을 제외한 핵심 키워드 리스트."""
+    out: List[str] = []
+    for raw in _CROSS_ISSUE_TITLE_SPLIT_RE.split(title or ""):
+        norm = _normalize_token(raw)
+        if not norm or len(norm) < 2:
+            continue
+        if norm in _CROSS_ISSUE_GENERIC_TOKENS:
+            continue
+        out.append(norm)
+    return out
+
+
+def _validate_cross_issue(issue: "WeeklyCrossIssue", input_teams: Set[str]) -> Optional[str]:
+    """추출된 이슈가 진짜 cross-team 인지 룰 기반 검증.
+    문제가 있으면 reason 문자열, OK 면 None.
+    """
+    if not (issue.title or "").strip():
+        return "title 누락"
+    if len(issue.teams) < 2:
+        return f"teams 부족 ({len(issue.teams)})"
+    if not (issue.shared_root_cause or "").strip():
+        return "shared_root_cause 누락 (공통 원인을 한 문장으로 적지 못함 → cross-team 아님)"
+
+    title_keywords = _title_non_generic_tokens(issue.title)
+    if not title_keywords:
+        return f"title 이 generic 단어로만 구성됨: {issue.title!r}"
+
+    # 입력에 존재하지 않는 팀명은 hallucination — 잘라낼 근거.
+    unknown_teams = [t for t in issue.teams if t not in input_teams]
+    if unknown_teams:
+        return f"입력에 없는 팀명 포함: {unknown_teams}"
+
+    # bullet 본문에 title 핵심 키워드가 하나도 등장하지 않으면 무관한 내용이 끼워진 것.
+    bullets_lower = " ".join(issue.bullets or []).lower()
+    if bullets_lower and not any(kw in bullets_lower for kw in title_keywords):
+        return (
+            f"bullets 본문에 title 핵심 키워드가 없음 "
+            f"(title 키워드={title_keywords})"
+        )
+
+    return None
+
+
 def _call_weekly_cross_extract_llm(week: str, team_summaries: Dict[str, str]) -> Optional["WeeklyCrossExtraction"]:
     """Stage 1A: raw OpenAI tools 로 주차 단위 cross-team 이슈 추출."""
     if not team_summaries:
@@ -1331,7 +1447,8 @@ def _call_weekly_cross_extract_llm(week: str, team_summaries: Dict[str, str]) ->
 
     user = (
         f"[{week}] 주차의 팀별 weekly 요약 {len(team_summaries)}건 입니다. "
-        "두 팀 이상에 공통으로 등장한 cross-team 이슈만 추출하세요.\n\n"
+        "두 팀 이상이 **동일 제품/공정/원인** 으로 공유하는 cross-team 이슈만 추출하세요. "
+        "단순 키워드 중복은 cross-team 이 아닙니다. 확신 없으면 빈 리스트로 출력하세요.\n\n"
         f"{_format_team_summaries_for_extract(team_summaries)}\n\n"
         "출력은 WeeklyCrossExtraction JSON."
     )
@@ -1347,10 +1464,27 @@ def _call_weekly_cross_extract_llm(week: str, team_summaries: Dict[str, str]) ->
     if parsed is None:
         return None
     try:
-        return WeeklyCrossExtraction.model_validate(parsed)
+        extraction = WeeklyCrossExtraction.model_validate(parsed)
     except Exception as exc:
         print(f"   [stage1a validation error] {week}: {type(exc).__name__}: {exc}")
         return None
+
+    # 룰 기반 사후 검증 — title 과 무관한 팀 내용이 끼워진 이슈를 걸러냄.
+    input_teams = {t for t in team_summaries.keys() if t}
+    kept: List[WeeklyCrossIssue] = []
+    for iss in extraction.issues:
+        reason = _validate_cross_issue(iss, input_teams)
+        if reason is None:
+            kept.append(iss)
+            continue
+        print(
+            f"   [stage1a drop] {week} title={iss.title!r} teams={iss.teams} "
+            f"reason={reason}"
+        )
+    dropped = len(extraction.issues) - len(kept)
+    if dropped > 0:
+        print(f"   [stage1a] {week}: 검증 통과 {len(kept)}건 / drop {dropped}건")
+    return WeeklyCrossExtraction(issues=kept)
 
 
 def _weekly_cross_doc_id(week: str) -> str:
