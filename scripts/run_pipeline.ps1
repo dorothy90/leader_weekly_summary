@@ -8,7 +8,12 @@
     로그를 남긴다. logs\pipeline_<주차>_<타임스탬프>.log 에 전체 출력 기록.
 
 .PARAMETER Week
-    대상 ISO 주차 (예: 2026-11). 미지정 시 오늘 날짜 기준 자동 계산.
+    대상 ISO 주차 (예: 2026-11). 미지정 시 '전주차'(직전 ISO 주차)를 자동 계산.
+    매주 화요일 오전에 실행하면 직전 한 주(월~일)가 대상이 된다.
+
+.PARAMETER FetchDays
+    fetch 단계 메일 수집 기간(일). 기본 10일 — 화요일 실행 시 전주(월~일) 전체를
+    안전하게 포함한다. (화요일 → 전주 월요일은 8일 전, 버퍼 포함 10일)
 
 .PARAMETER AutoSend
     지정하면 email 단계에서 Outlook 으로 즉시 자동 발송.
@@ -18,7 +23,7 @@
     fetch 단계 건너뛰기 (이미 수집된 데이터로 재실행할 때).
 
 .EXAMPLE
-    # 이번 주차 자동 계산, 메일 초안만 열기 (안전, 첫 실행 권장)
+    # 전주차 자동 계산, 메일 초안만 열기 (안전, 첫 실행 권장)
     powershell -ExecutionPolicy Bypass -File scripts\run_pipeline.ps1
 
 .EXAMPLE
@@ -28,6 +33,7 @@
 
 param(
     [string]$Week = "",
+    [int]$FetchDays = 10,
     [switch]$AutoSend,
     [switch]$SkipFetch
 )
@@ -48,10 +54,11 @@ if (Test-Path $VenvPython) {
     $Python = "python"
 }
 
-# ========== 주차 계산 ==========
+# ========== 주차 계산 (전주차) ==========
 if ([string]::IsNullOrWhiteSpace($Week)) {
-    # fetch_mail.py 의 get_week_string 과 동일한 ISO 주차 규칙 사용
-    $Week = & $Python -c "import datetime;i=datetime.date.today().isocalendar();print(f'{i[0]}-{i[1]:02d}')"
+    # 리포트 대상 = '전주차'(직전 ISO 주차). 오늘에서 7일 전 날짜의 ISO 주차로 계산
+    # → 연도 경계도 자동 처리. 화요일 실행 시 직전 한 주(월~일)가 대상.
+    $Week = & $Python -c "import datetime;d=datetime.date.today()-datetime.timedelta(days=7);i=d.isocalendar();print(f'{i[0]}-{i[1]:02d}')"
     $Week = $Week.Trim()
 }
 
@@ -89,16 +96,16 @@ function Invoke-Step {
 
 # ========== 파이프라인 시작 ==========
 Write-Log "##############################################"
-Write-Log "주간 리포트 파이프라인 시작 | 주차=$Week | 자동발송=$AutoSend"
+Write-Log "주간 리포트 파이프라인 시작 | 대상주차(전주)=$Week | 수집기간=${FetchDays}일 | 자동발송=$AutoSend"
 Write-Log "프로젝트 루트: $RepoRoot"
 Write-Log "Python: $Python"
 Write-Log "로그 파일: $LogFile"
 Write-Log "##############################################"
 
 try {
-    # 1) fetch — 메일 수집
+    # 1) fetch — 메일 수집 (전주 전체 포함 위해 FetchDays 일치 수집)
     if (-not $SkipFetch) {
-        Invoke-Step -Name "fetch" -Args @("fetch_mail.py")
+        Invoke-Step -Name "fetch" -Args @("fetch_mail.py", "--days", "$FetchDays")
     } else {
         Write-Log "⏭  fetch 단계 건너뜀 (-SkipFetch)"
     }

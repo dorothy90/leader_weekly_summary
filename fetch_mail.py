@@ -341,7 +341,7 @@ def fetch_mails(mailbox, days_back=1):
     return results
 
 
-def main():
+def main(days_back: int = 3):
     print("=" * 50)
     print("Gmail IMAP 메일 수집 & 로컬 저장")
     print("=" * 50)
@@ -349,8 +349,9 @@ def main():
     # 연결
     mailbox = connect_imap()
 
-    # 메일 수집 (최근 1일)
-    mails = fetch_mails(mailbox, days_back=3)
+    # 메일 수집 (최근 days_back 일)
+    print(f"📅 최근 {days_back}일치 메일 수집")
+    mails = fetch_mails(mailbox, days_back=days_back)
 
     print("\n" + "=" * 50)
     print("💾 로컬에 저장 중...")
@@ -433,5 +434,11 @@ if __name__ == "__main__":
         # 기존 파일 동기화 모드
         sync_existing_body_html()
     else:
-        # 기본 메일 수집 모드
-        main()
+        # 기본 메일 수집 모드 (--days N 으로 수집 기간 조절, 기본 3일)
+        days = 3
+        if "--days" in sys.argv:
+            try:
+                days = int(sys.argv[sys.argv.index("--days") + 1])
+            except (IndexError, ValueError):
+                print("⚠️ --days 값이 올바르지 않습니다. 기본값 3 사용")
+        main(days_back=days)

@@ -3,11 +3,16 @@
 `fetch → process → embed → wiki_build → wiki_export → email` 6단계를 Windows에서
 한 번에 실행/스케줄링하는 방법.
 
+> **스케줄 정책:** 매주 **화요일 오전**에 1회 실행하며, 리포트 대상은 **전주차**
+> (직전 ISO 주차, 월~일)이다. 화요일 시점이면 직전 한 주의 메일이 모두 도착해 있으므로
+> 완결된 주간 리포트를 만들 수 있다. 오케스트레이터는 주차 미지정 시 자동으로 전주차를
+> 계산하고, fetch는 전주 전체를 포함하도록 기본 10일치를 수집한다.
+
 ## 파이프라인 단계 매핑
 
 | 단계 | 스크립트 | 산출물 |
 |---|---|---|
-| **fetch** | `fetch_mail.py` | `data/{주차}/{팀}/mail_*/` (본문·이미지·첨부) |
+| **fetch** | `fetch_mail.py --days 10` | `data/{주차}/{팀}/mail_*/` (본문·이미지·첨부) |
 | **process** | `process_vision.py` → `process_attachment.py` | `combined.txt`, `attachments.json` |
 | **embed** | `embed_vectordb.py` | OpenSearch `weekly_mail` 인덱스 |
 | **wiki_build** | `wiki_builder.py --week {주차}` | OpenSearch `wiki_summaries` 인덱스 |
@@ -82,10 +87,10 @@ REPORT_CC=me@corp.com
 ## 2. 수동 실행 (.bat 더블클릭)
 
 ```text
-scripts\run_pipeline.bat                 → 이번 주차 자동계산, 메일 "초안만" 열기(안전)
+scripts\run_pipeline.bat                 → 전주차 자동계산, 메일 "초안만" 열기(안전)
 scripts\run_pipeline.bat 2026-11         → 특정 주차 지정
 scripts\run_pipeline.bat 2026-11 send    → 특정 주차 + 자동 발송
-scripts\run_pipeline.bat "" send         → 이번 주차 + 자동 발송
+scripts\run_pipeline.bat "" send         → 전주차 + 자동 발송
 ```
 
 - 인자 없이 실행하면 email 단계에서 **메일을 발송하지 않고 Outlook 초안만 띄운다.**
@@ -99,7 +104,8 @@ powershell -ExecutionPolicy Bypass -File scripts\run_pipeline.ps1 -Week 2026-11 
 ```
 
 옵션:
-- `-Week 2026-11` : 주차 수동 지정 (미지정 시 오늘 기준 ISO 주차 자동계산)
+- `-Week 2026-11` : 주차 수동 지정 (미지정 시 **전주차** 자동계산)
+- `-FetchDays 10` : fetch 수집 기간(일). 기본 10 (화요일 실행 시 전주 전체 포함)
 - `-AutoSend`     : email 단계 자동 발송
 - `-SkipFetch`    : 메일 재수집 없이 기존 데이터로 재실행
 
@@ -121,10 +127,10 @@ powershell -ExecutionPolicy Bypass -File scripts\run_pipeline.ps1 -Week 2026-11 
    - **"사용자가 로그온할 때만 실행"** 선택 (Outlook COM 자동화에 필요)
    - "가장 높은 수준의 권한으로 실행" 체크
 4. **트리거** 탭 → 새로 만들기
-   - 매주 / 원하는 요일·시각 (예: 매주 월요일 08:00)
+   - 매주 / **화요일 08:00** (전주차 리포트가 대상이므로 화요일 오전 권장)
 5. **동작** 탭 → 새로 만들기
    - 프로그램/스크립트: `C:\path\to\leader_weekly_summary\scripts\run_pipeline.bat`
-   - 인수 추가: `"" send`   ← 이번 주차 + 자동 발송
+   - 인수 추가: `"" send`   ← 전주차 + 자동 발송
    - 시작 위치: `C:\path\to\leader_weekly_summary`
 6. **조건/설정** 탭에서 "AC 전원" 등 필요에 맞게 조정 후 저장.
 
@@ -136,7 +142,7 @@ powershell -ExecutionPolicy Bypass -File scripts\run_pipeline.ps1 -Week 2026-11 
 $repo = "C:\path\to\leader_weekly_summary"
 $action  = New-ScheduledTaskAction -Execute "$repo\scripts\run_pipeline.bat" `
               -Argument '"" send' -WorkingDirectory $repo
-$trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday -At 8:00AM
+$trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Tuesday -At 8:00AM
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 3)
 Register-ScheduledTask -TaskName "WeeklyReportPipeline" `
     -Action $action -Trigger $trigger -Settings $settings `
@@ -172,7 +178,8 @@ Register-ScheduledTask -TaskName "WeeklyReportPipeline" `
 ## 5. 첫 운영 권장 순서
 
 1. `.env` 작성 + OpenSearch 기동 + Outlook 로그인 확인
-2. `scripts\run_pipeline.bat 2026-11` (인자 없는 = 초안 모드)로 **수동 1회** 실행 →
+2. `scripts\run_pipeline.bat`(인자 없이 = 전주차 + 초안 모드)로 **수동 1회** 실행 →
    각 단계 로그 확인 + Outlook 초안 내용 검수
+   (특정 주차를 검증하려면 `scripts\run_pipeline.bat 2026-11`)
 3. 문제 없으면 `scripts\run_pipeline.bat "" send` 로 자동 발송 검증
-4. 작업 스케줄러에 `"" send` 인자로 주간 등록
+4. 작업 스케줄러에 **매주 화요일 08:00**, 인수 `"" send` 로 등록

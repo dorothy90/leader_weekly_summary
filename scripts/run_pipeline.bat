@@ -3,11 +3,13 @@ REM ============================================================
 REM  주간 리포트 파이프라인 런처 (더블클릭 / 작업 스케줄러용)
 REM  fetch -> process -> embed -> wiki_build -> wiki_export -> email
 REM
+REM  대상 주차 = '전주차'(직전 ISO 주차). 매주 화요일 오전 실행 권장.
+REM
 REM  사용법:
-REM    run_pipeline.bat                 : 이번 주차, 메일 초안만 열기(안전)
+REM    run_pipeline.bat                 : 전주차, 메일 초안만 열기(안전)
 REM    run_pipeline.bat 2026-11         : 특정 주차 지정
 REM    run_pipeline.bat 2026-11 send    : 특정 주차 + 자동 발송
-REM    run_pipeline.bat "" send         : 이번 주차 + 자동 발송
+REM    run_pipeline.bat "" send         : 전주차 + 자동 발송 (스케줄러용)
 REM ============================================================
 
 setlocal
