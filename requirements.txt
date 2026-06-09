@@ -31,3 +31,9 @@ uvicorn==0.27.0
 # Streamlit UI
 streamlit>=1.28.0
 requests>=2.31.0
+
+# 환경변수 (.env) 로드
+python-dotenv>=1.0.0
+
+# Windows 자동화: Outlook COM 메일 발송 (Windows 전용)
+pywin32>=306; sys_platform == "win32"
