@@ -590,8 +590,6 @@ HEAD_TEMPLATE = """<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN
 def render_html(meta: dict, sections: list[tuple[int, str, str]]) -> str:
     title_text = str(meta.get("title", "주간 요약"))
     week = str(meta.get("week", ""))
-    updated = str(meta.get("updated_at") or meta.get("created_at") or "")
-    short_date = updated.split("T")[0] if updated else ""
     preheader = ""
     if sections:
         first_bullets = parse_bullets(sections[0][2])
@@ -605,15 +603,13 @@ def render_html(meta: dict, sections: list[tuple[int, str, str]]) -> str:
 
     head = HEAD_TEMPLATE.format(title=html.escape(title_text))
 
+    header_title = f"{week} SYLD Weekly Report" if week else "SYLD Weekly Report"
     header_row = (
         f'<tr><td bgcolor="{NAVY}" width="680" '
         f'style="width:680px; padding:20px 28px; background-color:{NAVY}; font-family:{FONT};">'
         f'<div style="color:#ffffff; font-size:20px; font-weight:bold; line-height:26px;">'
-        f'{html.escape(title_text)}</div>'
-        f'<div style="color:{NAVY_MUTED}; font-size:12px; line-height:18px; padding-top:6px;">'
-        f'Week {html.escape(week)} &middot; Overview'
-        + (f' &middot; 발행 {html.escape(short_date)}' if short_date else "")
-        + '</div></td></tr>'
+        f'{html.escape(header_title)}</div>'
+        + '</td></tr>'
     )
 
     footer_row = (
@@ -621,9 +617,7 @@ def render_html(meta: dict, sections: list[tuple[int, str, str]]) -> str:
         f'style="background-color:{PANEL_BG}; border-top:1px solid {BORDER}; '
         f'padding:14px 28px; font-family:{FONT}; font-size:11px; '
         f'line-height:17px; color:{MUTED};">'
-        f'Week {html.escape(week)} &middot; Overview Summary'
-        + (f' &nbsp;|&nbsp; Generated {html.escape(short_date)}' if short_date else "")
-        + '<br />본 메일은 주간 리포트 자동 생성 시스템에서 발송되었습니다.'
+        f'본 메일은 주간 리포트 자동 생성 시스템에서 발송되었습니다.'
         f'</td></tr>'
     )
 

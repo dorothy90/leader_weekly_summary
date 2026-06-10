@@ -24,7 +24,7 @@ OPENSEARCH_HOST = os.getenv("OPENSEARCH_HOST", "localhost")
 OPENSEARCH_PORT = int(os.getenv("OPENSEARCH_PORT", "9200"))
 OPENSEARCH_USER = os.getenv("OPENSEARCH_USER", "admin")
 OPENSEARCH_PASSWORD = os.getenv("OPENSEARCH_PASSWORD", "rlaeorka1!K")
-OPENSEARCH_USE_SSL = "true"
+OPENSEARCH_USE_SSL = os.getenv("OPENSEARCH_USE_SSL", "false").lower() == "true"
 
 # 임베딩 설정
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
@@ -380,8 +380,8 @@ def process_mail_folder(
     return result
 
 
-def process_all(recreate_index: bool = False):
-    """모든 메일 폴더 처리"""
+def process_all(recreate_index: bool = False, week=None):
+    """메일 폴더 처리 (week 지정 시 해당 주차만)"""
     print("=" * 50)
     print("OpenSearch Vector DB 임베딩 (5000자 오버랩 청킹)")
     print("=" * 50)
@@ -410,8 +410,9 @@ def process_all(recreate_index: bool = False):
         print(f"❌ data 폴더가 없습니다: {DATA_DIR}")
         return
 
-    # 모든 mail_* 폴더 찾기
-    mail_folders = list(DATA_DIR.glob("**/mail_*"))
+    # mail_* 폴더 찾기 (week 지정 시 해당 주차만)
+    search_root = DATA_DIR / week if week else DATA_DIR
+    mail_folders = list(search_root.glob("**/mail_*"))
     print(f"\n📁 발견된 메일 폴더: {len(mail_folders)}개")
 
     stats = {

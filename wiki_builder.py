@@ -90,18 +90,10 @@ WIKI_INDEX = "wiki_summaries"
 
 DATA_DIR = Path("data")
 
-TEAMS = [
-    "CS팀",
-    "DT팀",
-    "EQUIP팀",
-    "FA팀",
-    "PE팀",
-    "PI팀",
-    "PROCESS팀",
-    "QA팀",
-    "TEST팀",
-    "YIELD팀",
-]
+from team_dict import teams_by_group
+
+# 주간 backfill 대상 팀 (신규 16팀 taxonomy, team_dict 기준)
+TEAMS = [t for members in teams_by_group.values() for t in members]
 
 
 # ========== OpenSearch 클라이언트 ==========
@@ -434,6 +426,20 @@ def generate_weekly_overview(week: str, team_summaries: Dict[str, str]) -> str:
     for team, summary in team_summaries.items():
         summaries_text += f"\n=== {team} ===\n{summary}\n"
 
+    # 조직 핵심 3분류 그룹 + 주간보고 발송/미발송 현황
+    direct = teams_by_group.get("우시 PTE", [])
+    dram = teams_by_group.get("DRAM PTE", []) + teams_by_group.get("DRAM SRT", [])
+    nand = teams_by_group.get("NAND PTE", []) + teams_by_group.get("NAND SRT", [])
+    roster = direct + dram + nand
+    sent = set(team_summaries.keys())
+    missing = [t for t in roster if t not in sent]
+    group_text = (
+        f"- 직속: {', '.join(direct)}\n"
+        f"- DRAM SRT + DRAM PTE: {', '.join(dram)}\n"
+        f"- NAND SRT + NAND PTE: {', '.join(nand)}"
+    )
+    missing_text = ", ".join(missing) if missing else "없음"
+
     client = OpenAI(
         api_key=OPENROUTER_API_KEY,
         base_url=OPENROUTER_BASE_URL,
@@ -454,10 +460,14 @@ def generate_weekly_overview(week: str, team_summaries: Dict[str, str]) -> str:
 
 예시:
 **1. 이번 주 조직 핵심 (3줄)**
-- 가장 중요한 조직 차원 이슈
+- 직속 그룹 팀들의 이번 주 핵심 내용 한 줄
+- DRAM SRT + DRAM PTE 그룹 팀들의 이번 주 핵심 내용 한 줄
+- NAND SRT + NAND PTE 그룹 팀들의 이번 주 핵심 내용 한 줄
+(섹션 1은 정확히 3줄. 위 순서대로 각 그룹 팀들의 내용을 한 줄로 종합하되, **그룹명/라벨(`직속`, `DRAM SRT + DRAM PTE` 등)은 출력하지 말고 내용만** 작성. 즉 `- **직속**: ...` 형태가 아니라 `- 내용...` 형태로만.)
 
 **2. 팀별 하이라이트**
 - 팀명: 한 줄 핵심 (팀당 1줄)
+(전체 팀을 빠짐없이 나열하되, 주간보고 미발송 팀은 반드시 `- 팀명: 금주 주간보고 미발송` 으로 표기.)
 
 **3. 크로스팀 이슈**
 ### 이슈 제목 (관련팀A <-> 관련팀B <-> 관련팀C)
@@ -479,9 +489,17 @@ def generate_weekly_overview(week: str, team_summaries: Dict[str, str]) -> str:
 
     user_prompt = f"""{week} 주차 전체 팀 현황을 종합해주세요.
 
+[조직 핵심 3분류 그룹 구성]
+{group_text}
+
+[주간보고 미발송 팀]
+{missing_text}
+→ 섹션 2 팀별 하이라이트에서 위 미발송 팀은 반드시 `- 팀명: 금주 주간보고 미발송` 으로 표기하세요.
+
 {summaries_text}
 
-위 각 팀 요약을 바탕으로 조직 전체 관점의 종합 요약을 작성하세요."""
+위 각 팀 요약을 바탕으로 조직 전체 관점의 종합 요약을 작성하세요.
+섹션 1은 직속 / DRAM SRT + DRAM PTE / NAND SRT + NAND PTE 순서로 3줄을 작성하되, 그룹명 라벨은 빼고 내용만 작성하세요."""
 
     try:
         response = client.chat.completions.create(

@@ -259,8 +259,8 @@ def process_mail_folder(mail_dir):
     }
 
 
-def process_all():
-    """모든 메일 폴더 처리"""
+def process_all(week=None):
+    """메일 폴더 처리 (week 지정 시 해당 주차만)"""
     print("=" * 50)
     print("Vision LLM 이미지 처리")
     print("=" * 50)
@@ -269,8 +269,9 @@ def process_all():
         print(f"❌ data 폴더가 없습니다: {DATA_DIR}")
         return
 
-    # 모든 mail_* 폴더 찾기
-    mail_folders = list(DATA_DIR.glob("**/mail_*"))
+    # mail_* 폴더 찾기 (week 지정 시 해당 주차만)
+    search_root = DATA_DIR / week if week else DATA_DIR
+    mail_folders = list(search_root.glob("**/mail_*"))
     print(f"📁 발견된 메일 폴더: {len(mail_folders)}개")
 
     stats = {
