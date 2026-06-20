@@ -2300,6 +2300,16 @@ async def _run_topic_timeline(job_id: str, request: TopicTimelineRequest):
             progress_callback=lambda p: _update_timeline_progress(job_id, p),
         )
 
+        # PPTX 생성 (best-effort) — pptdaddy 미설치 등 실패해도 md/html 은 유지
+        pptx_ok = False
+        try:
+            from topic_timeline_ppt import build_topic_timeline_pptx
+            pptx_path = str(TOPIC_TIMELINE_OUTPUT_DIR / f"{job_id}.pptx")
+            await asyncio.to_thread(build_topic_timeline_pptx, result, pptx_path)
+            pptx_ok = True
+        except Exception as e:
+            print(f"[topic-timeline] PPTX 생성 건너뜀: {type(e).__name__}: {e}")
+
         async with _topic_timeline_lock:
             job = _topic_timeline_jobs[job_id]
             job.status = "completed"
@@ -2307,6 +2317,8 @@ async def _run_topic_timeline(job_id: str, request: TopicTimelineRequest):
             job.topic = result["topic"]
             job.markdown_url = f"/topic-timeline/{job_id}/download?format=md"
             job.html_url = f"/topic-timeline/{job_id}/download?format=html"
+            if pptx_ok:
+                job.pptx_url = f"/topic-timeline/{job_id}/download?format=pptx"
             job.overview = result["overview"]
             job.weeks_total = result["weeks_total"]
             job.weeks_covered = result["weeks_covered"]
@@ -2347,9 +2359,16 @@ async def get_topic_timeline_status(job_id: str):
     return _topic_timeline_jobs[job_id]
 
 
+_TIMELINE_MEDIA_TYPES = {
+    "md": "text/markdown",
+    "html": "text/html",
+    "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+}
+
+
 @app.get("/topic-timeline/{job_id}/download")
 async def download_topic_timeline(job_id: str, format: str = "md"):
-    """주제별 타임라인 리포트 다운로드 (format=md | html)"""
+    """주제별 타임라인 리포트 다운로드 (format=md | html | pptx)"""
     if job_id not in _topic_timeline_jobs:
         raise HTTPException(status_code=404, detail="작업을 찾을 수 없습니다")
 
@@ -2358,17 +2377,17 @@ async def download_topic_timeline(job_id: str, format: str = "md"):
         raise HTTPException(status_code=400, detail=f"작업 상태: {job.status}")
 
     fmt = format.lower()
-    if fmt not in ("md", "html"):
-        raise HTTPException(status_code=400, detail="format은 md 또는 html")
+    if fmt not in _TIMELINE_MEDIA_TYPES:
+        raise HTTPException(status_code=400, detail="format은 md, html, pptx 중 하나")
 
     file_path = TOPIC_TIMELINE_OUTPUT_DIR / f"{job_id}.{fmt}"
     if not file_path.exists():
-        raise HTTPException(status_code=404, detail="리포트 파일이 없습니다")
+        detail = "PPTX가 생성되지 않았습니다 (pptdaddy 미설치 등)" if fmt == "pptx" else "리포트 파일이 없습니다"
+        raise HTTPException(status_code=404, detail=detail)
 
-    media_type = "text/markdown" if fmt == "md" else "text/html"
     return FileResponse(
         path=str(file_path),
-        media_type=media_type,
+        media_type=_TIMELINE_MEDIA_TYPES[fmt],
         filename=f"topic_timeline_{job_id}.{fmt}",
     )
 

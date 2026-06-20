@@ -48,6 +48,7 @@ class TopicTimelineResponse(BaseModel):
     topic: Optional[str] = None
     markdown_url: Optional[str] = None  # md 다운로드 경로
     html_url: Optional[str] = None      # html 다운로드 경로
+    pptx_url: Optional[str] = None      # pptx 다운로드 경로 (생성 성공 시)
     overview: Optional[str] = None      # 전체 추이 요약(미리보기용)
     weeks_total: Optional[int] = None   # 검색 대상 주차 수
     weeks_covered: Optional[int] = None # 실제 관련 내용이 있던 주차 수
@@ -415,6 +416,11 @@ def generate_topic_timeline(
         "weeks_total": weeks_total,
         "weeks_covered": len(week_summaries),
         "document_count": document_count,
+        # 구조화 데이터 (PPT 등 다른 출력에서 재사용)
+        "week_summaries": week_summaries,
+        "week_from": week_from,
+        "week_to": week_to,
+        "team": team,
     }
 
 
