@@ -101,6 +101,11 @@ DEEP_MINING_BATCH_SIZE = int(os.getenv("DEEP_MINING_BATCH_SIZE", "20"))
 DEEP_MINING_SCROLL_SIZE = int(os.getenv("DEEP_MINING_SCROLL_SIZE", "200"))
 DEEP_MINING_OUTPUT_DIR = Path(os.getenv("DEEP_MINING_OUTPUT_DIR", "exports/deep_mining"))
 
+# 주제별 타임라인 설정
+TOPIC_TIMELINE_OUTPUT_DIR = Path(
+    os.getenv("TOPIC_TIMELINE_OUTPUT_DIR", "exports/topic_timeline")
+)
+
 def _get_recency_boost_clauses() -> list:
     """최근 N주에 대한 term boost should 절 생성."""
     today = datetime.now()
@@ -2252,6 +2257,119 @@ async def download_deep_mine(job_id: str):
         path=str(pptx_path),
         media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
         filename=f"deep_mining_{job_id}.pptx",
+    )
+
+
+# ========== 주제별 타임라인 API ==========
+from generate_topic_timeline import (
+    TopicTimelineRequest,
+    TopicTimelineResponse,
+    generate_topic_timeline,
+)
+
+# 작업 상태 저장 (in-memory)
+_topic_timeline_jobs: Dict[str, TopicTimelineResponse] = {}
+_topic_timeline_lock = asyncio.Lock()
+
+
+def _update_timeline_progress(job_id: str, progress: float):
+    """진행률 업데이트 (동기 콜백)"""
+    if job_id in _topic_timeline_jobs:
+        _topic_timeline_jobs[job_id].progress = progress
+
+
+async def _run_topic_timeline(job_id: str, request: TopicTimelineRequest):
+    """백그라운드에서 주제별 타임라인 생성"""
+    try:
+        async with _topic_timeline_lock:
+            _topic_timeline_jobs[job_id].status = "processing"
+            _topic_timeline_jobs[job_id].progress = 0.05
+
+        # 블로킹(검색 + LLM) 작업이므로 스레드로 오프로드
+        result = await asyncio.to_thread(
+            generate_topic_timeline,
+            request.topic,
+            os_client,
+            llm=get_llm(),
+            week_from=request.week_from,
+            week_to=request.week_to,
+            team=request.team,
+            k_per_week=request.k_per_week,
+            output_dir=TOPIC_TIMELINE_OUTPUT_DIR,
+            job_id=job_id,
+            progress_callback=lambda p: _update_timeline_progress(job_id, p),
+        )
+
+        async with _topic_timeline_lock:
+            job = _topic_timeline_jobs[job_id]
+            job.status = "completed"
+            job.progress = 1.0
+            job.topic = result["topic"]
+            job.markdown_url = f"/topic-timeline/{job_id}/download?format=md"
+            job.html_url = f"/topic-timeline/{job_id}/download?format=html"
+            job.overview = result["overview"]
+            job.weeks_total = result["weeks_total"]
+            job.weeks_covered = result["weeks_covered"]
+            job.document_count = result["document_count"]
+
+    except Exception as e:
+        async with _topic_timeline_lock:
+            job = _topic_timeline_jobs[job_id]
+            job.status = "failed"
+            job.error = str(e)
+
+
+@app.post("/topic-timeline", response_model=TopicTimelineResponse)
+async def start_topic_timeline(request: TopicTimelineRequest):
+    """주제별 타임라인 작업 시작 — job_id 즉시 반환.
+
+    원하는 주제를 모든 주차에서 검색해 시간순 리포트로 정리한다.
+    완료 후 /topic-timeline/{job_id}/download 로 md/html 다운로드.
+    """
+    if not os_client:
+        raise HTTPException(status_code=503, detail="OpenSearch 초기화 중")
+
+    job_id = str(uuid.uuid4())[:8]
+    _topic_timeline_jobs[job_id] = TopicTimelineResponse(
+        job_id=job_id, status="accepted", topic=request.topic, progress=0.0
+    )
+
+    asyncio.create_task(_run_topic_timeline(job_id, request))
+
+    return _topic_timeline_jobs[job_id]
+
+
+@app.get("/topic-timeline/{job_id}", response_model=TopicTimelineResponse)
+async def get_topic_timeline_status(job_id: str):
+    """주제별 타임라인 작업 상태/결과 조회"""
+    if job_id not in _topic_timeline_jobs:
+        raise HTTPException(status_code=404, detail="작업을 찾을 수 없습니다")
+    return _topic_timeline_jobs[job_id]
+
+
+@app.get("/topic-timeline/{job_id}/download")
+async def download_topic_timeline(job_id: str, format: str = "md"):
+    """주제별 타임라인 리포트 다운로드 (format=md | html)"""
+    if job_id not in _topic_timeline_jobs:
+        raise HTTPException(status_code=404, detail="작업을 찾을 수 없습니다")
+
+    job = _topic_timeline_jobs[job_id]
+    if job.status != "completed":
+        raise HTTPException(status_code=400, detail=f"작업 상태: {job.status}")
+
+    fmt = format.lower()
+    if fmt not in ("md", "html"):
+        raise HTTPException(status_code=400, detail="format은 md 또는 html")
+
+    file_path = TOPIC_TIMELINE_OUTPUT_DIR / f"{job_id}.{fmt}"
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="리포트 파일이 없습니다")
+
+    media_type = "text/markdown" if fmt == "md" else "text/html"
+    return FileResponse(
+        path=str(file_path),
+        media_type=media_type,
+        filename=f"topic_timeline_{job_id}.{fmt}",
     )
 
 
