@@ -2300,15 +2300,28 @@ async def _run_topic_timeline(job_id: str, request: TopicTimelineRequest):
             progress_callback=lambda p: _update_timeline_progress(job_id, p),
         )
 
-        # PPTX 생성 (best-effort) — pptdaddy 미설치 등 실패해도 md/html 은 유지
+        # PPTX 생성 (best-effort) — 실패해도 md/html 은 유지
+        # 엔진 선택: TOPIC_TIMELINE_PPT_ENGINE = "pptagent" | "native"(기본)
+        # pptagent 실패 시 native 로 폴백.
         pptx_ok = False
-        try:
-            from topic_timeline_ppt import build_topic_timeline_pptx
-            pptx_path = str(TOPIC_TIMELINE_OUTPUT_DIR / f"{job_id}.pptx")
-            await asyncio.to_thread(build_topic_timeline_pptx, result, pptx_path)
-            pptx_ok = True
-        except Exception as e:
-            print(f"[topic-timeline] PPTX 생성 건너뜀: {type(e).__name__}: {e}")
+        pptx_path = str(TOPIC_TIMELINE_OUTPUT_DIR / f"{job_id}.pptx")
+        engine = os.getenv("TOPIC_TIMELINE_PPT_ENGINE", "native").lower()
+
+        if engine == "pptagent":
+            try:
+                from topic_timeline_pptagent import build_with_pptagent
+                await asyncio.to_thread(build_with_pptagent, result, pptx_path)
+                pptx_ok = True
+            except Exception as e:
+                print(f"[topic-timeline] PPTAgent 생성 실패, native 폴백: {type(e).__name__}: {e}")
+
+        if not pptx_ok:
+            try:
+                from topic_timeline_ppt import build_topic_timeline_pptx
+                await asyncio.to_thread(build_topic_timeline_pptx, result, pptx_path)
+                pptx_ok = True
+            except Exception as e:
+                print(f"[topic-timeline] PPTX 생성 건너뜀: {type(e).__name__}: {e}")
 
         async with _topic_timeline_lock:
             job = _topic_timeline_jobs[job_id]
