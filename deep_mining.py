@@ -8,6 +8,7 @@ rag_api_opensearch_v3.py의 OpenSearchClient, get_llm(), count_tokens(), TEAMS �
 import os
 import json
 import asyncio
+import concurrent.futures
 import logging
 from typing import List, Dict, Optional, Any, TypedDict, Annotated
 from pathlib import Path
@@ -31,6 +32,9 @@ from deep_mining_schemas import (
     PresentationOutline,
 )
 from deep_mining_ppt import build_deep_mining_pptx
+import slide_spec
+import deck_render
+import html_deck
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +65,10 @@ class DeepMiningState(TypedDict):
     extractions: List[Dict]
     analysis: Optional[Dict]
     outline: Optional[Dict]
+    slide_spec: Optional[Dict]
     pptx_path: Optional[str]
+    qa_images: Optional[List[str]]
+    qa_issues: Optional[List[Dict]]
     text_summary: Optional[str]
     document_count: int
     num_slides: int
@@ -227,46 +234,62 @@ JSON으로 응답하세요:
 }}"""
 
 
+_EMPTY_EXTRACTION = {"facts": [], "metrics": [], "risks": [], "trends": []}
+
+
+def _extract_one_batch(llm, batch: List[Dict], idx: int, total: int) -> Dict:
+    """단일 배치 추출 (스레드에서 실행). 실패 시 빈 추출 반환."""
+    doc_texts = [
+        f"[mail_id: {doc['mail_id']}] [팀: {doc['team']}] [주차: {doc['week']}]\n{doc['text'][:2000]}"
+        for doc in batch
+    ]
+    prompt = EXTRACTION_PROMPT.format(documents="\n\n---\n\n".join(doc_texts))
+    try:
+        response = llm.invoke([{"role": "user", "content": prompt}])
+        content = response.content
+        if "```json" in content:
+            content = content.split("```json")[1].split("```")[0]
+        elif "```" in content:
+            content = content.split("```")[1].split("```")[0]
+        parsed = json.loads(content.strip())
+        logger.info(f"[Extract Evidence] Batch {idx+1}/{total} done")
+        return parsed
+    except Exception as e:
+        logger.warning(f"[Extract Evidence] Batch {idx+1} failed: {e}")
+        return dict(_EMPTY_EXTRACTION)
+
+
 def extract_evidence(state: DeepMiningState) -> Dict:
-    """배치별 구조화 추출 (Map 단계)"""
+    """배치별 구조화 추출 (Map 단계) — 배치 LLM 호출을 병렬 실행.
+
+    llm.invoke 는 블로킹 HTTP 호출이라 ThreadPoolExecutor 로 겹쳐 실행하면
+    전체 지연이 (배치수 × 1콜) → 대략 (배치수 / 동시성) × 1콜 로 단축된다.
+    동시성: 환경변수 DEEP_MINING_MAP_CONCURRENCY (기본 6). 순서는 보존.
+    """
     batches = state["batches"]
     llm = _get_deep_mining_llm()
-    all_extractions = []
     total_batches = len(batches)
+    if total_batches == 0:
+        return {"extractions": []}
 
-    for i, batch in enumerate(batches):
-        # 배치 문서를 텍스트로 포맷
-        doc_texts = []
-        for doc in batch:
-            doc_texts.append(
-                f"[mail_id: {doc['mail_id']}] [팀: {doc['team']}] [주차: {doc['week']}]\n{doc['text'][:2000]}"
-            )
-        documents_text = "\n\n---\n\n".join(doc_texts)
+    results: List[Optional[Dict]] = [None] * total_batches
+    max_workers = max(1, min(int(os.getenv("DEEP_MINING_MAP_CONCURRENCY", "6")), total_batches))
 
-        prompt = EXTRACTION_PROMPT.format(documents=documents_text)
+    done = 0
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_idx = {
+            executor.submit(_extract_one_batch, llm, batch, i, total_batches): i
+            for i, batch in enumerate(batches)
+        }
+        for future in concurrent.futures.as_completed(future_to_idx):
+            i = future_to_idx[future]
+            results[i] = future.result()
+            done += 1
+            if state.get("progress_callback"):
+                state["progress_callback"](0.25 + 0.4 * done / total_batches)
 
-        try:
-            response = llm.invoke([{"role": "user", "content": prompt}])
-            content = response.content
-
-            if "```json" in content:
-                content = content.split("```json")[1].split("```")[0]
-            elif "```" in content:
-                content = content.split("```")[1].split("```")[0]
-
-            parsed = json.loads(content.strip())
-            all_extractions.append(parsed)
-        except Exception as e:
-            logger.warning(f"[Extract Evidence] Batch {i+1} failed: {e}")
-            all_extractions.append({"facts": [], "metrics": [], "risks": [], "trends": []})
-
-        # 진행률 업데이트
-        if state.get("progress_callback"):
-            progress = 0.25 + (0.4 * (i + 1) / total_batches)
-            state["progress_callback"](progress)
-
-        logger.info(f"[Extract Evidence] Batch {i+1}/{total_batches} done")
-
+    all_extractions = [r if r is not None else dict(_EMPTY_EXTRACTION) for r in results]
+    logger.info(f"[Extract Evidence] {total_batches} batches (동시성 {max_workers}) 완료")
     return {"extractions": all_extractions}
 
 
@@ -491,29 +514,102 @@ def synthesize(state: DeepMiningState) -> Dict:
 # ========== Node 5: Build PPTX ==========
 
 def build_pptx(state: DeepMiningState) -> Dict:
-    """분석 결과 → PPTX 파일 생성"""
+    """분석 결과 → PPTX 파일 생성.
+
+    기본 엔진은 pptxgenjs(아티팩트형·편집가능). 실패 시 legacy python-pptx로 폴백.
+    엔진 선택: 환경변수 DEEP_MINING_PPT_ENGINE = "pptxgenjs"(기본) | "legacy".
+    """
     analysis_data = state["analysis"]
     outline_data = state.get("outline")
     num_slides = state["num_slides"]
     job_id = state["job_id"]
-
-    analysis = DeepMiningAnalysis(**analysis_data)
-    outline = PresentationOutline(**outline_data) if outline_data else None
-
     output_path = str(DEEP_MINING_OUTPUT_DIR / f"{job_id}.pptx")
+    engine = os.getenv("DEEP_MINING_PPT_ENGINE", "html").lower()
+    meta = {"title": state.get("query") or analysis_data.get("week_range", "주제 보고서")}
+    target = max(num_slides, 6)
 
-    pptx_path = build_deep_mining_pptx(
-        analysis=analysis,
-        outline=outline,
-        num_slides=num_slides,
-        output_path=output_path,
-    )
+    pptx_path = None
+    spec = None
+
+    # 1) html: LLM이 슬라이드를 HTML로 디자인 → Playwright 캡처 → 이미지 PPTX (최고 퀄리티, 편집불가)
+    if engine == "html":
+        try:
+            htmls = html_deck.build_html_deck(analysis_data, outline_data, meta, target_slides=target)
+            asset_dir = DEEP_MINING_OUTPUT_DIR / f"{job_id}_html"
+            pptx_path = html_deck.html_to_pptx(htmls, output_path, meta["title"], asset_dir)
+            logger.info(f"[Build PPTX] html 렌더 완료: {pptx_path} ({len(htmls)} 슬라이드)")
+        except Exception as e:
+            logger.warning(f"[Build PPTX] html 실패({e}) — pptxgenjs 폴백")
+
+    # 2) pptxgenjs: 네이티브 편집가능
+    if not pptx_path and engine in ("html", "pptxgenjs"):
+        try:
+            spec = slide_spec.build_slide_spec(analysis_data, outline_data, meta, target_slides=target)
+            pptx_path = deck_render.render_deck(spec, output_path)
+            logger.info(f"[Build PPTX] pptxgenjs 렌더 완료: {pptx_path} ({len(spec['slides'])} 슬라이드)")
+        except Exception as e:
+            logger.warning(f"[Build PPTX] pptxgenjs 실패({e}) — legacy python-pptx 폴백")
+            spec = None
+
+    if not pptx_path:
+        analysis = DeepMiningAnalysis(**analysis_data)
+        outline = PresentationOutline(**outline_data) if outline_data else None
+        pptx_path = build_deep_mining_pptx(
+            analysis=analysis, outline=outline, num_slides=num_slides, output_path=output_path,
+        )
 
     if state.get("progress_callback"):
-        state["progress_callback"](0.95)
+        state["progress_callback"](0.9)
 
     logger.info(f"[Build PPTX] Created: {pptx_path}")
-    return {"pptx_path": pptx_path}
+    return {"pptx_path": pptx_path, "slide_spec": spec}
+
+
+# ========== Node 6: Visual QA ==========
+
+def visual_qa(state: DeepMiningState) -> Dict:
+    """렌더 결과를 이미지로 변환해 시각 점검. 결함 발견 시 1회만 보수적 재렌더.
+
+    - soffice/pdftoppm 없으면 이미지 생략(비차단).
+    - 비전 QA는 환경변수 DEEP_MINING_VISUAL_QA=1 일 때만(기본 off, 비용/지연 고려).
+    - pptxgenjs 스펙이 있어야 재렌더 가능. legacy 폴백 산출물은 점검만.
+    """
+    pptx_path = state.get("pptx_path")
+    if not pptx_path:
+        return {}
+
+    job_id = state["job_id"]
+    shot_dir = str(DEEP_MINING_OUTPUT_DIR / f"{job_id}_qa")
+    images = deck_render.pptx_to_images(pptx_path, shot_dir)
+    logger.info(f"[Visual QA] 프리뷰 이미지 {len(images)}장")
+
+    issues: List[Dict] = []
+    spec = state.get("slide_spec")
+    if images and os.getenv("DEEP_MINING_VISUAL_QA") == "1":
+        results = deck_render.visual_inspect(images)
+        issues = [r for r in results if not r.get("ok", True) and r.get("issue")]
+        if issues:
+            logger.warning(f"[Visual QA] 결함 {len(issues)}건: " +
+                           "; ".join(f"슬라이드{r.get('index')}:{r.get('issue')}" for r in issues))
+        # pptxgenjs 스펙이 있으면 결함 슬라이드만 1회 보수적 트림 후 재렌더
+        if issues and spec:
+            changed = False
+            for r in issues:
+                idx = (r.get("index") or 0) - 1
+                if 0 <= idx < len(spec.get("slides", [])):
+                    changed |= deck_render.trim_slide(spec["slides"][idx])
+            if changed:
+                try:
+                    deck_render.render_deck(spec, pptx_path)
+                    images = deck_render.pptx_to_images(pptx_path, shot_dir)
+                    logger.info("[Visual QA] 결함 슬라이드 트림 후 재렌더 완료(1회)")
+                except Exception as e:
+                    logger.warning(f"[Visual QA] 재렌더 실패({e}) — 원본 유지")
+
+    if state.get("progress_callback"):
+        state["progress_callback"](1.0)
+
+    return {"qa_images": images, "qa_issues": issues}
 
 
 # ========== Graph 조립 ==========
@@ -527,13 +623,15 @@ def get_deep_mining_graph():
     graph.add_node("extract_evidence", extract_evidence)
     graph.add_node("synthesize", synthesize)
     graph.add_node("build_pptx", build_pptx)
+    graph.add_node("visual_qa", visual_qa)
 
     graph.add_edge(START, "analyze_query")
     graph.add_edge("analyze_query", "exhaustive_retrieve")
     graph.add_edge("exhaustive_retrieve", "extract_evidence")
     graph.add_edge("extract_evidence", "synthesize")
     graph.add_edge("synthesize", "build_pptx")
-    graph.add_edge("build_pptx", END)
+    graph.add_edge("build_pptx", "visual_qa")
+    graph.add_edge("visual_qa", END)
 
     return graph.compile()
 
@@ -572,7 +670,10 @@ async def run_deep_mining_pipeline(
         "extractions": [],
         "analysis": None,
         "outline": None,
+        "slide_spec": None,
         "pptx_path": None,
+        "qa_images": None,
+        "qa_issues": None,
         "text_summary": None,
         "document_count": 0,
         "num_slides": num_slides,

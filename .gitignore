@@ -262,3 +262,14 @@ exports/deep_mining/test_refactored.pptx
 .omc/state/subagent-tracking.json
 pptdaddy
 wiki
+__pycache__
+mail
+
+# pptxgenjs 렌더러 의존성
+ppt_render/node_modules/
+exports/deep_mining/*_qa/
+
+# 생성 산출물(데모/작업물)
+exports/deep_mining/*.pptx
+exports/deep_mining/*_html/
+exports/deep_mining/*_assets/

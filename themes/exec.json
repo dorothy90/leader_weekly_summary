@@ -1,0 +1,23 @@
+{
+  "_comment": "아티팩트형 브랜드 토큰. hex는 pptxgenjs 규칙에 따라 '#' 없이 저장. 사내 표준 .pptx 제공 시 extract_brand.py로 primary/accent/logo를 덮어씀.",
+  "brand": {
+    "primary": "0B3B76",
+    "primary_dark": "07264D",
+    "accent": "1EA0A0",
+    "ink": "1A2230",
+    "muted": "6B7480",
+    "line": "E3E7EE",
+    "bg": "FFFFFF",
+    "bg_section": "F5F7FA",
+    "card": "FFFFFF",
+    "up": "1B8A5A",
+    "down": "C0392B",
+    "flat": "6B7480",
+    "on_primary": "FFFFFF"
+  },
+  "font": {
+    "title": "Pretendard",
+    "body": "Pretendard"
+  },
+  "logo": null
+}
