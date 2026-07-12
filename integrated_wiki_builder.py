@@ -1,13 +1,37 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable
+from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from agenda_extract import llm_connection
-from category_wiki_builder import CategoryNode, page_index_definition
+from category_wiki_builder import (
+    TERMINAL_STATES,
+    CategoryNode,
+    agenda_matches_node,
+    build_page_documents,
+    category_nodes,
+    issue_timelines,
+    page_index_definition,
+)
+from knowledge_models import TaxonomyDocument
+
+
+MAIL_CITATION = re.compile(r"\[mail:([^\]]+)\]")
+
+
+class NarrativeValidationError(ValueError):
+    pass
+
+
+@dataclass
+class BuildResult:
+    pages: list[dict[str, Any]] = field(default_factory=list)
+    failures: dict[str, str] = field(default_factory=dict)
 
 
 class WikiModel(BaseModel):
@@ -170,6 +194,328 @@ def direct_agendas_for_node(
         if agenda.get("review_status", "confirmed") == "confirmed"
         and any(matches(path) for path in agenda.get("target_paths", []))
     ]
+
+
+def validate_issue_decisions(
+    analysis: PageAnalysis, allowed_agendas: list[dict[str, Any]]
+) -> None:
+    agendas = {str(item["agenda_id"]): item for item in allowed_agendas}
+    for decision in analysis.issue_decisions:
+        if decision.status != "resolved":
+            continue
+        cited = [agendas.get(agenda_id) for agenda_id in decision.agenda_ids]
+        if not any(
+            item and str(item.get("state", "")).casefold() in TERMINAL_STATES
+            for item in cited
+        ):
+            raise NarrativeValidationError(
+                f"resolved issue {decision.issue_id} has no terminal agenda"
+            )
+
+
+def validate_draft(
+    draft: NarrativeDraft, allowed_agendas: list[dict[str, Any]]
+) -> list[CitationMapEntry]:
+    allowed_mail_ids = {str(item["mail_id"]) for item in allowed_agendas}
+    agendas_by_mail: dict[str, list[str]] = {}
+    for item in allowed_agendas:
+        agendas_by_mail.setdefault(str(item["mail_id"]), []).append(
+            str(item["agenda_id"])
+        )
+    section_values = {
+        "개요": draft.overview,
+        "현재 상태와 주요 변화": draft.current_status,
+        "원인과 영향 관계": draft.cause_and_impact,
+        "조치와 효과": draft.actions_and_effects,
+        "펜딩 이슈와 의사결정": draft.pending_and_decisions,
+        "누적 지식": draft.accumulated_knowledge,
+        "주차별 업데이트 이력": draft.weekly_update,
+    }
+    used: dict[str, set[str]] = {}
+    for section, body in section_values.items():
+        paragraphs = [
+            part.strip() for part in re.split(r"\n\s*\n", body) if part.strip()
+        ]
+        for paragraph in paragraphs:
+            citations = MAIL_CITATION.findall(paragraph)
+            if not citations:
+                raise NarrativeValidationError(f"uncited paragraph in {section}")
+            for mail_id in citations:
+                if mail_id not in allowed_mail_ids:
+                    raise NarrativeValidationError(f"unknown mail citation: {mail_id}")
+                used.setdefault(mail_id, set()).add(section)
+    return [
+        CitationMapEntry(
+            mail_id=mail_id,
+            agenda_ids=sorted(agendas_by_mail[mail_id]),
+            used_in_sections=sorted(sections),
+            category_paths=[],
+        )
+        for mail_id, sections in sorted(used.items())
+    ]
+
+
+def build_child_digest(
+    page: dict[str, Any],
+    analysis: PageAnalysis,
+    draft: NarrativeDraft,
+) -> ChildDigest:
+    return ChildDigest(
+        canonical_id=str(page["canonical_id"]),
+        as_of_week=str(page["as_of_week"]),
+        summary=draft.overview,
+        claims=[*analysis.new_claims, *analysis.retained_claims],
+        issues=list(analysis.issue_decisions),
+        contradictions=list(analysis.contradictions),
+        confidence=page["confidence"],
+    )
+
+
+def _direct_children(
+    node: CategoryNode, nodes: list[CategoryNode]
+) -> list[CategoryNode]:
+    if node.level == "domain":
+        return [
+            candidate
+            for candidate in nodes
+            if candidate.level == "tech" and candidate.domain == node.domain
+        ]
+    if node.level == "tech":
+        return [
+            candidate
+            for candidate in nodes
+            if candidate.level == "lotcd"
+            and candidate.domain == node.domain
+            and candidate.tech == node.tech
+        ]
+    return []
+
+
+def _previous_cited_agenda_ids(previous: dict[str, Any]) -> set[str]:
+    return {
+        str(agenda_id)
+        for citation in previous.get("citation_map", [])
+        for agenda_id in (
+            citation.agenda_ids
+            if isinstance(citation, CitationMapEntry)
+            else citation.get("agenda_ids", [])
+        )
+    }
+
+
+def _recent_history(previous: dict[str, Any]) -> list[dict[str, Any]]:
+    records = [
+        item.model_dump() if isinstance(item, WeeklyHistoryEntry) else dict(item)
+        for item in previous.get("weekly_history", [])
+    ]
+    return sorted(records, key=lambda item: str(item["week"]), reverse=True)[:2]
+
+
+def _compact_issue_timelines(
+    agendas: list[dict[str, Any]], as_of_week: str
+) -> list[dict[str, Any]]:
+    compact: list[dict[str, Any]] = []
+    for issue in issue_timelines(agendas, as_of_week=as_of_week):
+        compact.append(
+            {
+                key: issue[key]
+                for key in (
+                    "issue_id",
+                    "title",
+                    "current_state",
+                    "event_type",
+                    "first_seen_week",
+                    "last_seen_week",
+                    "resolved_week",
+                    "is_open",
+                    "updated_this_week",
+                )
+            }
+            | {
+                "events": [
+                    {
+                        key: event.get(key)
+                        for key in (
+                            "agenda_id",
+                            "mail_id",
+                            "week",
+                            "summary",
+                            "state",
+                        )
+                    }
+                    for event in issue["events"]
+                ]
+            }
+        )
+    return compact
+
+
+def _taxonomy_aliases(taxonomy: TaxonomyDocument, node: CategoryNode) -> list[str]:
+    for domain in taxonomy.domains:
+        if domain.name != node.domain:
+            continue
+        for tech in domain.techs:
+            if tech.name != node.tech:
+                continue
+            if node.level == "tech":
+                return list(tech.aliases)
+            for lotcd in tech.lotcds:
+                if lotcd.code == node.lotcd:
+                    return list(lotcd.aliases)
+    return []
+
+
+def _child_agendas(
+    child_digests: list[ChildDigest],
+    agendas_by_id: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    agenda_ids = {
+        agenda_id
+        for digest in child_digests
+        for evidence in [*digest.claims, *digest.issues]
+        for agenda_id in evidence.agenda_ids
+    }
+    missing = sorted(
+        agenda_id for agenda_id in agenda_ids if agenda_id not in agendas_by_id
+    )
+    if missing:
+        raise NarrativeValidationError(f"unknown child agenda: {', '.join(missing)}")
+    return [agendas_by_id[agenda_id] for agenda_id in sorted(agenda_ids)]
+
+
+def build_integrated_pages(
+    taxonomy: TaxonomyDocument,
+    agendas: list[dict[str, Any]],
+    previous_pages: dict[str, dict[str, Any]],
+    *,
+    as_of_week: str,
+    analyze: AnalysisFn,
+    draft: DraftFn,
+) -> BuildResult:
+    eligible_agendas = [
+        agenda
+        for agenda in agendas
+        if not agenda.get("week") or str(agenda["week"]) <= as_of_week
+    ]
+    agendas_by_id = {str(agenda["agenda_id"]): agenda for agenda in eligible_agendas}
+    compatibility_pages = {
+        page["category_id"]: page
+        for page in build_page_documents(
+            taxonomy,
+            eligible_agendas,
+            as_of_week=as_of_week,
+        )
+    }
+    order = {"lotcd": 0, "tech": 1, "domain": 2}
+    nodes = sorted(
+        category_nodes(taxonomy), key=lambda node: (order[node.level], node.id)
+    )
+    result = BuildResult()
+    digests: dict[str, ChildDigest] = {}
+
+    for node in nodes:
+        children = _direct_children(node, nodes)
+        if any(child.id in result.failures for child in children):
+            result.failures[node.id] = "required child failed"
+            continue
+
+        previous = previous_pages.get(node.id, {})
+        child_digests = [digests[child.id] for child in children]
+        try:
+            current_direct = [
+                agenda
+                for agenda in direct_agendas_for_node(node, eligible_agendas)
+                if agenda.get("week") == as_of_week
+            ]
+            previous_agendas = [
+                agendas_by_id[agenda_id]
+                for agenda_id in sorted(_previous_cited_agenda_ids(previous))
+                if agenda_id in agendas_by_id
+            ]
+            allowed_by_id = {
+                str(agenda["agenda_id"]): agenda
+                for agenda in [
+                    *current_direct,
+                    *previous_agendas,
+                    *_child_agendas(child_digests, agendas_by_id),
+                ]
+            }
+            allowed_agendas = [
+                allowed_by_id[agenda_id] for agenda_id in sorted(allowed_by_id)
+            ]
+            descendant_agendas = [
+                agenda
+                for agenda in eligible_agendas
+                if agenda_matches_node(agenda, node)
+            ]
+            context = {
+                "node": asdict(node),
+                "as_of_week": as_of_week,
+                "allowed_agendas": allowed_agendas,
+                "issue_timelines": _compact_issue_timelines(
+                    descendant_agendas, as_of_week
+                ),
+                "previous_current_body_markdown": previous.get(
+                    "current_body_markdown", ""
+                ),
+                "recent_history": _recent_history(previous),
+                "child_digests": [item.model_dump() for item in child_digests],
+            }
+            analysis = analyze(context)
+            validate_issue_decisions(analysis, allowed_agendas)
+            narrative = draft(context, analysis)
+            citation_map = validate_draft(narrative, allowed_agendas)
+            path = canonical_path(node)
+            citation_map = [
+                item.model_copy(update={"category_paths": [path]})
+                for item in citation_map
+            ]
+            current_body = render_current_body(narrative)
+            previous_history = [
+                (
+                    item
+                    if isinstance(item, WeeklyHistoryEntry)
+                    else WeeklyHistoryEntry.model_validate(item)
+                )
+                for item in previous.get("weekly_history", [])
+            ]
+            current_source_mail_ids = sorted(
+                item.mail_id
+                for item in citation_map
+                if "주차별 업데이트 이력" in item.used_in_sections
+            )
+            history = merge_weekly_history(
+                previous_history,
+                WeeklyHistoryEntry(
+                    week=as_of_week,
+                    body_markdown=narrative.weekly_update,
+                    source_mail_ids=current_source_mail_ids,
+                ),
+            )
+            base = compatibility_pages[node.id]
+            page = {
+                **base,
+                "doc_type": "canonical",
+                "canonical_id": path,
+                "aliases": _taxonomy_aliases(taxonomy, node),
+                "current_body_markdown": current_body,
+                "weekly_history": [item.model_dump() for item in history],
+                "body_markdown": assemble_body(current_body, history),
+                "citation_map": [item.model_dump() for item in citation_map],
+                "child_page_ids": [child.id for child in children],
+                "confidence": narrative.confidence,
+                "open_issue_count": len(base["open_issue_ids"]),
+                "resolved_issue_count": len(base["resolved_issue_ids"]),
+                "contradictions": list(analysis.contradictions),
+                "generation_review_items": list(analysis.review_items),
+                "updated_at": base["generated_at"],
+            }
+            result.pages.append(page)
+            digests[node.id] = build_child_digest(page, analysis, narrative)
+        except Exception as exc:
+            result.failures[node.id] = str(exc)
+
+    return result
 
 
 def merge_weekly_history(
