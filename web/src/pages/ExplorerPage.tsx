@@ -102,7 +102,10 @@ export function ExplorerPage({ classic = false }: ExplorerPageProps) {
   const [wikiPageError, setWikiPageError] = useState<string | null>(null)
   const [wikiPages, setWikiPages] = useState<WikiPageSummary[]>([])
   const [wikiOutline, setWikiOutline] = useState<WikiHeading[]>([])
-  const [citationMailId, setCitationMailId] = useState<string | null>(null)
+  const [citationTarget, setCitationTarget] = useState<{
+    categoryId: string
+    mailId: string
+  } | null>(null)
   const [citationDetail, setCitationDetail] = useState<WikiCitationDetail | null>(null)
   const [citationLoading, setCitationLoading] = useState(false)
   const [citationError, setCitationError] = useState<string | null>(null)
@@ -275,13 +278,22 @@ export function ExplorerPage({ classic = false }: ExplorerPageProps) {
   }, [selection.domain, selection.tech, selection.lotcd, reviewOnly, refreshVersion])
 
   const wikiCategoryId = wikiPage?.category_id ?? null
+  const citationCategoryId = citationTarget?.categoryId ?? null
+  const citationMailId = citationTarget?.mailId ?? null
+
   useEffect(() => {
-    if (!wikiCategoryId || !citationMailId) return
+    setCitationTarget(null)
+    setCitationDetail(null)
+    setCitationError(null)
+  }, [selection.domain, selection.tech, selection.lotcd, wikiCategoryId])
+
+  useEffect(() => {
+    if (!citationCategoryId || !citationMailId) return
     const controller = new AbortController()
     setCitationDetail(null)
     setCitationLoading(true)
     setCitationError(null)
-    fetchWikiCitation(wikiCategoryId, citationMailId, controller.signal)
+    fetchWikiCitation(citationCategoryId, citationMailId, controller.signal)
       .then((nextDetail) => {
         if (!controller.signal.aborted) setCitationDetail(nextDetail)
       })
@@ -294,7 +306,7 @@ export function ExplorerPage({ classic = false }: ExplorerPageProps) {
         if (!controller.signal.aborted) setCitationLoading(false)
       })
     return () => controller.abort()
-  }, [wikiCategoryId, citationMailId])
+  }, [citationCategoryId, citationMailId])
 
   function changeSelection(next: Selection) {
     const updated = new URLSearchParams(searchParams)
@@ -314,9 +326,14 @@ export function ExplorerPage({ classic = false }: ExplorerPageProps) {
   }
 
   function closeCitation() {
-    setCitationMailId(null)
+    setCitationTarget(null)
     setCitationDetail(null)
     setCitationError(null)
+  }
+
+  function selectCitation(mailId: string) {
+    if (!wikiCategoryId) return
+    setCitationTarget({ categoryId: wikiCategoryId, mailId })
   }
 
   function selectAgenda(agendaId: string) {
@@ -564,7 +581,7 @@ export function ExplorerPage({ classic = false }: ExplorerPageProps) {
               page={wikiPage}
               loading={wikiPageLoading}
               error={wikiPageError}
-              onSelectCitation={setCitationMailId}
+              onSelectCitation={selectCitation}
               onOutlineChange={setWikiOutline}
             />
           </Suspense>
@@ -604,7 +621,7 @@ export function ExplorerPage({ classic = false }: ExplorerPageProps) {
         />
       ) : null}
 
-      {citationMailId ? (
+      {citationTarget ? (
         <WikiCitationDrawer
           detail={citationDetail}
           loading={citationLoading}

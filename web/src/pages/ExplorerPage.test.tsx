@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
@@ -134,6 +134,23 @@ const summary: WikiPageSummary = {
   review_item_count: 0,
 }
 
+const nandPage: CategoryWikiPage = {
+  ...page,
+  category_id: 'lotcd:n9a',
+  canonical_id: 'nand/v9/n9a',
+  domain: 'NAND',
+  tech: 'V9',
+  lotcd: 'N9A',
+  title: 'N9A canonical',
+  product: 'TLC 1T',
+  fab_id: 'N',
+  aliases: [],
+  current_body_markdown: '## 개요\n\nN9A 문서',
+  body_markdown: '# N9A canonical',
+  citation_map: [],
+  child_page_ids: [],
+}
+
 function citationDetail(mailId: string, subject: string): WikiCitationDetail {
   return {
     mail: {
@@ -163,7 +180,12 @@ function LocationProbe() {
   return <output aria-label="current path">{location.pathname}</output>
 }
 
-function renderPage(initialEntry: string, classic = false) {
+function HistoryNavigation({ to }: { to: string }) {
+  const navigate = useNavigate()
+  return <button type="button" onClick={() => navigate(to)}>history navigate</button>
+}
+
+function renderPage(initialEntry: string, classic = false, historyTarget?: string) {
   const route = classic
     ? '/explorer/:domain?/:tech?/:lotcd?'
     : '/wiki/docs/:domain?/:tech?/:lotcd?'
@@ -176,6 +198,7 @@ function renderPage(initialEntry: string, classic = false) {
             <>
               <ExplorerPage classic={classic} />
               <LocationProbe />
+              {historyTarget ? <HistoryNavigation to={historyTarget} /> : null}
             </>
           }
         />
@@ -261,6 +284,35 @@ describe('ExplorerPage canonical reader integration', () => {
         expect.any(AbortSignal),
       )
     })
+  })
+
+  it('closes a citation when history navigation changes the canonical page', async () => {
+    vi.mocked(fetchWikiPage).mockImplementation((selection) => (
+      selection.domain === 'NAND' ? Promise.resolve(nandPage) : Promise.resolve(page)
+    ))
+    vi.mocked(fetchWikiCitation).mockResolvedValue(citationDetail('mail-1', '기존 메일 근거'))
+
+    renderPage(
+      '/wiki/docs/dram/spica/4sa',
+      false,
+      '/wiki/docs/nand/v9/n9a',
+    )
+
+    expect(await screen.findByRole('heading', { name: page.title })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'mail:mail-1' }))
+    expect(await screen.findByText('기존 메일 근거')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'history navigate' }))
+
+    expect(await screen.findByRole('heading', { name: nandPage.title })).toBeInTheDocument()
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: '메일 근거' })).not.toBeInTheDocument()
+    })
+    expect(fetchWikiCitation).not.toHaveBeenCalledWith(
+      nandPage.category_id,
+      'mail-1',
+      expect.any(AbortSignal),
+    )
   })
 
   it('keeps summary loading and summary props out of classic Explorer', async () => {
