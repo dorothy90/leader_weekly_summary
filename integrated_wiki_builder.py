@@ -117,6 +117,7 @@ class ChildDigest(WikiModel):
     summary: str
     claims: list[SupportedClaim]
     issues: list[IssueDecision]
+    reopened_evidence_ids: dict[str, list[str]] = Field(default_factory=dict)
     contradictions: list[str] = Field(default_factory=list)
     confidence: Literal["low", "medium", "high"]
 
@@ -421,6 +422,7 @@ def build_child_digest(
     page: dict[str, Any],
     analysis: PageAnalysis,
     draft: NarrativeDraft,
+    reopened_evidence_ids: dict[str, set[str]] | None = None,
 ) -> ChildDigest:
     return ChildDigest(
         canonical_id=str(page["canonical_id"]),
@@ -428,6 +430,12 @@ def build_child_digest(
         summary=draft.overview,
         claims=[*analysis.new_claims, *analysis.retained_claims],
         issues=list(analysis.issue_decisions),
+        reopened_evidence_ids={
+            issue_id: sorted(agenda_ids)
+            for issue_id, agenda_ids in sorted(
+                (reopened_evidence_ids or {}).items()
+            )
+        },
         contradictions=list(analysis.contradictions),
         confidence=page["confidence"],
     )
@@ -731,11 +739,8 @@ def _reopened_evidence_ids(
                     str(event["agenda_id"])
                 )
     for digest in child_digests:
-        for decision in digest.issues:
-            if decision.status == "reopened":
-                evidence.setdefault(decision.issue_id, set()).update(
-                    decision.agenda_ids
-                )
+        for issue_id, agenda_ids in digest.reopened_evidence_ids.items():
+            evidence.setdefault(issue_id, set()).update(agenda_ids)
     return evidence
 
 
@@ -865,6 +870,9 @@ def build_integrated_pages(
                 "child_digests": [item.model_dump() for item in child_digests],
             }
             analysis = analyze(context)
+            available_reopened_evidence = _reopened_evidence_ids(
+                timeline_agendas, child_digests
+            )
             evidence_by_mail = validate_stage1_evidence(
                 analysis, validation_agendas
             )
@@ -872,8 +880,16 @@ def build_integrated_pages(
                 analysis,
                 validation_agendas,
                 _expected_issue_statuses(compact_timelines, child_digests),
-                _reopened_evidence_ids(timeline_agendas, child_digests),
+                available_reopened_evidence,
             )
+            validated_reopened_evidence = {
+                decision.issue_id: set(decision.agenda_ids)
+                & available_reopened_evidence.get(decision.issue_id, set())
+                for decision in analysis.issue_decisions
+                if decision.status == "reopened"
+                and set(decision.agenda_ids)
+                & available_reopened_evidence.get(decision.issue_id, set())
+            }
             narrative = draft(context, analysis)
             current_citation_map = [
                 *validate_draft(narrative, evidence_by_mail),
@@ -935,7 +951,12 @@ def build_integrated_pages(
                 "updated_at": base["generated_at"],
             }
             result.pages.append(page)
-            digests[node.id] = build_child_digest(page, analysis, narrative)
+            digests[node.id] = build_child_digest(
+                page,
+                analysis,
+                narrative,
+                validated_reopened_evidence,
+            )
         except Exception as exc:
             result.failures[node.id] = str(exc)
 

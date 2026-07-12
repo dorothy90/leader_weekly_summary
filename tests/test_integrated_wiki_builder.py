@@ -7,6 +7,7 @@ from category_wiki_builder import CategoryNode, load_taxonomy
 from integrated_wiki_builder import (
     _compact_issue_timelines,
     BuildResult,
+    ChildDigest,
     IssueDecision,
     NarrativeDraft,
     NarrativeValidationError,
@@ -1161,6 +1162,7 @@ def test_child_digest_contains_only_traceable_analysis_and_draft_summary():
         "summary": "요약 [mail:mail-1]",
         "claims": [claim.model_dump()],
         "issues": [decision.model_dump()],
+        "reopened_evidence_ids": {},
         "contradictions": ["상태 불일치"],
         "confidence": "medium",
     }
@@ -1537,6 +1539,140 @@ def test_parent_accepts_validated_reopened_child_issue_without_raw_terminal(taxo
 
     assert contexts["tech:dram:spica"]["allowed_agendas"] == []
     assert not result.failures
+
+
+def test_reopened_proof_propagates_exact_agenda_ids_lotcd_to_domain(taxonomy):
+    agendas = [
+        {
+            "agenda_id": "agenda-preterminal",
+            "mail_id": "mail-preterminal",
+            "week": "2026-W26",
+            "state": "open",
+            "review_status": "confirmed",
+            "issue_id": "issue-child",
+            "summary": "child initially open",
+            "subject": "4SA W26",
+            "topic": "yield",
+            "source_doc_ids": ["chunk-preterminal"],
+            "target_paths": [
+                {"domain": "DRAM", "tech": "Spica", "lotcd": "4SA"}
+            ],
+            "candidate_paths": [],
+        },
+        {
+            "agenda_id": "agenda-terminal",
+            "mail_id": "mail-terminal",
+            "week": "2026-W27",
+            "state": "resolved",
+            "review_status": "confirmed",
+            "issue_id": "issue-child",
+            "summary": "child resolved",
+            "subject": "4SA W27",
+            "topic": "yield",
+            "source_doc_ids": ["chunk-terminal"],
+            "target_paths": [
+                {"domain": "DRAM", "tech": "Spica", "lotcd": "4SA"}
+            ],
+            "candidate_paths": [],
+        },
+        {
+            "agenda_id": "agenda-reopened",
+            "mail_id": "mail-reopened",
+            "week": "2026-W28",
+            "state": "open",
+            "review_status": "confirmed",
+            "issue_id": "issue-child",
+            "summary": "child reopened",
+            "subject": "4SA W28",
+            "topic": "yield",
+            "source_doc_ids": ["chunk-reopened"],
+            "target_paths": [
+                {"domain": "DRAM", "tech": "Spica", "lotcd": "4SA"}
+            ],
+            "candidate_paths": [],
+        },
+    ]
+
+    def build_with_parent_evidence(parent_agenda_id):
+        contexts = {}
+
+        def decision(agenda_ids):
+            mail_by_agenda = {
+                agenda["agenda_id"]: agenda["mail_id"] for agenda in agendas
+            }
+            return IssueDecision(
+                issue_id="issue-child",
+                status="reopened",
+                summary="child reopened",
+                mail_ids=[mail_by_agenda[agenda_id] for agenda_id in agenda_ids],
+                agenda_ids=agenda_ids,
+            )
+
+        def analyze(context):
+            node_id = context["node"]["id"]
+            contexts[node_id] = context
+            if node_id == "lotcd:4sa":
+                return PageAnalysis(
+                    issue_decisions=[
+                        decision(["agenda-preterminal", "agenda-reopened"])
+                    ],
+                    outline=["개요"],
+                )
+            if node_id in {"tech:dram:spica", "domain:dram"}:
+                return PageAnalysis(
+                    issue_decisions=[decision([parent_agenda_id])],
+                    outline=["개요"],
+                )
+            return PageAnalysis(outline=["개요"])
+
+        result = build_integrated_pages(
+            taxonomy,
+            agendas,
+            {},
+            as_of_week="2026-W28",
+            analyze=analyze,
+            draft=lambda context, analysis: empty_draft(),
+        )
+        return result, contexts
+
+    invalid, _ = build_with_parent_evidence("agenda-preterminal")
+
+    assert "later than terminal" in invalid.failures["tech:dram:spica"]
+
+    valid, contexts = build_with_parent_evidence("agenda-reopened")
+
+    assert not valid.failures
+    tech_child = next(
+        digest
+        for digest in contexts["tech:dram:spica"]["child_digests"]
+        if digest["canonical_id"] == "dram/spica/4sa"
+    )
+    domain_child = next(
+        digest
+        for digest in contexts["domain:dram"]["child_digests"]
+        if digest["canonical_id"] == "dram/spica"
+    )
+    assert tech_child["reopened_evidence_ids"] == {
+        "issue-child": ["agenda-reopened"]
+    }
+    assert domain_child["reopened_evidence_ids"] == {
+        "issue-child": ["agenda-reopened"]
+    }
+
+
+def test_child_digest_defaults_reopened_evidence_mapping_for_old_inputs():
+    digest = ChildDigest.model_validate(
+        {
+            "canonical_id": "dram/spica/4sa",
+            "as_of_week": "2026-W28",
+            "summary": "summary",
+            "claims": [],
+            "issues": [],
+            "confidence": "low",
+        }
+    )
+
+    assert digest.reopened_evidence_ids == {}
 
 
 def test_build_normalizes_stored_and_requested_week_formats(taxonomy):
