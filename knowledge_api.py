@@ -27,6 +27,7 @@ from knowledge_models import (
     AliasUpdate,
     CategoryCount,
     CategoryCountResponse,
+    CategoryPath,
     CategoryWikiPage,
     ClassificationUpdate,
     Mail,
@@ -40,6 +41,9 @@ from knowledge_models import (
     TechCreate,
     TechUpdate,
     TaxonomyDocument,
+    WikiCitationDetail,
+    WikiPageSummary,
+    WikiPageSummaryResponse,
 )
 from knowledge_store import DEFAULT_DB_PATH, SQLiteKnowledgeStore
 
@@ -79,6 +83,52 @@ def _get_category_wiki_page(category_id: str) -> CategoryWikiPage:
             raise HTTPException(status_code=404, detail="Wiki page has not been built") from exc
         raise HTTPException(status_code=503, detail="Wiki page store unavailable") from exc
     return CategoryWikiPage.model_validate(response["_source"])
+
+
+def _list_category_wiki_pages() -> list[WikiPageSummary]:
+    from category_wiki_builder import PAGE_INDEX
+    from embed_vectordb import get_opensearch_client
+
+    summary_fields = [
+        "category_id",
+        "page_kind",
+        "canonical_id",
+        "level",
+        "domain",
+        "tech",
+        "lotcd",
+        "title",
+        "as_of_week",
+        "open_issue_count",
+        "resolved_issue_count",
+        "confidence",
+        "review_agenda_ids",
+        "generation_review_items",
+    ]
+    try:
+        response = get_opensearch_client().search(
+            index=PAGE_INDEX,
+            body={
+                "query": {"term": {"page_kind": "latest"}},
+                "_source": summary_fields,
+                "size": 1000,
+            },
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Wiki page store unavailable") from exc
+
+    items = []
+    for hit in response.get("hits", {}).get("hits", []):
+        source = hit.get("_source", {})
+        if source.get("page_kind") != "latest":
+            continue
+        summary = {field: source.get(field) for field in summary_fields[:-2]}
+        summary.pop("page_kind")
+        summary["review_item_count"] = len(source.get("review_agenda_ids", [])) + len(
+            source.get("generation_review_items", [])
+        )
+        items.append(WikiPageSummary.model_validate(summary))
+    return items
 
 
 def _week_received_at(week: str) -> datetime:
@@ -228,6 +278,11 @@ def get_taxonomy() -> TaxonomyDocument:
     return get_store().taxonomy
 
 
+@router.get("/wiki/pages", response_model=WikiPageSummaryResponse)
+def get_wiki_pages() -> WikiPageSummaryResponse:
+    return WikiPageSummaryResponse(items=_list_category_wiki_pages())
+
+
 @router.get("/wiki/pages/{domain}/{tech}/{lotcd}", response_model=CategoryWikiPage)
 def get_lotcd_wiki_page(
     domain: Literal["DRAM", "NAND"], tech: str, lotcd: str
@@ -251,6 +306,35 @@ def get_domain_wiki_page(domain: Literal["DRAM", "NAND"]) -> CategoryWikiPage:
     taxonomy = get_store().taxonomy
     _validate_selection(taxonomy, domain, None, None)
     return _get_category_wiki_page(_category_page_id(domain, None, None))
+
+
+@router.get("/wiki/citations/{mail_id}", response_model=WikiCitationDetail)
+def get_wiki_citation(mail_id: str, category_id: str) -> WikiCitationDetail:
+    page = CategoryWikiPage.model_validate(_get_category_wiki_page(category_id))
+    citation = next(
+        (item for item in page.citation_map if item.mail_id == mail_id), None
+    )
+    if citation is None:
+        raise HTTPException(
+            status_code=404, detail="Citation is not mapped on this wiki page"
+        )
+
+    details = [
+        AgendaDetailResponse.model_validate(_get_opensearch_agenda(agenda_id))
+        for agenda_id in citation.agenda_ids
+    ]
+    if not details or any(
+        detail.mail.id != mail_id or detail.agenda.mail_id != mail_id
+        for detail in details
+    ):
+        raise HTTPException(
+            status_code=409, detail="Mapped agendas disagree on mail identity"
+        )
+    return WikiCitationDetail(
+        mail=details[0].mail,
+        agendas=[detail.agenda for detail in details],
+        used_in_sections=citation.used_in_sections,
+    )
 
 
 @router.get("/session", response_model=KnowledgeSession)

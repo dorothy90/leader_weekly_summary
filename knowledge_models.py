@@ -244,6 +244,31 @@ class CategoryWikiPage(StrictModel):
     updated_at: datetime | None = None
 
 
+class WikiPageSummary(StrictModel):
+    category_id: str
+    canonical_id: str
+    level: Literal["domain", "tech", "lotcd"]
+    domain: Literal["DRAM", "NAND"]
+    tech: str | None = None
+    lotcd: str | None = None
+    title: str
+    as_of_week: str
+    open_issue_count: int
+    resolved_issue_count: int
+    confidence: Literal["low", "medium", "high"]
+    review_item_count: int = 0
+
+
+class WikiPageSummaryResponse(StrictModel):
+    items: list[WikiPageSummary]
+
+
+class WikiCitationDetail(StrictModel):
+    mail: Mail
+    agendas: list[AgendaView]
+    used_in_sections: list[str]
+
+
 class TechCreate(StrictModel):
     domain: Literal["DRAM", "NAND"]
     id: str = Field(pattern=r"^[a-z0-9_-]+$", min_length=1, max_length=80)

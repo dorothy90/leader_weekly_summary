@@ -26,6 +26,79 @@ def request(method: str, path: str, **kwargs) -> httpx.Response:
     return asyncio.run(run())
 
 
+def canonical_page_fixture() -> dict:
+    return {
+        "category_id": "lotcd:4sa",
+        "page_kind": "latest",
+        "doc_type": "canonical",
+        "canonical_id": "dram/spica/4sa",
+        "level": "lotcd",
+        "domain": "DRAM",
+        "tech": "Spica",
+        "lotcd": "4SA",
+        "title": "4SA",
+        "product": "LPDDR5 24G",
+        "fab_id": "4",
+        "aliases": ["SP 24G"],
+        "as_of_week": "2026-W28",
+        "current_body_markdown": "# 4SA",
+        "weekly_history": [],
+        "body_markdown": "# 4SA",
+        "citation_map": [],
+        "child_page_ids": [],
+        "confidence": "high",
+        "agenda_count": 2,
+        "open_issue_ids": ["issue:4sa-yield"],
+        "resolved_issue_ids": ["issue:4sa-equipment"],
+        "open_issue_count": 1,
+        "resolved_issue_count": 1,
+        "contradictions": [],
+        "generation_review_items": [],
+        "review_agenda_ids": [],
+        "source_agenda_ids": ["agenda-1", "agenda-2"],
+        "source_doc_ids": ["chunk-1", "chunk-2"],
+        "source_hash": "hash",
+        "taxonomy_version": 1,
+        "generated_at": "2026-07-12T00:00:00Z",
+        "updated_at": "2026-07-12T00:00:00Z",
+    }
+
+
+def agenda_detail_fixture(
+    agenda_id: str = "agenda-1", mail_id: str = "mail-1"
+) -> dict:
+    return {
+        "agenda": {
+            "id": agenda_id,
+            "mail_id": mail_id,
+            "source_quote": "4SA 수율 하락",
+            "summary": "4SA 수율 하락",
+            "scope": "lotcd",
+            "target_paths": [
+                {"domain": "DRAM", "tech": "Spica", "lotcd": "4SA"}
+            ],
+            "candidate_paths": [],
+            "topic": "yield",
+            "state": "open",
+            "confidence": 0.99,
+            "review_required": False,
+            "subject": "Spica 주간 수율",
+            "sender_team": "Spica수율",
+            "received_at": "2026-07-06T00:00:00Z",
+            "review_status": "confirmed",
+        },
+        "mail": {
+            "id": mail_id,
+            "subject": "Spica 주간 수율",
+            "sender_team": "Spica수율",
+            "sender": "unknown",
+            "received_at": "2026-07-06T00:00:00Z",
+            "body": "4SA 수율 하락",
+            "reply_to": None,
+        },
+    }
+
+
 def test_fixture_documents_are_valid_and_complete():
     store = get_store()
 
@@ -68,6 +141,152 @@ def test_category_wiki_route_returns_generated_opensearch_page(monkeypatch):
     assert response.status_code == 200
     assert response.json()["body_markdown"] == "# 4SA"
     assert captured == ["lotcd:4sa"]
+
+
+def test_wiki_page_list_returns_only_canonical_summaries(monkeypatch):
+    class FakeOpenSearch:
+        def search(self, *, index, body):
+            assert body["query"] == {"term": {"page_kind": "latest"}}
+            assert "review_agenda_ids" in body["_source"]
+            assert "generation_review_items" in body["_source"]
+            return {
+                "hits": {
+                    "hits": [
+                        {
+                            "_source": {
+                                "category_id": "lotcd:4sa",
+                                "page_kind": "latest",
+                                "canonical_id": "dram/spica/4sa",
+                                "level": "lotcd",
+                                "domain": "DRAM",
+                                "tech": "Spica",
+                                "lotcd": "4SA",
+                                "title": "4SA",
+                                "as_of_week": "2026-W28",
+                                "open_issue_count": 2,
+                                "resolved_issue_count": 1,
+                                "confidence": "high",
+                                "review_agenda_ids": ["agenda-1"],
+                                "generation_review_items": ["missing citation"],
+                            }
+                        },
+                        {
+                            "_source": {
+                                "category_id": "lotcd:4sa",
+                                "page_kind": "snapshot",
+                                "canonical_id": "dram/spica/4sa",
+                                "level": "lotcd",
+                                "domain": "DRAM",
+                                "tech": "Spica",
+                                "lotcd": "4SA",
+                                "title": "4SA",
+                                "as_of_week": "2026-W27",
+                                "open_issue_count": 3,
+                                "resolved_issue_count": 0,
+                                "confidence": "medium",
+                                "review_agenda_ids": [],
+                                "generation_review_items": [],
+                            }
+                        },
+                    ]
+                }
+            }
+
+    monkeypatch.setattr(
+        "embed_vectordb.get_opensearch_client", lambda: FakeOpenSearch()
+    )
+
+    response = request("GET", "/api/knowledge/wiki/pages")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "items": [
+            {
+                "category_id": "lotcd:4sa",
+                "canonical_id": "dram/spica/4sa",
+                "level": "lotcd",
+                "domain": "DRAM",
+                "tech": "Spica",
+                "lotcd": "4SA",
+                "title": "4SA",
+                "as_of_week": "2026-W28",
+                "open_issue_count": 2,
+                "resolved_issue_count": 1,
+                "confidence": "high",
+                "review_item_count": 2,
+            }
+        ]
+    }
+
+
+def test_wiki_citation_returns_only_page_mapped_agendas(monkeypatch):
+    page = canonical_page_fixture()
+    page["citation_map"] = [
+        {
+            "mail_id": "mail-1",
+            "agenda_ids": ["agenda-1"],
+            "used_in_sections": ["원인과 영향 관계"],
+            "category_paths": ["dram/spica/4sa"],
+        }
+    ]
+    monkeypatch.setattr(knowledge_api, "_get_category_wiki_page", lambda _id: page)
+    monkeypatch.setattr(
+        knowledge_api,
+        "_get_opensearch_agenda",
+        lambda agenda_id: agenda_detail_fixture(agenda_id),
+    )
+
+    response = request(
+        "GET",
+        "/api/knowledge/wiki/citations/mail-1",
+        params={"category_id": "lotcd:4sa"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["mail"]["id"] == "mail-1"
+    assert [item["id"] for item in response.json()["agendas"]] == ["agenda-1"]
+    assert response.json()["used_in_sections"] == ["원인과 영향 관계"]
+
+
+def test_wiki_citation_returns_not_found_for_unmapped_mail(monkeypatch):
+    monkeypatch.setattr(
+        knowledge_api, "_get_category_wiki_page", lambda _id: canonical_page_fixture()
+    )
+
+    response = request(
+        "GET",
+        "/api/knowledge/wiki/citations/mail-1",
+        params={"category_id": "lotcd:4sa"},
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Citation is not mapped on this wiki page"}
+
+
+def test_wiki_citation_rejects_mapped_agenda_with_different_mail(monkeypatch):
+    page = canonical_page_fixture()
+    page["citation_map"] = [
+        {
+            "mail_id": "mail-1",
+            "agenda_ids": ["agenda-1"],
+            "used_in_sections": ["원인과 영향 관계"],
+            "category_paths": ["dram/spica/4sa"],
+        }
+    ]
+    monkeypatch.setattr(knowledge_api, "_get_category_wiki_page", lambda _id: page)
+    monkeypatch.setattr(
+        knowledge_api,
+        "_get_opensearch_agenda",
+        lambda agenda_id: agenda_detail_fixture(agenda_id, mail_id="mail-2"),
+    )
+
+    response = request(
+        "GET",
+        "/api/knowledge/wiki/citations/mail-1",
+        params={"category_id": "lotcd:4sa"},
+    )
+
+    assert response.status_code == 409
 
 
 def test_agenda_detail_falls_back_to_opensearch_for_generated_wiki_source(monkeypatch):
