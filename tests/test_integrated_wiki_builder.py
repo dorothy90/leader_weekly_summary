@@ -437,6 +437,134 @@ def test_retained_history_citations_resolve_without_expanding_next_prompt(taxono
     )["used_in_sections"] == ["2026-W28"]
 
 
+def test_quiet_resolved_issue_uses_timeline_evidence_without_prompt_expansion(
+    taxonomy,
+):
+    agenda = {
+        "agenda_id": "agenda-27-terminal",
+        "mail_id": "mail-27-terminal",
+        "week": "2026-W27",
+        "state": "resolved",
+        "review_status": "confirmed",
+        "issue_id": "issue-quiet-resolved",
+        "summary": "W27 해결",
+        "subject": "W27 weekly",
+        "topic": "yield",
+        "source_doc_ids": ["chunk-27"],
+        "target_paths": [
+            {"domain": "DRAM", "tech": "Spica", "lotcd": "4SA"}
+        ],
+        "candidate_paths": [],
+    }
+    previous = {
+        "lotcd:4sa": {
+            "current_body_markdown": "",
+            "weekly_history": [
+                {
+                    "week": "2026-W27",
+                    "body_markdown": "W27 해결 [mail:mail-27-terminal]",
+                    "source_mail_ids": ["mail-27-terminal"],
+                }
+            ],
+            "citation_map": [
+                {
+                    "mail_id": "mail-27-terminal",
+                    "agenda_ids": ["agenda-27-terminal"],
+                    "used_in_sections": ["2026-W27"],
+                    "category_paths": ["dram/spica/4sa"],
+                }
+            ],
+        }
+    }
+    contexts = {}
+
+    def analyze(context):
+        contexts[context["node"]["id"]] = context
+        return analysis_with_expected_issues(context)
+
+    result = build_integrated_pages(
+        taxonomy,
+        [agenda],
+        previous,
+        as_of_week="2026-W29",
+        analyze=analyze,
+        draft=lambda context, analysis: empty_draft(),
+    )
+
+    assert contexts["lotcd:4sa"]["allowed_agendas"] == []
+    assert contexts["lotcd:4sa"]["issue_timelines"][0]["events"][0][
+        "agenda_id"
+    ] == "agenda-27-terminal"
+    assert not result.failures
+    page = next(item for item in result.pages if item["category_id"] == "lotcd:4sa")
+    assert page["resolved_issue_ids"] == ["issue-quiet-resolved"]
+
+
+def test_legacy_tech_and_domain_bootstrap_descendant_history_without_prompt_leak(
+    taxonomy,
+):
+    agenda = {
+        "agenda_id": "agenda-27-lotcd",
+        "mail_id": "mail-27-lotcd",
+        "week": "2026-W27",
+        "state": "open",
+        "review_status": "confirmed",
+        "issue_id": "issue-27-lotcd",
+        "summary": "W27 LOTCD 상태",
+        "subject": "W27 weekly",
+        "topic": "yield",
+        "source_doc_ids": ["chunk-27"],
+        "target_paths": [
+            {"domain": "DRAM", "tech": "Spica", "lotcd": "4SA"}
+        ],
+        "candidate_paths": [],
+    }
+    previous = {
+        category_id: {
+            "category_id": category_id,
+            "page_kind": "latest",
+            "as_of_week": "2026-W27",
+            "body_markdown": f"legacy {category_id}",
+        }
+        for category_id in ("tech:dram:spica", "domain:dram")
+    }
+    contexts = {}
+
+    def analyze(context):
+        contexts[context["node"]["id"]] = context
+        return analysis_with_expected_issues(context)
+
+    result = build_integrated_pages(
+        taxonomy,
+        [agenda],
+        previous,
+        as_of_week="2026-W28",
+        analyze=analyze,
+        draft=lambda context, analysis: empty_draft(),
+    )
+    pages = {page["category_id"]: page for page in result.pages}
+
+    assert not result.failures
+    for category_id in ("tech:dram:spica", "domain:dram"):
+        assert contexts[category_id]["allowed_agendas"] == []
+        assert contexts[category_id]["issue_timelines"] == []
+        assert [
+            item["week"] for item in pages[category_id]["weekly_history"]
+        ] == ["2026-W28", "2026-W27"]
+        assert pages[category_id]["weekly_history"][1][
+            "source_mail_ids"
+        ] == ["mail-27-lotcd"]
+        citation = next(
+            item
+            for item in pages[category_id]["citation_map"]
+            if item["mail_id"] == "mail-27-lotcd"
+        )
+        assert citation["agenda_ids"] == ["agenda-27-lotcd"]
+        assert "W27 LOTCD 상태 [mail:mail-27-lotcd]" in pages[category_id][
+            "body_markdown"
+        ]
+
+
 def test_render_current_body_uses_only_current_narrative_sections():
     draft = NarrativeDraft(
         overview=" overview ",
@@ -680,9 +808,17 @@ def test_issue_validation_accepts_matching_reopened_and_resolved_decisions():
     )
     agendas = [
         {
+            "agenda_id": "agenda-reopened-terminal",
+            "mail_id": "mail-reopened-terminal",
+            "issue_id": "issue-reopened",
+            "week": "2026-W27",
+            "state": "resolved",
+        },
+        {
             "agenda_id": "agenda-open",
             "mail_id": "mail-open",
             "issue_id": "issue-reopened",
+            "week": "2026-W28",
             "state": "open",
         },
         {
@@ -699,6 +835,214 @@ def test_issue_validation_accepts_matching_reopened_and_resolved_decisions():
         agendas,
         {"issue-reopened": "reopened", "issue-resolved": "resolved"},
     )
+
+
+def test_issue_validation_rejects_terminal_only_ongoing_evidence():
+    analysis = PageAnalysis(
+        outline=["개요"],
+        issue_decisions=[
+            IssueDecision(
+                issue_id="issue-1",
+                status="ongoing",
+                summary="진행 중",
+                mail_ids=["mail-terminal"],
+                agenda_ids=["agenda-terminal"],
+            )
+        ],
+    )
+
+    with pytest.raises(NarrativeValidationError, match="non-terminal"):
+        validate_issue_decisions(
+            analysis,
+            [
+                {
+                    "agenda_id": "agenda-terminal",
+                    "mail_id": "mail-terminal",
+                    "issue_id": "issue-1",
+                    "week": "2026-W27",
+                    "state": "resolved",
+                }
+            ],
+        )
+
+
+def test_issue_validation_accepts_ongoing_with_nonterminal_evidence():
+    analysis = PageAnalysis(
+        outline=["개요"],
+        issue_decisions=[
+            IssueDecision(
+                issue_id="issue-1",
+                status="ongoing",
+                summary="진행 중",
+                mail_ids=["mail-open"],
+                agenda_ids=["agenda-open"],
+            )
+        ],
+    )
+
+    validate_issue_decisions(
+        analysis,
+        [
+            {
+                "agenda_id": "agenda-open",
+                "mail_id": "mail-open",
+                "issue_id": "issue-1",
+                "week": "2026-W28",
+                "state": "open",
+            }
+        ],
+    )
+
+
+def test_issue_validation_accepts_terminal_then_later_nonterminal_reopened():
+    analysis = PageAnalysis(
+        outline=["개요"],
+        issue_decisions=[
+            IssueDecision(
+                issue_id="issue-1",
+                status="reopened",
+                summary="재발",
+                mail_ids=["mail-reopened"],
+                agenda_ids=["agenda-reopened"],
+            )
+        ],
+    )
+
+    validate_issue_decisions(
+        analysis,
+        [
+            {
+                "agenda_id": "agenda-terminal",
+                "mail_id": "mail-terminal",
+                "issue_id": "issue-1",
+                "week": "2026-W27",
+                "state": "resolved",
+            },
+            {
+                "agenda_id": "agenda-reopened",
+                "mail_id": "mail-reopened",
+                "issue_id": "issue-1",
+                "week": "2026-W28",
+                "state": "open",
+            },
+        ],
+    )
+
+
+def test_issue_validation_accepts_compacted_deterministic_reopened_proof():
+    analysis = PageAnalysis(
+        outline=["개요"],
+        issue_decisions=[
+            IssueDecision(
+                issue_id="issue-1",
+                status="reopened",
+                summary="재발 후 모니터링",
+                mail_ids=["mail-monitoring"],
+                agenda_ids=["agenda-monitoring"],
+            )
+        ],
+    )
+
+    validate_issue_decisions(
+        analysis,
+        [
+            {
+                "agenda_id": "agenda-first",
+                "mail_id": "mail-first",
+                "issue_id": "issue-1",
+                "week": "2026-W24",
+                "state": "open",
+            },
+            {
+                "agenda_id": "agenda-reopened",
+                "mail_id": "mail-reopened",
+                "issue_id": "issue-1",
+                "week": "2026-W26",
+                "state": "open",
+            },
+            {
+                "agenda_id": "agenda-monitoring",
+                "mail_id": "mail-monitoring",
+                "issue_id": "issue-1",
+                "week": "2026-W27",
+                "state": "monitoring",
+            },
+        ],
+        reopened_evidence_ids={"issue-1": {"agenda-reopened", "agenda-monitoring"}},
+    )
+
+
+def test_issue_validation_rejects_preterminal_citation_with_reopened_proof():
+    analysis = PageAnalysis(
+        outline=["개요"],
+        issue_decisions=[
+            IssueDecision(
+                issue_id="issue-1",
+                status="reopened",
+                summary="잘못된 재발 근거",
+                mail_ids=["mail-first"],
+                agenda_ids=["agenda-first"],
+            )
+        ],
+    )
+
+    with pytest.raises(NarrativeValidationError, match="later than terminal"):
+        validate_issue_decisions(
+            analysis,
+            [
+                {
+                    "agenda_id": "agenda-first",
+                    "mail_id": "mail-first",
+                    "issue_id": "issue-1",
+                    "week": "2026-W24",
+                    "state": "open",
+                },
+                {
+                    "agenda_id": "agenda-reopened",
+                    "mail_id": "mail-reopened",
+                    "issue_id": "issue-1",
+                    "week": "2026-W26",
+                    "state": "open",
+                },
+            ],
+            reopened_evidence_ids={"issue-1": {"agenda-reopened"}},
+        )
+
+
+def test_issue_validation_rejects_nonterminal_before_terminal_as_reopened():
+    analysis = PageAnalysis(
+        outline=["개요"],
+        issue_decisions=[
+            IssueDecision(
+                issue_id="issue-1",
+                status="reopened",
+                summary="재발",
+                mail_ids=["mail-open"],
+                agenda_ids=["agenda-open"],
+            )
+        ],
+    )
+
+    with pytest.raises(NarrativeValidationError, match="later than terminal"):
+        validate_issue_decisions(
+            analysis,
+            [
+                {
+                    "agenda_id": "agenda-open",
+                    "mail_id": "mail-open",
+                    "issue_id": "issue-1",
+                    "week": "2026-W27",
+                    "state": "open",
+                },
+                {
+                    "agenda_id": "agenda-terminal",
+                    "mail_id": "mail-terminal",
+                    "issue_id": "issue-1",
+                    "week": "2026-W28",
+                    "state": "resolved",
+                },
+            ],
+        )
 
 
 def test_generation_order_is_lotcd_then_tech_then_domain(taxonomy):
@@ -969,7 +1313,7 @@ def test_build_preserves_history_and_resolves_child_evidence(taxonomy):
     ] == ["agenda-child"]
     assert [
         item["agenda_id"] for item in contexts["tech:dram:spica"]["allowed_agendas"]
-    ] == ["agenda-child", "agenda-old"]
+    ] == []
 
     page = pages["lotcd:4sa"]
     assert [item["week"] for item in page["weekly_history"]] == [
@@ -1067,6 +1411,31 @@ def test_compact_issue_timeline_keeps_first_terminal_and_latest_events():
     assert timeline["event_type"] == "reopened"
 
 
+def test_compact_issue_timeline_keeps_latest_distinct_transition_event():
+    states = ["open", "resolved", "reopened", "monitoring"]
+    agendas = [
+        {
+            "agenda_id": f"agenda-{week}",
+            "mail_id": f"mail-{week}",
+            "week": f"2026-W{week}",
+            "state": state,
+            "review_status": "confirmed",
+            "issue_id": "issue-transition",
+            "summary": f"state {state}",
+        }
+        for week, state in zip(range(24, 28), states, strict=True)
+    ]
+
+    timeline = _compact_issue_timelines(agendas, "2026-W27")[0]
+
+    assert [event["agenda_id"] for event in timeline["events"]] == [
+        "agenda-24",
+        "agenda-26",
+        "agenda-27",
+    ]
+    assert len(timeline["events"]) <= 3
+
+
 def test_parent_requires_issue_decisions_promoted_by_child_digest(taxonomy):
     agendas = [
         {
@@ -1114,6 +1483,60 @@ def test_parent_requires_issue_decisions_promoted_by_child_digest(taxonomy):
     assert "missing issue decision: issue-child" in result.failures[
         "tech:dram:spica"
     ]
+
+
+def test_parent_accepts_validated_reopened_child_issue_without_raw_terminal(taxonomy):
+    agendas = [
+        {
+            "agenda_id": "agenda-terminal",
+            "mail_id": "mail-terminal",
+            "week": "2026-W27",
+            "state": "resolved",
+            "review_status": "confirmed",
+            "issue_id": "issue-child",
+            "summary": "child resolved",
+            "subject": "4SA W27",
+            "topic": "yield",
+            "source_doc_ids": ["chunk-terminal"],
+            "target_paths": [
+                {"domain": "DRAM", "tech": "Spica", "lotcd": "4SA"}
+            ],
+            "candidate_paths": [],
+        },
+        {
+            "agenda_id": "agenda-reopened",
+            "mail_id": "mail-reopened",
+            "week": "2026-W28",
+            "state": "open",
+            "review_status": "confirmed",
+            "issue_id": "issue-child",
+            "summary": "child reopened",
+            "subject": "4SA W28",
+            "topic": "yield",
+            "source_doc_ids": ["chunk-reopened"],
+            "target_paths": [
+                {"domain": "DRAM", "tech": "Spica", "lotcd": "4SA"}
+            ],
+            "candidate_paths": [],
+        },
+    ]
+    contexts = {}
+
+    def analyze(context):
+        contexts[context["node"]["id"]] = context
+        return analysis_with_expected_issues(context)
+
+    result = build_integrated_pages(
+        taxonomy,
+        agendas,
+        {},
+        as_of_week="2026-W28",
+        analyze=analyze,
+        draft=lambda context, analysis: empty_draft(),
+    )
+
+    assert contexts["tech:dram:spica"]["allowed_agendas"] == []
+    assert not result.failures
 
 
 def test_build_normalizes_stored_and_requested_week_formats(taxonomy):

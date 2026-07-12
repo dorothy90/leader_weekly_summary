@@ -18,6 +18,7 @@ from category_wiki_builder import (
     SOURCE_INDEX,
     TERMINAL_STATES,
     CategoryNode,
+    agenda_matches_node,
     build_page_documents,
     category_nodes,
     ensure_index,
@@ -217,6 +218,7 @@ def validate_issue_decisions(
     analysis: PageAnalysis,
     allowed_agendas: list[dict[str, Any]],
     expected_issues: dict[str, str] | None = None,
+    reopened_evidence_ids: dict[str, set[str]] | None = None,
 ) -> None:
     agendas = {str(item["agenda_id"]): item for item in allowed_agendas}
     decisions: dict[str, IssueDecision] = {}
@@ -252,6 +254,49 @@ def validate_issue_decisions(
             raise NarrativeValidationError(
                 f"resolved issue {decision.issue_id} has no terminal agenda"
             )
+        if decision.status in {"ongoing", "reopened"}:
+            cited_nonterminal = [
+                item
+                for item in cited
+                if str(item.get("state", "")).casefold()
+                not in TERMINAL_STATES
+            ]
+            if not cited_nonterminal:
+                raise NarrativeValidationError(
+                    f"{decision.status} issue {decision.issue_id} "
+                    "has no non-terminal agenda"
+                )
+            if decision.status == "reopened":
+                terminal_events = [
+                    item
+                    for item in allowed_agendas
+                    if str(item.get("issue_id")) == decision.issue_id
+                    and str(item.get("state", "")).casefold()
+                    in TERMINAL_STATES
+                ]
+
+                def event_key(item: dict[str, Any]) -> tuple[str, str]:
+                    return (
+                        _normalize_week(item.get("week")),
+                        str(item["agenda_id"]),
+                    )
+
+                deterministic_evidence = (reopened_evidence_ids or {}).get(
+                    decision.issue_id, set()
+                )
+                has_later_nonterminal = any(
+                    str(item["agenda_id"]) in deterministic_evidence
+                    for item in cited_nonterminal
+                ) or any(
+                    event_key(terminal) < event_key(nonterminal)
+                    for terminal in terminal_events
+                    for nonterminal in cited_nonterminal
+                )
+                if not has_later_nonterminal:
+                    raise NarrativeValidationError(
+                        f"reopened issue {decision.issue_id} has no non-terminal "
+                        "event later than terminal evidence"
+                    )
 
     for issue_id, expected_status in (expected_issues or {}).items():
         decision = decisions.get(issue_id)
@@ -553,28 +598,22 @@ def _compact_issue_timelines(
     for issue in issue_timelines(agendas, as_of_week=as_of_week):
         events = issue["events"]
         selected_ids = {str(events[0]["agenda_id"]), str(events[-1]["agenda_id"])}
-        terminal = next(
-            (
-                event
-                for event in reversed(events)
-                if str(event.get("state", "")).casefold() in TERMINAL_STATES
-            ),
-            None,
-        )
-        if terminal is not None:
-            selected_ids.add(str(terminal["agenda_id"]))
-        else:
-            transition = next(
-                (
-                    events[index]
-                    for index in range(len(events) - 1, 0, -1)
-                    if str(events[index].get("state", "")).casefold()
-                    != str(events[index - 1].get("state", "")).casefold()
-                ),
-                None,
-            )
-            if transition is not None:
-                selected_ids.add(str(transition["agenda_id"]))
+        transition = None
+        for index in range(len(events) - 2, 0, -1):
+            state = str(events[index].get("state", "")).casefold()
+            previous_state = str(
+                events[index - 1].get("state", "")
+            ).casefold()
+            if (
+                state in TERMINAL_STATES
+                or (state in TERMINAL_STATES)
+                != (previous_state in TERMINAL_STATES)
+                or state != previous_state
+            ):
+                transition = events[index]
+                break
+        if transition is not None:
+            selected_ids.add(str(transition["agenda_id"]))
         compact.append(
             {
                 key: issue[key]
@@ -669,6 +708,37 @@ def _expected_issue_statuses(
     return expected
 
 
+def _reopened_evidence_ids(
+    agendas: list[dict[str, Any]], child_digests: list[ChildDigest]
+) -> dict[str, set[str]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for agenda in agendas:
+        grouped.setdefault(str(agenda["issue_id"]), []).append(agenda)
+    evidence: dict[str, set[str]] = {}
+    for issue_id, events in grouped.items():
+        terminal_seen = False
+        for event in sorted(
+            events,
+            key=lambda item: (
+                _normalize_week(item.get("week")),
+                str(item["agenda_id"]),
+            ),
+        ):
+            if str(event.get("state", "")).casefold() in TERMINAL_STATES:
+                terminal_seen = True
+            elif terminal_seen:
+                evidence.setdefault(issue_id, set()).add(
+                    str(event["agenda_id"])
+                )
+    for digest in child_digests:
+        for decision in digest.issues:
+            if decision.status == "reopened":
+                evidence.setdefault(decision.issue_id, set()).update(
+                    decision.agenda_ids
+                )
+    return evidence
+
+
 def build_integrated_pages(
     taxonomy: TaxonomyDocument,
     agendas: list[dict[str, Any]],
@@ -712,40 +782,77 @@ def build_integrated_pages(
         previous = previous_pages.get(node.id, {})
         child_digests = [digests[child.id] for child in children]
         try:
-            legacy_agendas = (
-                direct_agendas_for_node(node, eligible_agendas)
-                if _is_legacy_page(previous)
-                else []
+            node_direct_agendas = direct_agendas_for_node(
+                node, eligible_agendas
             )
+            is_legacy = _is_legacy_page(previous)
+            legacy_prompt_agendas = node_direct_agendas if is_legacy else []
+            if not is_legacy:
+                legacy_history_agendas = []
+            elif node.level == "lotcd":
+                legacy_history_agendas = node_direct_agendas
+            else:
+                legacy_history_agendas = [
+                    agenda
+                    for agenda in eligible_agendas
+                    if agenda.get("review_status", "confirmed") == "confirmed"
+                    and agenda_matches_node(agenda, node)
+                ]
             legacy_history, legacy_citations = _bootstrap_legacy_history(
-                legacy_agendas, as_of_week
+                legacy_history_agendas, as_of_week
             )
             current_direct = [
                 agenda
-                for agenda in direct_agendas_for_node(node, eligible_agendas)
+                for agenda in node_direct_agendas
                 if _normalize_week(agenda.get("week")) == as_of_week
             ]
+            direct_agendas_by_id = {
+                str(agenda["agenda_id"]): agenda
+                for agenda in node_direct_agendas
+            }
             previous_agendas = [
-                agendas_by_id[agenda_id]
+                direct_agendas_by_id[agenda_id]
                 for agenda_id in sorted(_previous_cited_agenda_ids(previous))
-                if agenda_id in agendas_by_id
+                if agenda_id in direct_agendas_by_id
             ]
             allowed_by_id = {
                 str(agenda["agenda_id"]): agenda
                 for agenda in [
                     *current_direct,
                     *previous_agendas,
-                    *legacy_agendas,
-                    *_child_agendas(child_digests, agendas_by_id),
+                    *legacy_prompt_agendas,
                 ]
             }
             allowed_agendas = [
                 allowed_by_id[agenda_id] for agenda_id in sorted(allowed_by_id)
             ]
-            timeline_agendas = direct_agendas_for_node(node, eligible_agendas)
+            child_validation_agendas = _child_agendas(
+                child_digests, agendas_by_id
+            )
+            timeline_agendas = node_direct_agendas
             compact_timelines = _compact_issue_timelines(
                 timeline_agendas, as_of_week
             )
+            timeline_validation_ids = {
+                str(event["agenda_id"])
+                for timeline in compact_timelines
+                for event in timeline["events"]
+            }
+            validation_by_id = {
+                **allowed_by_id,
+                **{
+                    str(agenda["agenda_id"]): agenda
+                    for agenda in child_validation_agendas
+                },
+                **{
+                    agenda_id: agendas_by_id[agenda_id]
+                    for agenda_id in timeline_validation_ids
+                },
+            }
+            validation_agendas = [
+                validation_by_id[agenda_id]
+                for agenda_id in sorted(validation_by_id)
+            ]
             context = {
                 "node": asdict(node),
                 "as_of_week": as_of_week,
@@ -758,11 +865,14 @@ def build_integrated_pages(
                 "child_digests": [item.model_dump() for item in child_digests],
             }
             analysis = analyze(context)
-            evidence_by_mail = validate_stage1_evidence(analysis, allowed_agendas)
+            evidence_by_mail = validate_stage1_evidence(
+                analysis, validation_agendas
+            )
             validate_issue_decisions(
                 analysis,
-                allowed_agendas,
+                validation_agendas,
                 _expected_issue_statuses(compact_timelines, child_digests),
+                _reopened_evidence_ids(timeline_agendas, child_digests),
             )
             narrative = draft(context, analysis)
             current_citation_map = [
