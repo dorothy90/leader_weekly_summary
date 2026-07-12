@@ -102,6 +102,8 @@ def _list_category_wiki_pages() -> list[WikiPageSummary]:
         "open_issue_count",
         "resolved_issue_count",
         "confidence",
+        "open_issue_ids",
+        "resolved_issue_ids",
         "review_agenda_ids",
         "generation_review_items",
     ]
@@ -122,8 +124,34 @@ def _list_category_wiki_pages() -> list[WikiPageSummary]:
         source = hit.get("_source", {})
         if source.get("page_kind") != "latest":
             continue
-        summary = {field: source.get(field) for field in summary_fields[:-2]}
+        summary = {
+            field: source[field]
+            for field in summary_fields
+            if field in source
+            and field
+            not in {
+                "open_issue_ids",
+                "resolved_issue_ids",
+                "review_agenda_ids",
+                "generation_review_items",
+            }
+        }
         summary.pop("page_kind")
+        summary.setdefault(
+            "canonical_id",
+            "/".join(
+                str(source[field]).lower()
+                for field in ("domain", "tech", "lotcd")
+                if source.get(field)
+            ),
+        )
+        summary.setdefault(
+            "open_issue_count", len(source.get("open_issue_ids", []))
+        )
+        summary.setdefault(
+            "resolved_issue_count", len(source.get("resolved_issue_ids", []))
+        )
+        summary.setdefault("confidence", "low")
         summary["review_item_count"] = len(source.get("review_agenda_ids", [])) + len(
             source.get("generation_review_items", [])
         )

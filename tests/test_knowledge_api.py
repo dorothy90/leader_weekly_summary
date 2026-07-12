@@ -219,6 +219,74 @@ def test_wiki_page_list_returns_only_canonical_summaries(monkeypatch):
     }
 
 
+def test_wiki_page_list_hydrates_legacy_summary_fields(monkeypatch):
+    class FakeOpenSearch:
+        def search(self, *, index, body):
+            assert "open_issue_ids" in body["_source"]
+            assert "resolved_issue_ids" in body["_source"]
+            return {
+                "took": 1,
+                "timed_out": False,
+                "_shards": {
+                    "total": 1,
+                    "successful": 1,
+                    "skipped": 0,
+                    "failed": 0,
+                },
+                "hits": {
+                    "total": {"value": 1, "relation": "eq"},
+                    "max_score": 1.0,
+                    "hits": [
+                        {
+                            "_index": "category-wiki-pages",
+                            "_id": "lotcd:4sa",
+                            "_score": 1.0,
+                            "_source": {
+                                "category_id": "lotcd:4sa",
+                                "page_kind": "latest",
+                                "level": "lotcd",
+                                "domain": "DRAM",
+                                "tech": "Spica",
+                                "lotcd": "4SA",
+                                "title": "4SA",
+                                "as_of_week": "2026-28",
+                                "open_issue_ids": ["issue-1", "issue-2"],
+                                "resolved_issue_ids": ["issue-3"],
+                                "review_agenda_ids": ["agenda-1"],
+                                "generation_review_items": ["missing citation"],
+                            },
+                        }
+                    ],
+                },
+            }
+
+    monkeypatch.setattr(
+        "embed_vectordb.get_opensearch_client", lambda: FakeOpenSearch()
+    )
+
+    response = request("GET", "/api/knowledge/wiki/pages")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "items": [
+            {
+                "category_id": "lotcd:4sa",
+                "canonical_id": "dram/spica/4sa",
+                "level": "lotcd",
+                "domain": "DRAM",
+                "tech": "Spica",
+                "lotcd": "4SA",
+                "title": "4SA",
+                "as_of_week": "2026-28",
+                "open_issue_count": 2,
+                "resolved_issue_count": 1,
+                "confidence": "low",
+                "review_item_count": 2,
+            }
+        ]
+    }
+
+
 def test_wiki_citation_returns_only_page_mapped_agendas(monkeypatch):
     page = canonical_page_fixture()
     page["citation_map"] = [
