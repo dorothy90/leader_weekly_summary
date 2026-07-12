@@ -5,7 +5,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from category_wiki_builder import page_index_definition
+from category_wiki_builder import CategoryNode, page_index_definition
 
 
 class WikiModel(BaseModel):
@@ -79,6 +79,59 @@ class ChildDigest(WikiModel):
 
 AnalysisFn = Callable[[dict[str, Any]], PageAnalysis]
 DraftFn = Callable[[dict[str, Any], PageAnalysis], NarrativeDraft]
+
+
+def canonical_path(node: CategoryNode) -> str:
+    return "/".join(
+        value.lower() for value in (node.domain, node.tech, node.lotcd) if value
+    )
+
+
+def direct_agendas_for_node(
+    node: CategoryNode, agendas: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    def matches(path: dict[str, Any]) -> bool:
+        if path.get("domain") != node.domain:
+            return False
+        if node.level == "domain":
+            return path.get("tech") is None and path.get("lotcd") is None
+        if node.level == "tech":
+            return path.get("tech") == node.tech and path.get("lotcd") is None
+        return path.get("tech") == node.tech and path.get("lotcd") == node.lotcd
+
+    return [
+        agenda
+        for agenda in agendas
+        if agenda.get("review_status", "confirmed") == "confirmed"
+        and any(matches(path) for path in agenda.get("target_paths", []))
+    ]
+
+
+def merge_weekly_history(
+    previous: list[WeeklyHistoryEntry], current: WeeklyHistoryEntry
+) -> list[WeeklyHistoryEntry]:
+    by_week = {item.week: item for item in previous}
+    by_week[current.week] = current
+    return [by_week[week] for week in sorted(by_week, reverse=True)]
+
+
+def render_current_body(draft: NarrativeDraft) -> str:
+    sections = (
+        ("개요", draft.overview),
+        ("현재 상태와 주요 변화", draft.current_status),
+        ("원인과 영향 관계", draft.cause_and_impact),
+        ("조치와 효과", draft.actions_and_effects),
+        ("펜딩 이슈와 의사결정", draft.pending_and_decisions),
+        ("누적 지식", draft.accumulated_knowledge),
+    )
+    return "\n\n".join(f"## {title}\n\n{body.strip()}" for title, body in sections)
+
+
+def assemble_body(current_body: str, history: list[WeeklyHistoryEntry]) -> str:
+    entries = "\n\n".join(
+        f"### {item.week}\n\n{item.body_markdown.strip()}" for item in history
+    )
+    return f"{current_body.strip()}\n\n## 주차별 업데이트 이력\n\n{entries}".strip()
 
 
 def integrated_page_index_definition() -> dict[str, Any]:
