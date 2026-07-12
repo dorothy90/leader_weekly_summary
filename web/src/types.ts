@@ -127,9 +127,24 @@ export interface KnowledgeSession {
   can_edit: boolean
 }
 
+export interface WeeklyHistoryRecord {
+  week: string
+  body_markdown: string
+  source_mail_ids: string[]
+}
+
+export interface WikiCitationRecord {
+  mail_id: string
+  agenda_ids: string[]
+  used_in_sections: string[]
+  category_paths: string[]
+}
+
 export interface CategoryWikiPage {
   category_id: string
   page_kind: 'latest' | 'snapshot'
+  doc_type: 'canonical' | 'snapshot'
+  canonical_id: string
   level: 'domain' | 'tech' | 'lotcd'
   domain: DomainName
   tech: string | null
@@ -137,17 +152,53 @@ export interface CategoryWikiPage {
   title: string
   product: string | null
   fab_id: string | null
+  aliases: string[]
   as_of_week: string
+  current_body_markdown: string
+  weekly_history: WeeklyHistoryRecord[]
   body_markdown: string
+  citation_map: WikiCitationRecord[]
+  child_page_ids: string[]
+  confidence: 'low' | 'medium' | 'high'
   agenda_count: number
   open_issue_ids: string[]
   resolved_issue_ids: string[]
+  open_issue_count: number
+  resolved_issue_count: number
+  contradictions: string[]
+  generation_review_items: string[]
   review_agenda_ids: string[]
   source_agenda_ids: string[]
   source_doc_ids: string[]
   source_hash: string
   taxonomy_version: number
   generated_at: string
+  updated_at: string | null
+}
+
+export interface WikiPageSummary {
+  category_id: string
+  canonical_id: string
+  level: 'domain' | 'tech' | 'lotcd'
+  domain: DomainName
+  tech: string | null
+  lotcd: string | null
+  title: string
+  as_of_week: string
+  open_issue_count: number
+  resolved_issue_count: number
+  confidence: 'low' | 'medium' | 'high'
+  review_item_count: number
+}
+
+export interface WikiPageSummaryResponse {
+  items: WikiPageSummary[]
+}
+
+export interface WikiCitationDetail {
+  mail: Mail
+  agendas: Agenda[]
+  used_in_sections: string[]
 }
 
 export interface Selection {

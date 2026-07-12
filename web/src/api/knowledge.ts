@@ -13,6 +13,8 @@ import type {
   ScopeMode,
   Selection,
   Taxonomy,
+  WikiCitationDetail,
+  WikiPageSummaryResponse,
 } from '../types'
 
 async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
@@ -38,6 +40,24 @@ export function fetchWikiPage(
   if (selection.lotcd) parts.push(selection.lotcd)
   return getJson<CategoryWikiPage>(
     `/api/knowledge/wiki/pages/${parts.map(encodeURIComponent).join('/')}`,
+    signal,
+  )
+}
+
+export function fetchWikiPageSummaries(
+  signal?: AbortSignal,
+): Promise<WikiPageSummaryResponse> {
+  return getJson<WikiPageSummaryResponse>('/api/knowledge/wiki/pages', signal)
+}
+
+export function fetchWikiCitation(
+  categoryId: string,
+  mailId: string,
+  signal?: AbortSignal,
+): Promise<WikiCitationDetail> {
+  const params = new URLSearchParams({ category_id: categoryId })
+  return getJson<WikiCitationDetail>(
+    `/api/knowledge/wiki/citations/${encodeURIComponent(mailId)}?${params}`,
     signal,
   )
 }
