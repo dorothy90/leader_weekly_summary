@@ -216,6 +216,8 @@ output
 create_dummy_data.py
 .python-version
 
+.worktrees/
+
 pyproject.toml
 __pycache__/opensearch.cpython-311.pyc
 CLAUDE.md
