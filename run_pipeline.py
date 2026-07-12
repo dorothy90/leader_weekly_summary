@@ -99,8 +99,15 @@ def main() -> int:
             allow_dummy_taxonomy=False,
             client=embed_vectordb.get_opensearch_client(),
         )
-        if category_stats["failed"]:
-            raise RuntimeError(f"통합 Wiki 생성 실패: {category_stats['failed']}개 분류")
+        if (
+            category_stats["failed"] > 0
+            or category_stats["pages"] != category_stats["expected_pages"]
+        ):
+            raise RuntimeError(
+                "통합 Wiki 생성 실패: "
+                f"{category_stats['failed']}개 실패, "
+                f"{category_stats['pages']}/{category_stats['expected_pages']}개 생성"
+            )
         step += 1
 
     # wiki_export → overview md

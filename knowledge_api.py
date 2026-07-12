@@ -70,6 +70,28 @@ def _category_page_id(domain: str, tech: str | None, lotcd: str | None) -> str:
     return f"domain:{domain.lower()}"
 
 
+def _hydrate_category_wiki_fields(source: dict) -> dict:
+    hydrated = dict(source)
+    hydrated.setdefault(
+        "canonical_id",
+        "/".join(
+            str(hydrated[field]).lower()
+            for field in ("domain", "tech", "lotcd")
+            if hydrated.get(field)
+        ),
+    )
+    hydrated.setdefault("open_issue_count", len(hydrated.get("open_issue_ids", [])))
+    hydrated.setdefault(
+        "resolved_issue_count", len(hydrated.get("resolved_issue_ids", []))
+    )
+    hydrated.setdefault("confidence", "low")
+    hydrated.setdefault(
+        "doc_type",
+        "snapshot" if hydrated.get("page_kind") == "snapshot" else "canonical",
+    )
+    return hydrated
+
+
 def _get_category_wiki_page(category_id: str) -> CategoryWikiPage:
     from category_wiki_builder import PAGE_INDEX
     from embed_vectordb import get_opensearch_client
@@ -82,7 +104,9 @@ def _get_category_wiki_page(category_id: str) -> CategoryWikiPage:
         if status == 404 or exc.__class__.__name__ == "NotFoundError":
             raise HTTPException(status_code=404, detail="Wiki page has not been built") from exc
         raise HTTPException(status_code=503, detail="Wiki page store unavailable") from exc
-    return CategoryWikiPage.model_validate(response["_source"])
+    return CategoryWikiPage.model_validate(
+        _hydrate_category_wiki_fields(response["_source"])
+    )
 
 
 def _list_category_wiki_pages() -> list[WikiPageSummary]:
@@ -121,7 +145,7 @@ def _list_category_wiki_pages() -> list[WikiPageSummary]:
 
     items = []
     for hit in response.get("hits", {}).get("hits", []):
-        source = hit.get("_source", {})
+        source = _hydrate_category_wiki_fields(hit.get("_source", {}))
         if source.get("page_kind") != "latest":
             continue
         summary = {
@@ -137,21 +161,6 @@ def _list_category_wiki_pages() -> list[WikiPageSummary]:
             }
         }
         summary.pop("page_kind")
-        summary.setdefault(
-            "canonical_id",
-            "/".join(
-                str(source[field]).lower()
-                for field in ("domain", "tech", "lotcd")
-                if source.get(field)
-            ),
-        )
-        summary.setdefault(
-            "open_issue_count", len(source.get("open_issue_ids", []))
-        )
-        summary.setdefault(
-            "resolved_issue_count", len(source.get("resolved_issue_ids", []))
-        )
-        summary.setdefault("confidence", "low")
         summary["review_item_count"] = len(source.get("review_agenda_ids", [])) + len(
             source.get("generation_review_items", [])
         )

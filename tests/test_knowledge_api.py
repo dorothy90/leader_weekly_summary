@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 import httpx
+import pytest
 from fastapi import FastAPI
 
 import knowledge_api
@@ -141,6 +142,36 @@ def test_category_wiki_route_returns_generated_opensearch_page(monkeypatch):
     assert response.status_code == 200
     assert response.json()["body_markdown"] == "# 4SA"
     assert captured == ["lotcd:4sa"]
+
+
+def test_category_wiki_detail_hydrates_legacy_compatibility_fields(monkeypatch):
+    legacy = canonical_page_fixture()
+    for field in (
+        "doc_type",
+        "canonical_id",
+        "open_issue_count",
+        "resolved_issue_count",
+        "confidence",
+    ):
+        legacy.pop(field)
+
+    class FakeOpenSearch:
+        def get(self, *, index, id):
+            assert id == "lotcd:4sa"
+            return {"_source": legacy}
+
+    monkeypatch.setattr(
+        "embed_vectordb.get_opensearch_client", lambda: FakeOpenSearch()
+    )
+
+    response = request("GET", "/api/knowledge/wiki/pages/DRAM/Spica/4SA")
+
+    assert response.status_code == 200
+    assert response.json()["canonical_id"] == "dram/spica/4sa"
+    assert response.json()["open_issue_count"] == 1
+    assert response.json()["resolved_issue_count"] == 1
+    assert response.json()["confidence"] == "low"
+    assert response.json()["doc_type"] == "canonical"
 
 
 def test_wiki_page_list_returns_only_canonical_summaries(monkeypatch):
@@ -298,11 +329,13 @@ def test_wiki_citation_returns_only_page_mapped_agendas(monkeypatch):
         }
     ]
     monkeypatch.setattr(knowledge_api, "_get_category_wiki_page", lambda _id: page)
-    monkeypatch.setattr(
-        knowledge_api,
-        "_get_opensearch_agenda",
-        lambda agenda_id: agenda_detail_fixture(agenda_id),
-    )
+    captured = []
+
+    def get_agenda(agenda_id):
+        captured.append(agenda_id)
+        return agenda_detail_fixture(agenda_id)
+
+    monkeypatch.setattr(knowledge_api, "_get_opensearch_agenda", get_agenda)
 
     response = request(
         "GET",
@@ -314,6 +347,7 @@ def test_wiki_citation_returns_only_page_mapped_agendas(monkeypatch):
     assert response.json()["mail"]["id"] == "mail-1"
     assert [item["id"] for item in response.json()["agendas"]] == ["agenda-1"]
     assert response.json()["used_in_sections"] == ["원인과 영향 관계"]
+    assert captured == ["agenda-1"]
 
 
 def test_wiki_citation_returns_not_found_for_unmapped_mail(monkeypatch):
@@ -331,7 +365,13 @@ def test_wiki_citation_returns_not_found_for_unmapped_mail(monkeypatch):
     assert response.json() == {"detail": "Citation is not mapped on this wiki page"}
 
 
-def test_wiki_citation_rejects_mapped_agenda_with_different_mail(monkeypatch):
+@pytest.mark.parametrize(
+    ("detail_mail_id", "agenda_mail_id"),
+    [("mail-2", "mail-1"), ("mail-1", "mail-2")],
+)
+def test_wiki_citation_rejects_either_mail_identity_disagreement(
+    monkeypatch, detail_mail_id, agenda_mail_id
+):
     page = canonical_page_fixture()
     page["citation_map"] = [
         {
@@ -342,11 +382,9 @@ def test_wiki_citation_rejects_mapped_agenda_with_different_mail(monkeypatch):
         }
     ]
     monkeypatch.setattr(knowledge_api, "_get_category_wiki_page", lambda _id: page)
-    monkeypatch.setattr(
-        knowledge_api,
-        "_get_opensearch_agenda",
-        lambda agenda_id: agenda_detail_fixture(agenda_id, mail_id="mail-2"),
-    )
+    detail = agenda_detail_fixture("agenda-1", mail_id=detail_mail_id)
+    detail["agenda"]["mail_id"] = agenda_mail_id
+    monkeypatch.setattr(knowledge_api, "_get_opensearch_agenda", lambda agenda_id: detail)
 
     response = request(
         "GET",

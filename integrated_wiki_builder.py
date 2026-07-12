@@ -18,7 +18,6 @@ from category_wiki_builder import (
     SOURCE_INDEX,
     TERMINAL_STATES,
     CategoryNode,
-    agenda_matches_node,
     build_page_documents,
     category_nodes,
     ensure_index,
@@ -215,31 +214,134 @@ def direct_agendas_for_node(
 
 
 def validate_issue_decisions(
-    analysis: PageAnalysis, allowed_agendas: list[dict[str, Any]]
+    analysis: PageAnalysis,
+    allowed_agendas: list[dict[str, Any]],
+    expected_issues: dict[str, str] | None = None,
 ) -> None:
     agendas = {str(item["agenda_id"]): item for item in allowed_agendas}
+    decisions: dict[str, IssueDecision] = {}
     for decision in analysis.issue_decisions:
-        if decision.status != "resolved":
-            continue
-        cited = [agendas.get(agenda_id) for agenda_id in decision.agenda_ids]
-        if not any(
-            item and str(item.get("state", "")).casefold() in TERMINAL_STATES
+        if decision.issue_id in decisions:
+            raise NarrativeValidationError(
+                f"duplicate issue decision: {decision.issue_id}"
+            )
+        decisions[decision.issue_id] = decision
+        cited = []
+        for agenda_id in decision.agenda_ids:
+            agenda = agendas.get(agenda_id)
+            if agenda is None:
+                raise NarrativeValidationError(f"unknown agenda: {agenda_id}")
+            if str(agenda.get("issue_id")) != decision.issue_id:
+                raise NarrativeValidationError(
+                    f"issue {decision.issue_id} disagrees with agenda {agenda_id}"
+                )
+            if str(agenda.get("mail_id")) not in decision.mail_ids:
+                raise NarrativeValidationError(
+                    f"mail and agenda evidence disagree: {agenda_id}"
+                )
+            cited.append(agenda)
+        cited_mail_ids = {str(item.get("mail_id")) for item in cited}
+        if any(mail_id not in cited_mail_ids for mail_id in decision.mail_ids):
+            raise NarrativeValidationError(
+                f"mail and agenda evidence disagree for issue {decision.issue_id}"
+            )
+        if decision.status == "resolved" and not any(
+            str(item.get("state", "")).casefold() in TERMINAL_STATES
             for item in cited
         ):
             raise NarrativeValidationError(
                 f"resolved issue {decision.issue_id} has no terminal agenda"
             )
 
+    for issue_id, expected_status in (expected_issues or {}).items():
+        decision = decisions.get(issue_id)
+        if decision is None:
+            raise NarrativeValidationError(f"missing issue decision: {issue_id}")
+        if expected_status == "resolved":
+            valid_statuses = {"resolved"}
+        else:
+            valid_statuses = {"ongoing", "reopened"}
+        if decision.status not in valid_statuses:
+            raise NarrativeValidationError(
+                f"issue {issue_id} expected {expected_status}, got {decision.status}"
+            )
+
+
+def validate_stage1_evidence(
+    analysis: PageAnalysis, allowed_agendas: list[dict[str, Any]]
+) -> dict[str, list[str]]:
+    agendas = {str(item["agenda_id"]): item for item in allowed_agendas}
+    evidence_by_mail: dict[str, set[str]] = {}
+    for evidence in [
+        *analysis.new_claims,
+        *analysis.retained_claims,
+        *analysis.issue_decisions,
+    ]:
+        if not evidence.agenda_ids:
+            raise NarrativeValidationError("Stage-1 evidence requires an agenda")
+        if not evidence.mail_ids:
+            raise NarrativeValidationError("Stage-1 evidence requires a mail")
+        referenced = []
+        for agenda_id in evidence.agenda_ids:
+            agenda = agendas.get(agenda_id)
+            if agenda is None:
+                raise NarrativeValidationError(f"unknown agenda: {agenda_id}")
+            referenced.append(agenda)
+            mail_id = str(agenda["mail_id"])
+            if mail_id not in evidence.mail_ids:
+                raise NarrativeValidationError(
+                    f"mail and agenda evidence disagree: {mail_id}/{agenda_id}"
+                )
+            evidence_by_mail.setdefault(mail_id, set()).add(agenda_id)
+        referenced_mail_ids = {str(item["mail_id"]) for item in referenced}
+        for mail_id in evidence.mail_ids:
+            if mail_id not in referenced_mail_ids:
+                raise NarrativeValidationError(
+                    f"mail and agenda evidence disagree: {mail_id}"
+                )
+    return {
+        mail_id: sorted(agenda_ids)
+        for mail_id, agenda_ids in sorted(evidence_by_mail.items())
+    }
+
+
+def _factual_units(markdown: str) -> list[str]:
+    units: list[str] = []
+    paragraph: list[str] = []
+
+    def flush_paragraph() -> None:
+        if paragraph:
+            units.append("\n".join(paragraph))
+            paragraph.clear()
+
+    for line in markdown.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            flush_paragraph()
+            continue
+        if re.match(r"^#{1,6}\s+", stripped):
+            flush_paragraph()
+            continue
+        if re.match(r"^(?:[-+*]|\d+\.)\s+", stripped):
+            flush_paragraph()
+            units.append(stripped)
+            continue
+        if stripped.startswith("|") and stripped.endswith("|"):
+            flush_paragraph()
+            cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+            if cells and all(re.fullmatch(r":?-{3,}:?", cell) for cell in cells):
+                continue
+            units.append(stripped)
+            continue
+        paragraph.append(stripped)
+    flush_paragraph()
+    return units
+
 
 def validate_draft(
-    draft: NarrativeDraft, allowed_agendas: list[dict[str, Any]]
+    draft: NarrativeDraft, evidence_by_mail: dict[str, list[str]]
 ) -> list[CitationMapEntry]:
-    allowed_mail_ids = {str(item["mail_id"]) for item in allowed_agendas}
-    agendas_by_mail: dict[str, list[str]] = {}
-    for item in allowed_agendas:
-        agendas_by_mail.setdefault(str(item["mail_id"]), []).append(
-            str(item["agenda_id"])
-        )
+    allowed_mail_ids = set(evidence_by_mail)
     section_values = {
         "개요": draft.overview,
         "현재 상태와 주요 변화": draft.current_status,
@@ -251,13 +353,10 @@ def validate_draft(
     }
     used: dict[str, set[str]] = {}
     for section, body in section_values.items():
-        paragraphs = [
-            part.strip() for part in re.split(r"\n\s*\n", body) if part.strip()
-        ]
-        for paragraph in paragraphs:
-            citations = MAIL_CITATION.findall(paragraph)
+        for unit in _factual_units(body):
+            citations = MAIL_CITATION.findall(unit)
             if not citations:
-                raise NarrativeValidationError(f"uncited paragraph in {section}")
+                raise NarrativeValidationError(f"uncited factual unit in {section}")
             for mail_id in citations:
                 if mail_id not in allowed_mail_ids:
                     raise NarrativeValidationError(f"unknown mail citation: {mail_id}")
@@ -265,7 +364,7 @@ def validate_draft(
     return [
         CitationMapEntry(
             mail_id=mail_id,
-            agenda_ids=sorted(agendas_by_mail[mail_id]),
+            agenda_ids=evidence_by_mail[mail_id],
             used_in_sections=sorted(sections),
             category_paths=[],
         )
@@ -313,12 +412,70 @@ def _previous_cited_agenda_ids(previous: dict[str, Any]) -> set[str]:
     return {
         str(agenda_id)
         for citation in previous.get("citation_map", [])
+        if any(
+            section != "주차별 업데이트 이력"
+            and WEEK.fullmatch(str(section)) is None
+            for section in (
+                citation.used_in_sections
+                if isinstance(citation, CitationMapEntry)
+                else citation.get("used_in_sections", [])
+            )
+        )
         for agenda_id in (
             citation.agenda_ids
             if isinstance(citation, CitationMapEntry)
             else citation.get("agenda_ids", [])
         )
     }
+
+
+def _merge_citation_maps(
+    current: list[CitationMapEntry],
+    previous: list[CitationMapEntry],
+    history: list[WeeklyHistoryEntry],
+) -> list[CitationMapEntry]:
+    history_mail_ids = {
+        mail_id for entry in history for mail_id in entry.source_mail_ids
+    }
+    history_sections_by_mail: dict[str, set[str]] = {}
+    for entry in history:
+        for mail_id in entry.source_mail_ids:
+            history_sections_by_mail.setdefault(mail_id, set()).add(
+                _normalize_week(entry.week)
+            )
+    merged: dict[str, dict[str, set[str]]] = {}
+    for citation in current:
+        record = merged.setdefault(
+            citation.mail_id,
+            {"agenda_ids": set(), "used_in_sections": set()},
+        )
+        record["agenda_ids"].update(citation.agenda_ids)
+        record["used_in_sections"].update(citation.used_in_sections)
+    for citation in previous:
+        if citation.mail_id not in history_mail_ids:
+            continue
+        record = merged.setdefault(
+            citation.mail_id,
+            {"agenda_ids": set(), "used_in_sections": set()},
+        )
+        record["agenda_ids"].update(citation.agenda_ids)
+        record["used_in_sections"].update(
+            history_sections_by_mail[citation.mail_id]
+        )
+    missing = sorted(history_mail_ids - set(merged))
+    if missing:
+        raise NarrativeValidationError(
+            f"retained history has no citation mapping: {', '.join(missing)}"
+        )
+    return [
+        CitationMapEntry(
+            mail_id=mail_id,
+            agenda_ids=sorted(record["agenda_ids"]),
+            used_in_sections=sorted(record["used_in_sections"]),
+            category_paths=[],
+        )
+        for mail_id, record in sorted(merged.items())
+    ]
 
 
 def _recent_history(previous: dict[str, Any]) -> list[dict[str, Any]]:
@@ -331,11 +488,93 @@ def _recent_history(previous: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
+def _is_legacy_page(previous: dict[str, Any]) -> bool:
+    return (
+        previous.get("page_kind") == "latest"
+        and bool(previous.get("body_markdown"))
+        and all(
+            field not in previous
+            for field in (
+                "current_body_markdown",
+                "weekly_history",
+                "citation_map",
+            )
+        )
+    )
+
+
+def _bootstrap_legacy_history(
+    agendas: list[dict[str, Any]], as_of_week: str
+) -> tuple[list[WeeklyHistoryEntry], list[CitationMapEntry]]:
+    by_week: dict[str, list[dict[str, Any]]] = {}
+    for agenda in agendas:
+        week = _normalize_week(agenda.get("week"))
+        if week >= as_of_week:
+            continue
+        by_week.setdefault(week, []).append(agenda)
+
+    history: list[WeeklyHistoryEntry] = []
+    citations: list[CitationMapEntry] = []
+    for week, week_agendas in sorted(by_week.items(), reverse=True):
+        ordered = sorted(week_agendas, key=lambda item: str(item["agenda_id"]))
+        history.append(
+            WeeklyHistoryEntry(
+                week=week,
+                body_markdown="\n".join(
+                    f"- {agenda.get('summary', '')} [mail:{agenda['mail_id']}]"
+                    for agenda in ordered
+                ),
+                source_mail_ids=sorted(
+                    {str(agenda["mail_id"]) for agenda in ordered}
+                ),
+            )
+        )
+        agendas_by_mail: dict[str, list[str]] = {}
+        for agenda in ordered:
+            agendas_by_mail.setdefault(str(agenda["mail_id"]), []).append(
+                str(agenda["agenda_id"])
+            )
+        citations.extend(
+            CitationMapEntry(
+                mail_id=mail_id,
+                agenda_ids=sorted(agenda_ids),
+                used_in_sections=[week],
+                category_paths=[],
+            )
+            for mail_id, agenda_ids in sorted(agendas_by_mail.items())
+        )
+    return history, citations
+
+
 def _compact_issue_timelines(
     agendas: list[dict[str, Any]], as_of_week: str
 ) -> list[dict[str, Any]]:
     compact: list[dict[str, Any]] = []
     for issue in issue_timelines(agendas, as_of_week=as_of_week):
+        events = issue["events"]
+        selected_ids = {str(events[0]["agenda_id"]), str(events[-1]["agenda_id"])}
+        terminal = next(
+            (
+                event
+                for event in reversed(events)
+                if str(event.get("state", "")).casefold() in TERMINAL_STATES
+            ),
+            None,
+        )
+        if terminal is not None:
+            selected_ids.add(str(terminal["agenda_id"]))
+        else:
+            transition = next(
+                (
+                    events[index]
+                    for index in range(len(events) - 1, 0, -1)
+                    if str(events[index].get("state", "")).casefold()
+                    != str(events[index - 1].get("state", "")).casefold()
+                ),
+                None,
+            )
+            if transition is not None:
+                selected_ids.add(str(transition["agenda_id"]))
         compact.append(
             {
                 key: issue[key]
@@ -363,7 +602,8 @@ def _compact_issue_timelines(
                             "state",
                         )
                     }
-                    for event in issue["events"]
+                    for event in events
+                    if str(event["agenda_id"]) in selected_ids
                 ]
             }
         )
@@ -401,6 +641,32 @@ def _child_agendas(
     if missing:
         raise NarrativeValidationError(f"unknown child agenda: {', '.join(missing)}")
     return [agendas_by_id[agenda_id] for agenda_id in sorted(agenda_ids)]
+
+
+def _expected_issue_statuses(
+    timelines: list[dict[str, Any]], child_digests: list[ChildDigest]
+) -> dict[str, str]:
+    expected = {
+        str(issue["issue_id"]): (
+            "reopened"
+            if issue["event_type"] == "reopened"
+            else "ongoing"
+            if issue["is_open"]
+            else "resolved"
+        )
+        for issue in timelines
+    }
+    for digest in child_digests:
+        for decision in digest.issues:
+            existing = expected.get(decision.issue_id)
+            if existing is not None and (
+                (existing == "resolved") != (decision.status == "resolved")
+            ):
+                raise NarrativeValidationError(
+                    f"conflicting expected issue state: {decision.issue_id}"
+                )
+            expected[decision.issue_id] = decision.status
+    return expected
 
 
 def build_integrated_pages(
@@ -446,6 +712,14 @@ def build_integrated_pages(
         previous = previous_pages.get(node.id, {})
         child_digests = [digests[child.id] for child in children]
         try:
+            legacy_agendas = (
+                direct_agendas_for_node(node, eligible_agendas)
+                if _is_legacy_page(previous)
+                else []
+            )
+            legacy_history, legacy_citations = _bootstrap_legacy_history(
+                legacy_agendas, as_of_week
+            )
             current_direct = [
                 agenda
                 for agenda in direct_agendas_for_node(node, eligible_agendas)
@@ -461,24 +735,22 @@ def build_integrated_pages(
                 for agenda in [
                     *current_direct,
                     *previous_agendas,
+                    *legacy_agendas,
                     *_child_agendas(child_digests, agendas_by_id),
                 ]
             }
             allowed_agendas = [
                 allowed_by_id[agenda_id] for agenda_id in sorted(allowed_by_id)
             ]
-            descendant_agendas = [
-                agenda
-                for agenda in eligible_agendas
-                if agenda_matches_node(agenda, node)
-            ]
+            timeline_agendas = direct_agendas_for_node(node, eligible_agendas)
+            compact_timelines = _compact_issue_timelines(
+                timeline_agendas, as_of_week
+            )
             context = {
                 "node": asdict(node),
                 "as_of_week": as_of_week,
                 "allowed_agendas": allowed_agendas,
-                "issue_timelines": _compact_issue_timelines(
-                    descendant_agendas, as_of_week
-                ),
+                "issue_timelines": compact_timelines,
                 "previous_current_body_markdown": previous.get(
                     "current_body_markdown", ""
                 ),
@@ -486,16 +758,19 @@ def build_integrated_pages(
                 "child_digests": [item.model_dump() for item in child_digests],
             }
             analysis = analyze(context)
-            validate_issue_decisions(analysis, allowed_agendas)
+            evidence_by_mail = validate_stage1_evidence(analysis, allowed_agendas)
+            validate_issue_decisions(
+                analysis,
+                allowed_agendas,
+                _expected_issue_statuses(compact_timelines, child_digests),
+            )
             narrative = draft(context, analysis)
-            citation_map = validate_draft(narrative, allowed_agendas)
-            path = canonical_path(node)
-            citation_map = [
-                item.model_copy(update={"category_paths": [path]})
-                for item in citation_map
+            current_citation_map = [
+                *validate_draft(narrative, evidence_by_mail),
+                *legacy_citations,
             ]
             current_body = render_current_body(narrative)
-            previous_history = [
+            previous_history = legacy_history or [
                 (
                     item
                     if isinstance(item, WeeklyHistoryEntry)
@@ -505,7 +780,7 @@ def build_integrated_pages(
             ]
             current_source_mail_ids = sorted(
                 item.mail_id
-                for item in citation_map
+                for item in current_citation_map
                 if "주차별 업데이트 이력" in item.used_in_sections
             )
             history = merge_weekly_history(
@@ -516,6 +791,21 @@ def build_integrated_pages(
                     source_mail_ids=current_source_mail_ids,
                 ),
             )
+            previous_citations = [
+                item
+                if isinstance(item, CitationMapEntry)
+                else CitationMapEntry.model_validate(item)
+                for item in previous.get("citation_map", [])
+            ]
+            path = canonical_path(node)
+            citation_map = [
+                item.model_copy(update={"category_paths": [path]})
+                for item in _merge_citation_maps(
+                    current_citation_map,
+                    previous_citations,
+                    history,
+                )
+            ]
             base = compatibility_pages[node.id]
             page = {
                 **base,
@@ -526,7 +816,7 @@ def build_integrated_pages(
                 "weekly_history": [item.model_dump() for item in history],
                 "body_markdown": assemble_body(current_body, history),
                 "citation_map": [item.model_dump() for item in citation_map],
-                "child_page_ids": [child.id for child in children],
+                "child_page_ids": [canonical_path(child) for child in children],
                 "confidence": narrative.confidence,
                 "open_issue_count": len(base["open_issue_ids"]),
                 "resolved_issue_count": len(base["resolved_issue_ids"]),
@@ -712,8 +1002,6 @@ def run(
         from embed_vectordb import get_opensearch_client
 
         client = get_opensearch_client()
-    if not dry_run:
-        ensure_index(client, PAGE_INDEX, integrated_page_index_definition())
 
     agendas = (
         fetch_agendas(client)
@@ -730,9 +1018,20 @@ def run(
     requested_weeks = sorted(
         _normalize_week(week) for week in (weeks or available_weeks)
     )
+    missing_weeks = (
+        sorted(set(requested_weeks) - set(available_weeks)) if weeks else []
+    )
+    if missing_weeks:
+        raise RuntimeError(
+            f"requested weeks are absent from mail_agendas: {', '.join(missing_weeks)}"
+        )
     if not requested_weeks:
-        return {"pages": 0, "failed": 0}
+        return {"pages": 0, "failed": 0, "expected_pages": 0}
     as_of_week = requested_weeks[-1]
+    expected_pages = len(category_nodes(taxonomy))
+
+    if not dry_run:
+        ensure_index(client, PAGE_INDEX, integrated_page_index_definition())
 
     if analyze is None or draft is None:
         analyze, draft = build_llm_generators()
@@ -752,7 +1051,11 @@ def run(
     )
     if not dry_run:
         save_integrated_pages(client, result.pages)
-    return {"pages": len(result.pages), "failed": len(result.failures)}
+    return {
+        "pages": len(result.pages),
+        "failed": len(result.failures),
+        "expected_pages": expected_pages,
+    }
 
 
 def main() -> int:
