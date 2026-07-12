@@ -13,9 +13,8 @@ interface CategoryWikiReaderProps {
   page: CategoryWikiPage | null
   loading: boolean
   error: string | null
-  onSelectCitation?: (mailId: string) => void
-  onOutlineChange?: (headings: WikiHeading[]) => void
-  onSelectAgenda?: (agendaId: string) => void
+  onSelectCitation: (mailId: string) => void
+  onOutlineChange: (headings: WikiHeading[]) => void
 }
 
 const SECTION_LABELS = [
@@ -56,7 +55,7 @@ export function CategoryWikiReader({
   ], [page?.weekly_history.length])
 
   useEffect(() => {
-    onOutlineChange?.(headings)
+    onOutlineChange(headings)
   }, [headings, onOutlineChange])
 
   if (loading) {
@@ -82,7 +81,7 @@ export function CategoryWikiReader({
           <button
             className="wiki-mail-citation"
             type="button"
-            onClick={() => onSelectCitation?.(href.slice('#mail:'.length))}
+            onClick={() => onSelectCitation(href.slice('#mail:'.length))}
           >
             {children}
           </button>

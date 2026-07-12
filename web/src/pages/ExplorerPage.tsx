@@ -10,7 +10,9 @@ import {
   fetchReviewCount,
   fetchSession,
   fetchTaxonomy,
+  fetchWikiCitation,
   fetchWikiPage,
+  fetchWikiPageSummaries,
   confirmClassification,
   holdClassification,
 } from '../api/knowledge'
@@ -23,7 +25,10 @@ import { CategoryRail } from '../components/CategoryRail'
 import { FilterBar } from '../components/FilterBar'
 import { ScopeToggle } from '../components/ScopeToggle'
 import { TaxonomyTree } from '../components/TaxonomyTree'
+import { WikiCitationDrawer } from '../components/WikiCitationDrawer'
+import { WikiDocumentMetaPane } from '../components/WikiDocumentMetaPane'
 import { WikiMetaPane } from '../components/WikiMetaPane'
+import type { WikiHeading } from '../components/CategoryWikiReader'
 import type {
   Agenda,
   AgendaFilters,
@@ -38,6 +43,8 @@ import type {
   ScopeMode,
   Selection,
   Taxonomy,
+  WikiCitationDetail,
+  WikiPageSummary,
 } from '../types'
 
 const CategoryWikiReader = lazy(() => import('../components/CategoryWikiReader'))
@@ -93,6 +100,12 @@ export function ExplorerPage({ classic = false }: ExplorerPageProps) {
   const [wikiPage, setWikiPage] = useState<CategoryWikiPage | null>(null)
   const [wikiPageLoading, setWikiPageLoading] = useState(false)
   const [wikiPageError, setWikiPageError] = useState<string | null>(null)
+  const [wikiPages, setWikiPages] = useState<WikiPageSummary[]>([])
+  const [wikiOutline, setWikiOutline] = useState<WikiHeading[]>([])
+  const [citationMailId, setCitationMailId] = useState<string | null>(null)
+  const [citationDetail, setCitationDetail] = useState<WikiCitationDetail | null>(null)
+  const [citationLoading, setCitationLoading] = useState(false)
+  const [citationError, setCitationError] = useState<string | null>(null)
   const [reviewCount, setReviewCount] = useState(0)
   const [refreshVersion, setRefreshVersion] = useState(0)
   const [loading, setLoading] = useState(true)
@@ -150,6 +163,21 @@ export function ExplorerPage({ classic = false }: ExplorerPageProps) {
       })
     return () => controller.abort()
   }, [refreshVersion])
+
+  useEffect(() => {
+    if (classic) return
+    const controller = new AbortController()
+    fetchWikiPageSummaries(controller.signal)
+      .then((response) => {
+        if (!controller.signal.aborted) setWikiPages(response.items)
+      })
+      .catch((loadError: unknown) => {
+        if (loadError instanceof Error && loadError.name !== 'AbortError') {
+          setWikiPages([])
+        }
+      })
+    return () => controller.abort()
+  }, [classic, refreshVersion])
 
   useEffect(() => {
     if (routeSelection.tech && !taxonomyReady) return
@@ -246,10 +274,49 @@ export function ExplorerPage({ classic = false }: ExplorerPageProps) {
     return () => controller.abort()
   }, [selection.domain, selection.tech, selection.lotcd, reviewOnly, refreshVersion])
 
+  const wikiCategoryId = wikiPage?.category_id ?? null
+  useEffect(() => {
+    if (!wikiCategoryId || !citationMailId) return
+    const controller = new AbortController()
+    setCitationDetail(null)
+    setCitationLoading(true)
+    setCitationError(null)
+    fetchWikiCitation(wikiCategoryId, citationMailId, controller.signal)
+      .then((nextDetail) => {
+        if (!controller.signal.aborted) setCitationDetail(nextDetail)
+      })
+      .catch((loadError: unknown) => {
+        if (loadError instanceof Error && loadError.name !== 'AbortError') {
+          setCitationError('메일 근거를 불러오지 못했습니다.')
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setCitationLoading(false)
+      })
+    return () => controller.abort()
+  }, [wikiCategoryId, citationMailId])
+
   function changeSelection(next: Selection) {
     const updated = new URLSearchParams(searchParams)
     updated.delete('agenda')
     navigate({ pathname: selectionPath(next, classic ? '/explorer' : '/wiki/docs'), search: updated.toString() })
+  }
+
+  function navigateCanonical(canonicalId: string) {
+    const [domainPart, tech = null, lotcd = null] = canonicalId.split('/').filter(Boolean)
+    const domain = domainPart?.toUpperCase()
+    if (domain !== 'DRAM' && domain !== 'NAND') return
+    changeSelection({
+      domain,
+      tech,
+      lotcd: lotcd?.toUpperCase() ?? null,
+    })
+  }
+
+  function closeCitation() {
+    setCitationMailId(null)
+    setCitationDetail(null)
+    setCitationError(null)
   }
 
   function selectAgenda(agendaId: string) {
@@ -468,6 +535,8 @@ export function ExplorerPage({ classic = false }: ExplorerPageProps) {
             selection={selection}
             scopeMode={scopeMode}
             onSelect={changeSelection}
+            wikiPages={wikiPages}
+            query={query}
           />
         </div>
       </aside>
@@ -495,7 +564,8 @@ export function ExplorerPage({ classic = false }: ExplorerPageProps) {
               page={wikiPage}
               loading={wikiPageLoading}
               error={wikiPageError}
-              onSelectAgenda={selectAgenda}
+              onSelectCitation={setCitationMailId}
+              onOutlineChange={setWikiOutline}
             />
           </Suspense>
         ) : (
@@ -517,6 +587,12 @@ export function ExplorerPage({ classic = false }: ExplorerPageProps) {
           revisions={revisions}
           onSelectAgenda={selectAgenda}
         />
+      ) : wikiPage ? (
+        <WikiDocumentMetaPane
+          page={wikiPage}
+          headings={wikiOutline}
+          onNavigate={navigateCanonical}
+        />
       ) : selection.domain ? (
         <CategoryMetaPane
           selection={selection}
@@ -525,6 +601,15 @@ export function ExplorerPage({ classic = false }: ExplorerPageProps) {
           scopeMode={scopeMode}
           onChangeScope={changeScope}
           onSelectAgenda={selectAgenda}
+        />
+      ) : null}
+
+      {citationMailId ? (
+        <WikiCitationDrawer
+          detail={citationDetail}
+          loading={citationLoading}
+          error={citationError}
+          onClose={closeCitation}
         />
       ) : null}
     </div>

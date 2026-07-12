@@ -125,8 +125,16 @@ describe('CategoryWikiReader', () => {
     expect(screen.queryByRole('button', { name: 'agenda-w27' })).not.toBeInTheDocument()
   })
 
-  it('renders safely while callback integration is deferred', () => {
-    render(<CategoryWikiReader page={page} loading={false} error={null} />)
+  it('renders safely with the required reader callbacks', () => {
+    render(
+      <CategoryWikiReader
+        page={page}
+        loading={false}
+        error={null}
+        onSelectCitation={vi.fn()}
+        onOutlineChange={vi.fn()}
+      />,
+    )
 
     expect(screen.getByRole('heading', { name: '개요' })).toBeInTheDocument()
   })
