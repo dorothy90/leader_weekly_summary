@@ -6,12 +6,14 @@ from pydantic import ValidationError
 from category_wiki_builder import CategoryNode
 from integrated_wiki_builder import (
     NarrativeDraft,
+    PageAnalysis,
     SupportedClaim,
     WeeklyHistoryEntry,
     assemble_body,
     canonical_path,
     direct_agendas_for_node,
     integrated_page_index_definition,
+    invoke_structured,
     merge_weekly_history,
     render_current_body,
 )
@@ -144,3 +146,24 @@ def test_render_current_body_uses_only_current_narrative_sections():
     assert rendered.startswith("## 개요\n\noverview")
     assert "## 누적 지식\n\nknowledge" in rendered
     assert "separate history entry" not in rendered
+
+
+def test_structured_invocation_retries_once_after_validation_error():
+    valid = PageAnalysis(outline=["개요"])
+
+    class FakeRunnable:
+        def __init__(self):
+            self.calls = 0
+
+        def invoke(self, messages):
+            self.calls += 1
+            if self.calls == 1:
+                raise ValidationError.from_exception_data("PageAnalysis", [])
+            return valid
+
+    runnable = FakeRunnable()
+
+    assert invoke_structured(
+        runnable, [{"role": "user", "content": "evidence"}]
+    ) == valid
+    assert runnable.calls == 2
