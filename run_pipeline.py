@@ -44,6 +44,15 @@ def wait_for_opensearch(retries: int = 5, delay: int = 5) -> None:
 
 def main() -> int:
     week = fetch_mail.get_week_string(date.today())
+    agenda_enabled = os.getenv("ENABLE_AGENDA_EXTRACTION", "false").lower() == "true"
+    category_wiki_enabled = os.getenv("ENABLE_CATEGORY_WIKI", "false").lower() == "true"
+    if (agenda_enabled or category_wiki_enabled) and os.getenv(
+        "KNOWLEDGE_LLM_DATA_POLICY_ACK", "false"
+    ).lower() != "true":
+        raise RuntimeError(
+            "KNOWLEDGE_LLM_DATA_POLICY_ACK=true 필요: 메일의 LLM 전송 정책을 확인하세요"
+        )
+    total_steps = 6 + int(agenda_enabled) + int(category_wiki_enabled)
     print("=" * 60)
     print(f"🚀 주간 리포트 파이프라인 시작 — 주차 {week}")
     print("=" * 60)
@@ -52,33 +61,64 @@ def main() -> int:
     wait_for_opensearch()
 
     # 1. fetch
-    print("\n[1/6] 메일 수집 (fetch)")
+    print(f"\n[1/{total_steps}] 메일 수집 (fetch)")
     fetch_mail.main()
 
     # 2. process (combined.txt 생성) — 해당 주차만
-    print(f"\n[2/6] 전처리 (process, week={week})")
+    print(f"\n[2/{total_steps}] 전처리 (process, week={week})")
     process_attachment.process_all(week=week)
     process_vision.process_all(week=week)
 
-    # 3. embed (+ wiki_build 자동) — 해당 주차만, 인덱스 보존(upsert)
-    print(f"\n[3/6] 임베딩 + wiki 생성 (embed, week={week})")
-    embed_vectordb.process_all(recreate_index=False, week=week)
+    step = 3
+    if agenda_enabled:
+        print(f"\n[{step}/{total_steps}] agenda 추출 (week={week})")
+        import process_agendas
 
-    # 4. wiki_export → overview md
-    print(f"\n[4/6] wiki export (week={week})")
+        agenda_stats = process_agendas.process_all(
+            week=week,
+            allow_external_llm=True,
+            allow_dummy_taxonomy=False,
+            opensearch_client=embed_vectordb.get_opensearch_client(),
+        )
+        if agenda_stats["failed"]:
+            raise RuntimeError(f"agenda 추출 실패: {agenda_stats['failed']}건")
+        step += 1
+
+    # embed (+ wiki_build 자동) — 해당 주차만, 인덱스 보존(upsert)
+    print(f"\n[{step}/{total_steps}] 임베딩 + wiki 생성 (embed, week={week})")
+    embed_vectordb.process_all(recreate_index=False, week=week)
+    step += 1
+
+    if category_wiki_enabled:
+        print(f"\n[{step}/{total_steps}] 분류 Wiki 생성 (week={week})")
+        import category_wiki_builder
+
+        category_stats = category_wiki_builder.run(
+            weeks=[week],
+            allow_external_llm=True,
+            allow_dummy_taxonomy=False,
+        )
+        if category_stats["pages"] == 0:
+            raise RuntimeError("분류 Wiki 생성 결과가 없습니다")
+        step += 1
+
+    # wiki_export → overview md
+    print(f"\n[{step}/{total_steps}] wiki export (week={week})")
     wiki_export.run_export(week=week, summary_type="overview")
+    step += 1
 
     md_path = OVERVIEW_DIR / f"{week}_전체요약.md"
     if not md_path.exists():
         raise FileNotFoundError(f"overview md 없음: {md_path} (해당 주차 데이터 확인)")
 
-    # 5. outlook 호환 HTML 변환
-    print("\n[5/6] Outlook HTML 변환")
+    # outlook 호환 HTML 변환
+    print(f"\n[{step}/{total_steps}] Outlook HTML 변환")
     html_path = md_path.with_suffix(".html")
     generate_outlook_report.convert(md_path, html_path)
+    step += 1
 
-    # 6. Gmail SMTP 발송
-    print("\n[6/6] 메일 발송")
+    # Gmail SMTP 발송
+    print(f"\n[{step}/{total_steps}] 메일 발송")
     send_report.send_report(html_path, week)
 
     print("\n" + "=" * 60)

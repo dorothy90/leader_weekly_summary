@@ -1,0 +1,103 @@
+{
+  "version": 1,
+  "is_dummy": true,
+  "mails": [
+    {
+      "id": "dummy_mail_001",
+      "subject": "[DRAM 수율] 28주차 공통 기준 변경",
+      "sender_team": "DRAM수율전략",
+      "sender": "dram-strategy@example.invalid",
+      "received_at": "2026-07-06T09:10:00+09:00",
+      "body": "DRAM 전 Tech의 주간 수율 판단 기준을 95.0%로 통일합니다. 이번 기준은 28주차부터 적용합니다. Spica는 신규 기준 적용 전 영향도를 별도 점검해 주세요."
+    },
+    {
+      "id": "dummy_mail_002",
+      "subject": "[Spica] 4SA/6SA 주간 수율 현황",
+      "sender_team": "Spica수율",
+      "sender": "spica-yield@example.invalid",
+      "received_at": "2026-07-06T10:20:00+09:00",
+      "body": "Spica 전체 수율은 전주 수준을 유지했습니다. 4SA는 장비 조건 변경 이후 수율이 1.2%p 하락해 원인 분석 중입니다. 6SA는 세정 조건 원복 후 96.4%로 정상화됐습니다."
+    },
+    {
+      "id": "dummy_mail_003",
+      "subject": "SP LPDDR5 24G 공통 개선안 검토",
+      "sender_team": "Spica수율",
+      "sender": "spica-yield@example.invalid",
+      "received_at": "2026-07-07T08:40:00+09:00",
+      "body": "SP LPDDR5 24G 제품군의 Edge defect가 증가했습니다. Fab 공통 세정 recipe 변경안을 4SA와 6SA에 순차 적용할 예정입니다."
+    },
+    {
+      "id": "dummy_mail_004",
+      "subject": "Canopus DDR5 16G 수율 점검",
+      "sender_team": "DRAM수율전략",
+      "sender": "dram-strategy@example.invalid",
+      "received_at": "2026-07-07T11:15:00+09:00",
+      "body": "Canopus DDR5 16G 제품군 수율 편차가 확대됐습니다. 4SS는 Test fail 증가로 94.8%를 기록했습니다. 6SS는 96.1%로 관리 범위 내입니다."
+    },
+    {
+      "id": "dummy_mail_005",
+      "subject": "Lucy 및 Procyon 주요 이슈",
+      "sender_team": "DRAM SRT 개발공정",
+      "sender": "dram-srt@example.invalid",
+      "received_at": "2026-07-08T09:05:00+09:00",
+      "body": "Lucy 전체의 retention margin 재평가가 필요합니다. 6E2는 저온 조건 fail이 18건 발생했습니다. Procyon은 신규 mask 검증을 완료했습니다. 6EN 양산 반영 여부는 금요일 회의에서 결정합니다."
+    },
+    {
+      "id": "dummy_mail_006",
+      "subject": "[NAND] Tech 공통 수율 관리 기준",
+      "sender_team": "NAND수율전략",
+      "sender": "nand-strategy@example.invalid",
+      "received_at": "2026-07-08T13:30:00+09:00",
+      "body": "NAND 전체 Tech에 동일한 수율 경보 기준을 적용합니다. 기준 미달 시 담당 Tech가 24시간 이내 원인과 조치 계획을 등록해야 합니다."
+    },
+    {
+      "id": "dummy_mail_007",
+      "subject": "Heraion 4H1/6H1 수율 현황",
+      "sender_team": "Heraion양산수율",
+      "sender": "heraion-yield@example.invalid",
+      "received_at": "2026-07-09T08:55:00+09:00",
+      "body": "Heraion 전체 수율은 93.7%입니다. 4H1은 channel hole 편차 영향으로 0.9%p 하락했습니다. 6H1은 조건 최적화 split을 시작했습니다."
+    },
+    {
+      "id": "dummy_mail_008",
+      "subject": "CO QLC 1T program fail 분석",
+      "sender_team": "NAND FA PTE",
+      "sender": "nand-fa@example.invalid",
+      "received_at": "2026-07-09T11:45:00+09:00",
+      "body": "Colosseum QLC 1T 제품군에서 program fail 증가가 확인됐습니다. 4C1과 6C1 공통으로 word line resistance 상관성을 분석합니다."
+    },
+    {
+      "id": "dummy_mail_009",
+      "subject": "Petra performance 제품 검증 결과",
+      "sender_team": "NAND품질PTE",
+      "sender": "nand-quality@example.invalid",
+      "received_at": "2026-07-10T09:25:00+09:00",
+      "body": "Petra 전체 reliability 검증은 계획대로 진행 중입니다. 4P1 read 성능은 목표 대비 3% 우수했습니다. 6P1 endurance 결과는 다음 주 공유 예정입니다."
+    },
+    {
+      "id": "dummy_mail_010",
+      "subject": "DRAM/NAND 공통 장비 점검 공지",
+      "sender_team": "공정기술PTE",
+      "sender": "process@example.invalid",
+      "received_at": "2026-07-10T13:10:00+09:00",
+      "body": "DRAM과 NAND 공통으로 검사 장비 calibration을 실시합니다. DRAM 4SA는 화요일, NAND 4H1은 수요일에 작업합니다. 작업 시간에는 해당 LOT 투입을 중지해 주세요."
+    },
+    {
+      "id": "dummy_mail_011",
+      "subject": "신규 LOTCD 4ZZ 수율 이상",
+      "sender_team": "DRAM수율전략",
+      "sender": "dram-strategy@example.invalid",
+      "received_at": "2026-07-10T15:35:00+09:00",
+      "body": "4ZZ 수율이 91.2%로 하락했습니다. 현재 기준정보에 등록되지 않은 LOTCD이므로 담당 Tech 확인이 필요합니다."
+    },
+    {
+      "id": "dummy_mail_012",
+      "subject": "RE: [Spica] 4SA/6SA 주간 수율 현황",
+      "sender_team": "Spica수율",
+      "sender": "spica-yield@example.invalid",
+      "received_at": "2026-07-11T08:20:00+09:00",
+      "reply_to": "dummy_mail_002",
+      "body": "4SA 장비 조건 분석 결과 chamber A 편차가 원인으로 확인됐습니다. 오늘 조건 원복 후 재측정합니다.\n\n----- Original Message -----\n4SA는 장비 조건 변경 이후 수율이 1.2%p 하락해 원인 분석 중입니다. 6SA는 세정 조건 원복 후 96.4%로 정상화됐습니다."
+    }
+  ]
+}
