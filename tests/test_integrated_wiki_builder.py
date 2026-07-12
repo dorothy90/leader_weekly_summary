@@ -551,6 +551,64 @@ def test_build_preserves_history_and_resolves_child_evidence(taxonomy):
     assert page["citation_map"][0]["category_paths"] == ["dram/spica/4sa"]
 
 
+def test_build_normalizes_stored_and_requested_week_formats(taxonomy):
+    contexts = {}
+    agendas = [
+        {
+            "agenda_id": "agenda-current",
+            "mail_id": "mail-current",
+            "week": "2026-28",
+            "state": "open",
+            "review_status": "confirmed",
+            "issue_id": "issue-1",
+            "summary": "Current 4SA status",
+            "subject": "current weekly",
+            "topic": "yield",
+            "source_doc_ids": ["chunk-current"],
+            "target_paths": [{"domain": "DRAM", "tech": "Spica", "lotcd": "4SA"}],
+            "candidate_paths": [],
+        },
+        {
+            "agenda_id": "agenda-future",
+            "mail_id": "mail-future",
+            "week": "2026-29",
+            "state": "resolved",
+            "review_status": "confirmed",
+            "issue_id": "issue-1",
+            "summary": "Future 4SA status",
+            "subject": "future weekly",
+            "topic": "yield",
+            "source_doc_ids": ["chunk-future"],
+            "target_paths": [{"domain": "DRAM", "tech": "Spica", "lotcd": "4SA"}],
+            "candidate_paths": [],
+        },
+    ]
+
+    def analyze(context):
+        contexts[context["node"]["id"]] = context
+        return PageAnalysis(outline=["개요"])
+
+    result = build_integrated_pages(
+        taxonomy,
+        agendas,
+        {},
+        as_of_week="2026-W28",
+        analyze=analyze,
+        draft=lambda context, analysis: empty_draft(),
+    )
+    page = next(page for page in result.pages if page["category_id"] == "lotcd:4sa")
+
+    assert [
+        item["agenda_id"] for item in contexts["lotcd:4sa"]["allowed_agendas"]
+    ] == ["agenda-current"]
+    assert [
+        event["agenda_id"]
+        for issue in contexts["lotcd:4sa"]["issue_timelines"]
+        for event in issue["events"]
+    ] == ["agenda-current"]
+    assert page["source_agenda_ids"] == ["agenda-current"]
+
+
 def test_missing_child_digest_agenda_blocks_parent(taxonomy):
     missing_claim = SupportedClaim(
         text="근거 없음",

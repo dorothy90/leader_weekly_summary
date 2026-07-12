@@ -31,10 +31,19 @@ from knowledge_models import TaxonomyDocument
 
 
 MAIL_CITATION = re.compile(r"\[mail:([^\]]+)\]")
+WEEK = re.compile(r"^(\d{4})-W?(\d{2})$")
 
 
 class NarrativeValidationError(ValueError):
     pass
+
+
+def _normalize_week(value: object) -> str:
+    week = str(value)
+    match = WEEK.fullmatch(week)
+    if match is None:
+        return week
+    return f"{match.group(1)}-W{match.group(2)}"
 
 
 @dataclass
@@ -317,7 +326,9 @@ def _recent_history(previous: dict[str, Any]) -> list[dict[str, Any]]:
         item.model_dump() if isinstance(item, WeeklyHistoryEntry) else dict(item)
         for item in previous.get("weekly_history", [])
     ]
-    return sorted(records, key=lambda item: str(item["week"]), reverse=True)[:2]
+    return sorted(records, key=lambda item: _normalize_week(item["week"]), reverse=True)[
+        :2
+    ]
 
 
 def _compact_issue_timelines(
@@ -401,10 +412,14 @@ def build_integrated_pages(
     analyze: AnalysisFn,
     draft: DraftFn,
 ) -> BuildResult:
+    as_of_week = _normalize_week(as_of_week)
     eligible_agendas = [
-        agenda
+        {**agenda, "week": _normalize_week(agenda["week"])}
+        if agenda.get("week")
+        else agenda
         for agenda in agendas
-        if not agenda.get("week") or str(agenda["week"]) <= as_of_week
+        if not agenda.get("week")
+        or _normalize_week(agenda["week"]) <= as_of_week
     ]
     agendas_by_id = {str(agenda["agenda_id"]): agenda for agenda in eligible_agendas}
     compatibility_pages = {
@@ -434,7 +449,7 @@ def build_integrated_pages(
             current_direct = [
                 agenda
                 for agenda in direct_agendas_for_node(node, eligible_agendas)
-                if agenda.get("week") == as_of_week
+                if _normalize_week(agenda.get("week")) == as_of_week
             ]
             previous_agendas = [
                 agendas_by_id[agenda_id]
@@ -530,8 +545,8 @@ def build_integrated_pages(
 def merge_weekly_history(
     previous: list[WeeklyHistoryEntry], current: WeeklyHistoryEntry
 ) -> list[WeeklyHistoryEntry]:
-    by_week = {item.week: item for item in previous}
-    by_week[current.week] = current
+    by_week = {_normalize_week(item.week): item for item in previous}
+    by_week[_normalize_week(current.week)] = current
     return [by_week[week] for week in sorted(by_week, reverse=True)]
 
 
@@ -707,12 +722,14 @@ def run(
     )
     available_weeks = sorted(
         {
-            str(agenda["week"])
+            _normalize_week(agenda["week"])
             for agenda in agendas
             if agenda.get("week") and agenda.get("week") != "unknown"
         }
     )
-    requested_weeks = sorted(weeks or available_weeks)
+    requested_weeks = sorted(
+        _normalize_week(week) for week in (weeks or available_weeks)
+    )
     if not requested_weeks:
         return {"pages": 0, "failed": 0}
     as_of_week = requested_weeks[-1]
