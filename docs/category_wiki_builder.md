@@ -8,43 +8,47 @@
 combined.txt
   → embed_vectordb.py (chunk + embedding 1회)
   → weekly_mail
-  → category_wiki_builder.py
-      → mail_agendas (구조화 문서, vector 없음)
+  → mail_agendas (기존 agenda 추출 단계가 생성, vector 없음)
+  → integrated_wiki_builder.py
+      → LOTCD 서술형 Wiki
+      → Tech 서술형 Wiki
+      → Domain 서술형 Wiki
       → category_wiki_pages (Markdown 문서, vector 없음)
   → /api/knowledge/wiki/pages/...
   → Web Wiki Reader
 ```
 
-Builder는 `weekly_mail.embedding`을 조회하거나 다시 생성하지 않는다. `_source`에서 `text`, `week`, `team`, `mail_id`, `subject`, `part_index`만 읽는다.
+통합 Builder는 기존 `mail_agendas`만 읽으며 agenda를 추출하지 않는다. 인용 근거의 `source_doc_ids`가 `weekly_mail`에 존재하는지는 저장 전에 검증하지만, 메일을 chunk하거나 embedding을 조회·생성하지 않는다. 임베딩은 계속 `embed_vectordb.py`만 담당한다.
 
 ## 실행
 
 실제 taxonomy와 승인된 LLM endpoint를 사용하는 운영 실행:
 
 ```bash
-python category_wiki_builder.py \
-  --week 2026-28 \
+python integrated_wiki_builder.py \
+  --week 2026-W28 \
   --allow-external-llm
 ```
 
 더미 taxonomy로 구조 검증:
 
 ```bash
-python category_wiki_builder.py \
-  --week 2026-28 \
+python integrated_wiki_builder.py \
+  --week 2026-W28 \
   --allow-external-llm \
   --allow-dummy-taxonomy
 ```
 
-이미 `mail_agendas`가 준비된 경우 LLM 없이 결정적 Markdown 생성:
+저장 없이 같은 생성·검증 경로를 확인하려면 `--dry-run`을 사용한다:
 
 ```bash
-python category_wiki_builder.py \
-  --week 2026-28 \
-  --skip-agenda-extraction \
-  --deterministic \
-  --allow-dummy-taxonomy
+python integrated_wiki_builder.py \
+  --week 2026-W28 \
+  --allow-external-llm \
+  --dry-run
 ```
+
+기존 `category_wiki_builder.py` 명령과 결정적 생성 경로는 전환 기간 동안 계속 사용할 수 있다.
 
 ## 주간 파이프라인 연결
 
@@ -54,7 +58,7 @@ KNOWLEDGE_LLM_DATA_POLICY_ACK=true
 KNOWLEDGE_TAXONOMY_PATH=/path/to/taxonomy.json
 ```
 
-`run_pipeline.py`는 `embed_vectordb.process_all()` 완료 후 Category Wiki Builder를 실행한다. 기존 주간·월간 요약과 `wiki_summaries`는 변경하지 않는다.
+`run_pipeline.py`는 `embed_vectordb.process_all()` 완료 후 통합 Category Wiki Builder를 실행한다. 생성 순서는 하위 근거를 먼저 확정하는 **LOTCD → Tech → Domain**이다. 기존 주간·월간 요약과 `wiki_summaries`는 변경하지 않는다.
 
 ## 상태 누적
 

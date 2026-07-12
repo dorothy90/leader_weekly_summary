@@ -17,12 +17,16 @@ from integrated_wiki_builder import (
     build_integrated_pages,
     canonical_path,
     direct_agendas_for_node,
+    fetch_previous_pages,
     integrated_page_index_definition,
     invoke_structured,
     merge_weekly_history,
     render_current_body,
+    run,
+    save_integrated_pages,
     validate_draft,
     validate_issue_decisions,
+    validate_source_documents,
 )
 
 
@@ -42,6 +46,61 @@ def empty_draft() -> NarrativeDraft:
         weekly_update="",
         confidence="low",
     )
+
+
+def sample_integrated_page(
+    category_id: str = "lotcd:4sa", week: str = "2026-W28"
+) -> dict:
+    return {
+        "category_id": category_id,
+        "page_kind": "latest",
+        "doc_type": "canonical",
+        "as_of_week": week,
+        "source_doc_ids": ["chunk-1"],
+    }
+
+
+class FakeIndices:
+    def __init__(self, existing=()):
+        self.existing = set(existing)
+        self.created = []
+        self.refreshed = []
+
+    def exists(self, *, index):
+        return index in self.existing
+
+    def create(self, *, index, body):
+        self.existing.add(index)
+        self.created.append((index, body))
+
+    def refresh(self, *, index):
+        self.refreshed.append(index)
+
+
+class SourceMgetClient:
+    def __init__(self, found_ids):
+        self.found_ids = set(found_ids)
+        self.calls = []
+        self.indices = FakeIndices()
+
+    def mget(self, *, index, body):
+        self.calls.append((index, body))
+        return {
+            "docs": [
+                {"_id": source_id, "found": source_id in self.found_ids}
+                for source_id in body["ids"]
+            ]
+        }
+
+
+class SearchClient:
+    def __init__(self, hits):
+        self.hits = hits
+        self.query = None
+
+    def search(self, *, index, body):
+        self.query = body
+        return {"hits": {"hits": self.hits}}
 
 
 def test_supported_claim_requires_mail_and_agenda_evidence():
@@ -515,3 +574,166 @@ def test_missing_child_digest_agenda_blocks_parent(taxonomy):
 
     assert "agenda-missing" in result.failures["tech:dram:spica"]
     assert result.failures["domain:dram"] == "required child failed"
+
+
+def test_save_writes_one_canonical_and_one_snapshot_per_success(monkeypatch):
+    captured = []
+    monkeypatch.setattr(
+        "integrated_wiki_builder.helpers.bulk",
+        lambda client, actions: captured.extend(actions),
+    )
+    client = SourceMgetClient(found_ids=["chunk-1"])
+
+    count = save_integrated_pages(client, [sample_integrated_page()])
+
+    assert count == 1
+    assert [item["_id"] for item in captured] == [
+        "lotcd:4sa",
+        "lotcd:4sa:2026-W28",
+    ]
+    assert captured[0]["_source"]["page_kind"] == "latest"
+    assert captured[0]["_source"]["doc_type"] == "canonical"
+    assert captured[1]["_source"]["page_kind"] == "snapshot"
+    assert captured[1]["_source"]["doc_type"] == "snapshot"
+
+
+def test_fetch_previous_pages_returns_only_latest_documents():
+    client = SearchClient(
+        [
+            {
+                "_id": "lotcd:4sa",
+                "_source": sample_integrated_page("lotcd:4sa", "2026-W27"),
+            }
+        ]
+    )
+
+    pages = fetch_previous_pages(client)
+
+    assert set(pages) == {"lotcd:4sa"}
+    assert client.query["query"] == {"term": {"page_kind": "latest"}}
+
+
+def test_missing_weekly_mail_chunk_blocks_persistence():
+    page = sample_integrated_page()
+    page["source_doc_ids"] = ["missing-chunk", "another-missing"]
+
+    with pytest.raises(
+        NarrativeValidationError, match="another-missing.*missing-chunk"
+    ):
+        validate_source_documents(SourceMgetClient(found_ids=[]), [page])
+
+
+def test_missing_weekly_mail_chunk_prevents_bulk_write(monkeypatch):
+    captured = []
+    monkeypatch.setattr(
+        "integrated_wiki_builder.helpers.bulk",
+        lambda client, actions: captured.extend(actions),
+    )
+
+    with pytest.raises(NarrativeValidationError, match="missing-chunk"):
+        save_integrated_pages(
+            SourceMgetClient(found_ids=[]),
+            [
+                {
+                    **sample_integrated_page(),
+                    "source_doc_ids": ["missing-chunk"],
+                }
+            ],
+        )
+
+    assert captured == []
+
+
+def test_source_validation_deduplicates_ids_before_mget():
+    client = SourceMgetClient(found_ids=["chunk-1", "chunk-2"])
+    second = sample_integrated_page("tech:dram:spica")
+    second["source_doc_ids"] = ["chunk-2", "chunk-1"]
+
+    validate_source_documents(client, [sample_integrated_page(), second])
+
+    assert client.calls[0][1] == {"ids": ["chunk-1", "chunk-2"]}
+
+
+def test_run_reads_existing_agendas_and_persists_successful_pages(
+    taxonomy, monkeypatch
+):
+    captured = []
+
+    class RunClient(SourceMgetClient):
+        def __init__(self):
+            super().__init__(["chunk-1"])
+            self.indices = FakeIndices(existing=["mail_agendas"])
+            self.searches = []
+
+        def search(self, *, index, body):
+            self.searches.append((index, body))
+            if index == "mail_agendas":
+                return {
+                    "hits": {
+                        "hits": [
+                            {
+                                "_id": "agenda-1",
+                                "_source": {
+                                    "agenda_id": "agenda-1",
+                                    "mail_id": "mail-1",
+                                    "week": "2026-W28",
+                                    "state": "open",
+                                    "review_status": "confirmed",
+                                    "issue_id": "issue-1",
+                                    "summary": "4SA 상태",
+                                    "subject": "weekly",
+                                    "topic": "yield",
+                                    "source_doc_ids": ["chunk-1"],
+                                    "target_paths": [
+                                        {
+                                            "domain": "DRAM",
+                                            "tech": "Spica",
+                                            "lotcd": "4SA",
+                                        }
+                                    ],
+                                    "candidate_paths": [],
+                                },
+                            }
+                        ]
+                    }
+                }
+            return {"hits": {"hits": []}}
+
+    client = RunClient()
+    monkeypatch.setattr("integrated_wiki_builder.load_taxonomy", lambda path=None: taxonomy)
+    monkeypatch.setattr(
+        "integrated_wiki_builder.helpers.bulk",
+        lambda bulk_client, actions: captured.extend(actions),
+    )
+
+    stats = run(
+        weeks=["2026-W28"],
+        allow_dummy_taxonomy=True,
+        client=client,
+        analyze=lambda context: PageAnalysis(outline=["개요"]),
+        draft=lambda context, analysis: empty_draft(),
+    )
+
+    assert stats == {"pages": 23, "failed": 0}
+    assert [index for index, _ in client.indices.created] == ["category_wiki_pages"]
+    assert [index for index, _ in client.searches] == [
+        "mail_agendas",
+        "category_wiki_pages",
+    ]
+    assert len(captured) == 46
+
+
+def test_run_rejects_unacknowledged_external_llm_before_index_changes(
+    taxonomy, monkeypatch
+):
+    client = SourceMgetClient(found_ids=[])
+    monkeypatch.setattr("integrated_wiki_builder.load_taxonomy", lambda path=None: taxonomy)
+
+    with pytest.raises(RuntimeError, match="External LLM"):
+        run(
+            weeks=["2026-W28"],
+            allow_dummy_taxonomy=True,
+            client=client,
+        )
+
+    assert client.indices.created == []

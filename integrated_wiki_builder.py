@@ -1,21 +1,30 @@
 from __future__ import annotations
 
+import argparse
 import json
 import re
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any, Literal
 
+from opensearchpy import OpenSearch, helpers
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from agenda_extract import llm_connection
 from category_wiki_builder import (
+    AGENDA_INDEX,
+    PAGE_INDEX,
+    SOURCE_INDEX,
     TERMINAL_STATES,
     CategoryNode,
     agenda_matches_node,
     build_page_documents,
     category_nodes,
+    ensure_index,
+    fetch_agendas,
     issue_timelines,
+    load_taxonomy,
     page_index_definition,
 )
 from knowledge_models import TaxonomyDocument
@@ -586,3 +595,173 @@ def integrated_page_index_definition() -> dict[str, Any]:
         }
     )
     return definition
+
+
+def fetch_previous_pages(
+    client: OpenSearch, *, page_size: int = 500
+) -> dict[str, dict[str, Any]]:
+    search_after = None
+    pages: dict[str, dict[str, Any]] = {}
+    while True:
+        body: dict[str, Any] = {
+            "size": page_size,
+            "query": {"term": {"page_kind": "latest"}},
+            "sort": [{"_id": "asc"}],
+        }
+        if search_after is not None:
+            body["search_after"] = search_after
+        response = client.search(index=PAGE_INDEX, body=body)
+        batch = response.get("hits", {}).get("hits", [])
+        for hit in batch:
+            page = hit["_source"]
+            pages[str(page["category_id"])] = page
+        if len(batch) < page_size:
+            break
+        search_after = batch[-1]["sort"]
+    return pages
+
+
+def validate_source_documents(
+    client: OpenSearch, pages: list[dict[str, Any]]
+) -> None:
+    source_doc_ids = sorted(
+        {
+            str(source_doc_id)
+            for page in pages
+            for source_doc_id in page.get("source_doc_ids", [])
+        }
+    )
+    if not source_doc_ids:
+        return
+    response = client.mget(index=SOURCE_INDEX, body={"ids": source_doc_ids})
+    missing = sorted(
+        str(document["_id"])
+        for document in response.get("docs", [])
+        if not document.get("found", False)
+    )
+    if missing:
+        raise NarrativeValidationError(
+            f"missing weekly_mail source documents: {', '.join(missing)}"
+        )
+
+
+def save_integrated_pages(
+    client: OpenSearch, pages: list[dict[str, Any]]
+) -> int:
+    validate_source_documents(client, pages)
+    actions: list[dict[str, Any]] = []
+    for page in pages:
+        canonical = {**page, "page_kind": "latest", "doc_type": "canonical"}
+        snapshot = {**page, "page_kind": "snapshot", "doc_type": "snapshot"}
+        actions.extend(
+            [
+                {
+                    "_index": PAGE_INDEX,
+                    "_id": page["category_id"],
+                    "_source": canonical,
+                },
+                {
+                    "_index": PAGE_INDEX,
+                    "_id": f"{page['category_id']}:{page['as_of_week']}",
+                    "_source": snapshot,
+                },
+            ]
+        )
+    if actions:
+        helpers.bulk(client, actions)
+        client.indices.refresh(index=PAGE_INDEX)
+    return len(pages)
+
+
+def run(
+    *,
+    weeks: list[str] | None = None,
+    taxonomy_path: Path | None = None,
+    allow_external_llm: bool = False,
+    allow_dummy_taxonomy: bool = False,
+    dry_run: bool = False,
+    client: OpenSearch | None = None,
+    analyze: AnalysisFn | None = None,
+    draft: DraftFn | None = None,
+) -> dict[str, int]:
+    taxonomy = load_taxonomy(taxonomy_path)
+    if taxonomy.is_dummy and not allow_dummy_taxonomy:
+        raise RuntimeError(
+            "Dummy taxonomy is active. Import real mapping or explicitly allow it."
+        )
+    if (analyze is None) != (draft is None):
+        raise RuntimeError("analyze and draft must be provided together")
+    if analyze is None and not allow_external_llm:
+        raise RuntimeError("External LLM use requires explicit allow_external_llm=True")
+    if client is None:
+        from embed_vectordb import get_opensearch_client
+
+        client = get_opensearch_client()
+    if not dry_run:
+        ensure_index(client, PAGE_INDEX, integrated_page_index_definition())
+
+    agendas = (
+        fetch_agendas(client)
+        if client.indices.exists(index=AGENDA_INDEX)
+        else []
+    )
+    available_weeks = sorted(
+        {
+            str(agenda["week"])
+            for agenda in agendas
+            if agenda.get("week") and agenda.get("week") != "unknown"
+        }
+    )
+    requested_weeks = sorted(weeks or available_weeks)
+    if not requested_weeks:
+        return {"pages": 0, "failed": 0}
+    as_of_week = requested_weeks[-1]
+
+    if analyze is None or draft is None:
+        analyze, draft = build_llm_generators()
+
+    previous_pages = (
+        fetch_previous_pages(client)
+        if client.indices.exists(index=PAGE_INDEX)
+        else {}
+    )
+    result = build_integrated_pages(
+        taxonomy,
+        agendas,
+        previous_pages,
+        as_of_week=as_of_week,
+        analyze=analyze,
+        draft=draft,
+    )
+    if not dry_run:
+        save_integrated_pages(client, result.pages)
+    return {"pages": len(result.pages), "failed": len(result.failures)}
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Build integrated narrative Category Wiki pages"
+    )
+    parser.add_argument("--week", action="append", dest="weeks")
+    parser.add_argument("--taxonomy", type=Path)
+    parser.add_argument("--allow-external-llm", action="store_true")
+    parser.add_argument("--allow-dummy-taxonomy", action="store_true")
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args()
+    try:
+        stats = run(
+            weeks=args.weeks,
+            taxonomy_path=args.taxonomy,
+            allow_external_llm=args.allow_external_llm,
+            allow_dummy_taxonomy=args.allow_dummy_taxonomy,
+            dry_run=args.dry_run,
+        )
+    except (RuntimeError, NarrativeValidationError) as exc:
+        print(str(exc))
+        return 2
+    print(json.dumps(stats, ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

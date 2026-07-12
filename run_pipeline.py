@@ -90,16 +90,17 @@ def main() -> int:
     step += 1
 
     if category_wiki_enabled:
-        print(f"\n[{step}/{total_steps}] 분류 Wiki 생성 (week={week})")
-        import category_wiki_builder
+        print(f"\n[{step}/{total_steps}] 통합 서술형 분류 Wiki 생성 (week={week})")
+        import integrated_wiki_builder
 
-        category_stats = category_wiki_builder.run(
+        category_stats = integrated_wiki_builder.run(
             weeks=[week],
             allow_external_llm=True,
             allow_dummy_taxonomy=False,
+            client=embed_vectordb.get_opensearch_client(),
         )
-        if category_stats["pages"] == 0:
-            raise RuntimeError("분류 Wiki 생성 결과가 없습니다")
+        if category_stats["failed"]:
+            raise RuntimeError(f"통합 Wiki 생성 실패: {category_stats['failed']}개 분류")
         step += 1
 
     # wiki_export → overview md
