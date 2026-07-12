@@ -195,9 +195,24 @@ class KnowledgeSession(StrictModel):
     can_edit: bool
 
 
+class WeeklyHistoryRecord(StrictModel):
+    week: str
+    body_markdown: str
+    source_mail_ids: list[str] = Field(default_factory=list)
+
+
+class WikiCitationRecord(StrictModel):
+    mail_id: str
+    agenda_ids: list[str] = Field(default_factory=list)
+    used_in_sections: list[str] = Field(default_factory=list)
+    category_paths: list[str] = Field(default_factory=list)
+
+
 class CategoryWikiPage(StrictModel):
     category_id: str
     page_kind: Literal["latest", "snapshot"]
+    doc_type: Literal["canonical", "snapshot"] = "canonical"
+    canonical_id: str = ""
     level: Literal["domain", "tech", "lotcd"]
     domain: Literal["DRAM", "NAND"]
     tech: str | None = None
@@ -205,17 +220,28 @@ class CategoryWikiPage(StrictModel):
     title: str
     product: str | None = None
     fab_id: str | None = None
+    aliases: list[str] = Field(default_factory=list)
     as_of_week: str
+    current_body_markdown: str = ""
+    weekly_history: list[WeeklyHistoryRecord] = Field(default_factory=list)
     body_markdown: str
+    citation_map: list[WikiCitationRecord] = Field(default_factory=list)
+    child_page_ids: list[str] = Field(default_factory=list)
+    confidence: Literal["low", "medium", "high"] = "low"
     agenda_count: int
     open_issue_ids: list[str] = Field(default_factory=list)
     resolved_issue_ids: list[str] = Field(default_factory=list)
+    open_issue_count: int = 0
+    resolved_issue_count: int = 0
+    contradictions: list[str] = Field(default_factory=list)
+    generation_review_items: list[str] = Field(default_factory=list)
     review_agenda_ids: list[str] = Field(default_factory=list)
     source_agenda_ids: list[str] = Field(default_factory=list)
     source_doc_ids: list[str] = Field(default_factory=list)
     source_hash: str
     taxonomy_version: int
     generated_at: datetime
+    updated_at: datetime | None = None
 
 
 class TechCreate(StrictModel):
