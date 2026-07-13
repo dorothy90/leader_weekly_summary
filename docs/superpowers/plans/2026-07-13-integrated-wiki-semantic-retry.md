@@ -34,6 +34,8 @@ create or repair `issue_decisions`:
   validation; the LLM still owns supported claims, contradictions, review
   items, outline, and prose.
 - `KNOWLEDGE_LLM_REASONING_EFFORT` maps to OpenRouter's `reasoning.effort` body.
+- Evidence-free leaf pages skip LLM calls and receive an empty low-confidence
+  six-section canonical document.
 - Semantic retries continue to handle invalid claims, citations, and empty
   structured responses.
 

@@ -16,6 +16,8 @@ validation. Invalid pages must never overwrite the previous canonical page.
   timelines and child digests rather than asking the LLM to restate them.
 - Allow OpenRouter reasoning effort to be set through
   `KNOWLEDGE_LLM_REASONING_EFFORT`.
+- Skip LLM calls for leaf pages with no direct, historical, or child evidence;
+  render the canonical six-section shell with low confidence instead.
 - Preserve the existing taxonomy, OpenSearch indexes, page schema, citations,
   issue continuity rules, and parent-after-child generation order.
 
@@ -58,6 +60,7 @@ citations, while existing deterministic validators remain the authority.
   evidence supplies them, and page generation continues without an LLM retry.
 - Unit test: reopened evidence propagates from LOTCD to Tech and Domain.
 - Unit test: optional reasoning effort becomes the OpenRouter `reasoning` body.
+- Unit test: an evidence-free leaf does not call the LLM generator.
 - Unit test: first draft contains an uncited factual unit, corrective retry adds
   a valid `[mail:...]` citation.
 - Unit test: three invalid responses produce one page failure and no saved page.

@@ -190,6 +190,32 @@ def _llm_extra_body() -> dict[str, Any] | None:
     return {"reasoning": {"effort": reasoning_effort}}
 
 
+def _has_generation_evidence(context: dict[str, Any]) -> bool:
+    return bool(
+        context.get("allowed_agendas")
+        or context.get("issue_timelines")
+        or context.get("child_digests")
+        or str(context.get("previous_current_body_markdown", "")).strip()
+    )
+
+
+def _empty_page_analysis() -> PageAnalysis:
+    return PageAnalysis(outline=["개요"])
+
+
+def _empty_narrative_draft() -> NarrativeDraft:
+    return NarrativeDraft(
+        overview="",
+        current_status="",
+        cause_and_impact="",
+        actions_and_effects="",
+        pending_and_decisions="",
+        accumulated_knowledge="",
+        weekly_update="",
+        confidence="low",
+    )
+
+
 def build_llm_generators() -> tuple[AnalysisFn, DraftFn]:
     from langchain_openai import ChatOpenAI
 
@@ -205,6 +231,8 @@ def build_llm_generators() -> tuple[AnalysisFn, DraftFn]:
     draft_llm = llm.with_structured_output(NarrativeDraft, method="function_calling")
 
     def analyze(context: dict[str, Any]) -> PageAnalysis:
+        if not _has_generation_evidence(context):
+            return _empty_page_analysis()
         return invoke_structured(
             analysis_llm,
             [
@@ -214,6 +242,8 @@ def build_llm_generators() -> tuple[AnalysisFn, DraftFn]:
         )
 
     def draft(context: dict[str, Any], analysis: PageAnalysis) -> NarrativeDraft:
+        if not _has_generation_evidence(context):
+            return _empty_narrative_draft()
         payload = {"context": context, "analysis": analysis.model_dump()}
         return invoke_structured(
             draft_llm,

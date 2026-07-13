@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import integrated_wiki_builder as wiki_builder_module
 import pytest
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 
 from category_wiki_builder import CategoryNode, load_taxonomy
 from integrated_wiki_builder import (
@@ -18,6 +20,7 @@ from integrated_wiki_builder import (
     assemble_body,
     build_child_digest,
     build_integrated_pages,
+    build_llm_generators,
     canonical_path,
     direct_agendas_for_node,
     fetch_previous_pages,
@@ -991,6 +994,43 @@ def test_llm_extra_body_uses_optional_reasoning_effort(monkeypatch):
     assert wiki_builder_module._llm_extra_body() == {
         "reasoning": {"effort": "none"}
     }
+
+
+def test_llm_generators_skip_model_for_empty_leaf(monkeypatch):
+    class FailingRunnable:
+        def invoke(self, messages):
+            raise AssertionError("empty leaf must not call the model")
+
+    class FakeChatOpenAI:
+        def __init__(self, **kwargs):
+            pass
+
+        def with_structured_output(self, schema, method):
+            return FailingRunnable()
+
+    monkeypatch.setattr("langchain_openai.ChatOpenAI", FakeChatOpenAI)
+    monkeypatch.setattr(
+        "integrated_wiki_builder.llm_connection",
+        lambda: SimpleNamespace(
+            model="z-ai/glm-4.7",
+            api_key=SecretStr("test"),
+            base_url="https://openrouter.ai/api/v1",
+        ),
+    )
+    analyze, draft = build_llm_generators()
+    context = {
+        "allowed_agendas": [],
+        "issue_timelines": [],
+        "child_digests": [],
+        "previous_current_body_markdown": "",
+        "recent_history": [],
+    }
+
+    analysis = analyze(context)
+    narrative = draft(context, analysis)
+
+    assert analysis == PageAnalysis(outline=["개요"])
+    assert narrative == empty_draft()
 
 
 def test_issue_validation_rejects_terminal_agenda_for_another_issue():
