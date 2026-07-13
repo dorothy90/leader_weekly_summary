@@ -32,7 +32,16 @@ from category_wiki_builder import (
     page_index_definition,
 )
 from knowledge_models import TaxonomyDocument
-from wiki_issue_ledger import IssueLedgerResult, WikiIssue
+from wiki_issue_ledger import (
+    ISSUE_INDEX,
+    IssueLedgerResult,
+    IssueSuggestionFn,
+    WikiIssue,
+    fetch_issue_ledger,
+    issue_index_definition,
+    resolve_issue_ledger,
+    save_issue_ledger,
+)
 
 
 MAIL_CITATION = re.compile(r"\[mail:([^\]]+)\]")
@@ -1447,6 +1456,7 @@ def build_incremental_pages(
     merge: MergeFn,
     rebuild_all: bool = False,
     on_page: Callable[[dict[str, Any]], None] | None = None,
+    selected_node_ids: set[str] | None = None,
 ) -> BuildResult:
     week = _normalize_week(as_of_week)
     eligible_agendas = [
@@ -1456,10 +1466,10 @@ def build_incremental_pages(
         or _normalize_week(agenda["week"]) <= week
     ]
     delta = select_weekly_delta(eligible_agendas, week)
-    selected_ids = affected_node_ids(
-        taxonomy,
-        delta,
-        rebuild_all=rebuild_all,
+    selected_ids = (
+        selected_node_ids
+        if selected_node_ids is not None
+        else affected_node_ids(taxonomy, delta, rebuild_all=rebuild_all)
     )
     compatibility_pages = {
         page["category_id"]: page
@@ -1491,7 +1501,9 @@ def build_incremental_pages(
         ]
         if failed_children:
             result.pending[node.id] = "required child failed"
+            print(f"[wiki] pending {node.id}: required child failed")
             continue
+        print(f"[wiki] start {node.id}")
         try:
             context = build_merge_context(
                 node=node,
@@ -1516,7 +1528,15 @@ def build_incremental_pages(
                 digests[node.id] = child_digest_from_page(previous)
                 continue
             document, citations = generate_with_semantic_retry(
-                lambda retry_context: merge(retry_context),
+                lambda retry_context: (
+                    print(
+                        f"[wiki] retry {node.id}: "
+                        f"{retry_context['validation_feedback']}"
+                    )
+                    if "validation_feedback" in retry_context
+                    else None
+                )
+                or merge(retry_context),
                 lambda candidate: validate_merged_document(
                     candidate,
                     retry_context_to_validation_context(context),
@@ -1531,12 +1551,13 @@ def build_incremental_pages(
                 previous,
                 source_hash,
             )
-            result.pages.append(page)
-            digests[node.id] = child_digest_from_page(page)
             if on_page:
                 on_page(page)
+            result.pages.append(page)
+            digests[node.id] = child_digest_from_page(page)
         except Exception as exc:
             result.failures[node.id] = str(exc)
+            print(f"[wiki] failure {node.id}: {exc}")
     return result
 
 
@@ -1879,6 +1900,8 @@ def integrated_page_index_definition() -> dict[str, Any]:
                     "week": {"type": "keyword"},
                     "body_markdown": {"type": "text", "analyzer": "category_korean"},
                     "source_mail_ids": {"type": "keyword"},
+                    "agenda_ids": {"type": "keyword"},
+                    "source_doc_ids": {"type": "keyword"},
                 },
             },
             "citation_map": {
@@ -1886,6 +1909,7 @@ def integrated_page_index_definition() -> dict[str, Any]:
                 "properties": {
                     "mail_id": {"type": "keyword"},
                     "agenda_ids": {"type": "keyword"},
+                    "source_doc_ids": {"type": "keyword"},
                     "used_in_sections": {"type": "keyword"},
                     "category_paths": {"type": "keyword"},
                 },
@@ -1894,6 +1918,9 @@ def integrated_page_index_definition() -> dict[str, Any]:
             "confidence": {"type": "keyword"},
             "open_issue_count": {"type": "integer"},
             "resolved_issue_count": {"type": "integer"},
+            "issue_ids": {"type": "keyword"},
+            "schema_version": {"type": "integer"},
+            "generation_strategy": {"type": "keyword"},
             "contradictions": {"type": "text", "analyzer": "category_korean"},
             "generation_review_items": {
                 "type": "text",
@@ -1953,31 +1980,36 @@ def validate_source_documents(
         )
 
 
+def save_integrated_page(
+    client: OpenSearch,
+    page: dict[str, Any],
+) -> None:
+    validate_source_documents(client, [page])
+    canonical = {**page, "page_kind": "latest", "doc_type": "canonical"}
+    snapshot = {**page, "page_kind": "snapshot", "doc_type": "snapshot"}
+    helpers.bulk(
+        client,
+        [
+            {
+                "_index": PAGE_INDEX,
+                "_id": page["category_id"],
+                "_source": canonical,
+            },
+            {
+                "_index": PAGE_INDEX,
+                "_id": page["category_id"] + ":" + page["as_of_week"],
+                "_source": snapshot,
+            },
+        ],
+    )
+    client.indices.refresh(index=PAGE_INDEX)
+
+
 def save_integrated_pages(
     client: OpenSearch, pages: list[dict[str, Any]]
 ) -> int:
-    validate_source_documents(client, pages)
-    actions: list[dict[str, Any]] = []
     for page in pages:
-        canonical = {**page, "page_kind": "latest", "doc_type": "canonical"}
-        snapshot = {**page, "page_kind": "snapshot", "doc_type": "snapshot"}
-        actions.extend(
-            [
-                {
-                    "_index": PAGE_INDEX,
-                    "_id": page["category_id"],
-                    "_source": canonical,
-                },
-                {
-                    "_index": PAGE_INDEX,
-                    "_id": f"{page['category_id']}:{page['as_of_week']}",
-                    "_source": snapshot,
-                },
-            ]
-        )
-    if actions:
-        helpers.bulk(client, actions)
-        client.indices.refresh(index=PAGE_INDEX)
+        save_integrated_page(client, page)
     return len(pages)
 
 
@@ -1989,17 +2021,16 @@ def run(
     allow_dummy_taxonomy: bool = False,
     dry_run: bool = False,
     client: OpenSearch | None = None,
-    analyze: AnalysisFn | None = None,
-    draft: DraftFn | None = None,
+    merge: MergeFn | None = None,
+    issue_suggester: IssueSuggestionFn | None = None,
+    rebuild_all: bool = False,
 ) -> dict[str, int]:
     taxonomy = load_taxonomy(taxonomy_path)
     if taxonomy.is_dummy and not allow_dummy_taxonomy:
         raise RuntimeError(
             "Dummy taxonomy is active. Import real mapping or explicitly allow it."
         )
-    if (analyze is None) != (draft is None):
-        raise RuntimeError("analyze and draft must be provided together")
-    if analyze is None and not allow_external_llm:
+    if merge is None and not allow_external_llm:
         raise RuntimeError("External LLM use requires explicit allow_external_llm=True")
     if client is None:
         from embed_vectordb import get_opensearch_client
@@ -2029,35 +2060,74 @@ def run(
             f"requested weeks are absent from mail_agendas: {', '.join(missing_weeks)}"
         )
     if not requested_weeks:
-        return {"pages": 0, "failed": 0, "expected_pages": 0}
+        return {
+            "affected_pages": 0,
+            "saved_pages": 0,
+            "skipped_pages": 0,
+            "failed": 0,
+            "pending": 0,
+        }
     as_of_week = requested_weeks[-1]
-    expected_pages = len(category_nodes(taxonomy))
+    eligible_agendas = [
+        agenda
+        for agenda in agendas
+        if not agenda.get("week")
+        or _normalize_week(agenda["week"]) <= as_of_week
+    ]
+    delta = select_weekly_delta(eligible_agendas, as_of_week)
+    selected_ids = affected_node_ids(
+        taxonomy,
+        delta,
+        rebuild_all=rebuild_all,
+    )
 
     if not dry_run:
         ensure_index(client, PAGE_INDEX, integrated_page_index_definition())
+        ensure_index(client, ISSUE_INDEX, issue_index_definition())
 
-    if analyze is None or draft is None:
-        analyze, draft = build_llm_generators()
+    existing_issues = (
+        fetch_issue_ledger(client)
+        if client.indices.exists(index=ISSUE_INDEX)
+        else {}
+    )
+    issue_result = resolve_issue_ledger(
+        eligible_agendas if rebuild_all else delta,
+        existing_issues,
+        as_of_week=as_of_week,
+        suggest=issue_suggester,
+    )
+    if not dry_run:
+        save_issue_ledger(client, issue_result.issues)
+
+    if merge is None:
+        merge = build_page_merger()
 
     previous_pages = (
         fetch_previous_pages(client)
         if client.indices.exists(index=PAGE_INDEX)
         else {}
     )
-    result = build_integrated_pages(
+    def persist_page(page: dict[str, Any]) -> None:
+        save_integrated_page(client, page)
+        print(f"[wiki] saved {page['category_id']}")
+
+    result = build_incremental_pages(
         taxonomy,
-        agendas,
+        eligible_agendas,
         previous_pages,
+        issue_result,
         as_of_week=as_of_week,
-        analyze=analyze,
-        draft=draft,
+        merge=merge,
+        rebuild_all=rebuild_all,
+        on_page=None if dry_run else persist_page,
+        selected_node_ids=selected_ids,
     )
-    if not dry_run:
-        save_integrated_pages(client, result.pages)
     return {
-        "pages": len(result.pages),
+        "affected_pages": len(selected_ids),
+        "saved_pages": len(result.pages),
+        "skipped_pages": len(result.skipped),
         "failed": len(result.failures),
-        "expected_pages": expected_pages,
+        "pending": len(result.pending),
     }
 
 
@@ -2070,6 +2140,11 @@ def main() -> int:
     parser.add_argument("--allow-external-llm", action="store_true")
     parser.add_argument("--allow-dummy-taxonomy", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--rebuild-all",
+        action="store_true",
+        help="Ignore current fixed-section bodies and rebuild every taxonomy page",
+    )
     args = parser.parse_args()
     try:
         stats = run(
@@ -2078,6 +2153,7 @@ def main() -> int:
             allow_external_llm=args.allow_external_llm,
             allow_dummy_taxonomy=args.allow_dummy_taxonomy,
             dry_run=args.dry_run,
+            rebuild_all=args.rebuild_all,
         )
     except (RuntimeError, NarrativeValidationError) as exc:
         print(str(exc))

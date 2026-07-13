@@ -8,7 +8,7 @@ import pytest
 from langchain_core.exceptions import OutputParserException
 from pydantic import SecretStr, ValidationError
 
-from category_wiki_builder import CategoryNode, load_taxonomy
+from category_wiki_builder import PAGE_INDEX, CategoryNode, load_taxonomy
 from integrated_wiki_builder import (
     _compact_issue_timelines,
     BuildResult,
@@ -35,6 +35,7 @@ from integrated_wiki_builder import (
     merge_weekly_history,
     render_current_body,
     run,
+    save_integrated_page,
     save_integrated_pages,
     select_weekly_delta,
     validate_draft,
@@ -399,6 +400,17 @@ def test_integrated_mapping_adds_structured_fields_without_vectors():
     assert properties["doc_type"]["type"] == "keyword"
     assert properties["weekly_history"]["type"] == "nested"
     assert properties["citation_map"]["type"] == "nested"
+    assert "embedding" not in properties
+
+
+def test_incremental_mapping_adds_strategy_issue_and_source_fields():
+    properties = integrated_page_index_definition()["mappings"]["properties"]
+    assert properties["issue_ids"]["type"] == "keyword"
+    assert properties["schema_version"]["type"] == "integer"
+    assert properties["generation_strategy"]["type"] == "keyword"
+    assert properties["weekly_history"]["properties"]["agenda_ids"]["type"] == "keyword"
+    assert properties["weekly_history"]["properties"]["source_doc_ids"]["type"] == "keyword"
+    assert properties["citation_map"]["properties"]["source_doc_ids"]["type"] == "keyword"
     assert "embedding" not in properties
 
 
@@ -2448,6 +2460,29 @@ def test_save_writes_one_canonical_and_one_snapshot_per_success(monkeypatch):
     assert captured[1]["_source"]["doc_type"] == "snapshot"
 
 
+def test_save_integrated_page_writes_latest_and_same_week_snapshot(
+    monkeypatch,
+):
+    client = SourceMgetClient(found_ids=["chunk-28"])
+    actions = []
+    monkeypatch.setattr(
+        wiki_builder_module.helpers,
+        "bulk",
+        lambda actual_client, batch: actions.extend(batch),
+    )
+    page = complete_page_fixture("lotcd:4sa", "DRAM", "Spica", "4SA")
+
+    save_integrated_page(client, page)
+
+    assert [item["_id"] for item in actions] == [
+        "lotcd:4sa",
+        "lotcd:4sa:2026-W28",
+    ]
+    assert actions[0]["_source"]["page_kind"] == "latest"
+    assert actions[1]["_source"]["page_kind"] == "snapshot"
+    assert client.indices.refreshed == [PAGE_INDEX]
+
+
 def test_fetch_previous_pages_returns_only_latest_documents():
     client = SearchClient(
         [
@@ -2561,17 +2596,93 @@ def test_run_reads_existing_agendas_and_persists_successful_pages(
         weeks=["2026-W28"],
         allow_dummy_taxonomy=True,
         client=client,
-        analyze=analysis_with_expected_issues,
-        draft=lambda context, analysis: empty_draft(),
+        merge=valid_dynamic_document,
     )
 
-    assert stats == {"pages": 23, "failed": 0, "expected_pages": 23}
-    assert [index for index, _ in client.indices.created] == ["category_wiki_pages"]
+    assert stats == {
+        "affected_pages": 3,
+        "saved_pages": 3,
+        "skipped_pages": 0,
+        "failed": 0,
+        "pending": 0,
+    }
+    assert [index for index, _ in client.indices.created] == [
+        "category_wiki_pages",
+        "wiki_issue_ledger",
+    ]
     assert [index for index, _ in client.searches] == [
         "mail_agendas",
+        "wiki_issue_ledger",
         "category_wiki_pages",
     ]
-    assert len(captured) == 46
+    assert len(captured) == 7
+
+
+@pytest.mark.parametrize(
+    ("rebuild_all", "expected_agenda_ids"),
+    [
+        (False, ["agenda-29"]),
+        (True, ["agenda-28", "agenda-29"]),
+    ],
+)
+def test_run_resolves_weekly_delta_or_all_rebuild_evidence(
+    taxonomy,
+    monkeypatch,
+    rebuild_all,
+    expected_agenda_ids,
+):
+    agendas = [one_open_agenda(), w29_4sa_agenda()]
+    client = SourceMgetClient(found_ids=[])
+    client.indices = FakeIndices(existing=["mail_agendas"])
+    captured = {}
+    empty_ledger = IssueLedgerResult(
+        issues={},
+        agenda_to_issue={},
+        changed_issue_ids=[],
+        review_items=[],
+    )
+    monkeypatch.setattr(wiki_builder_module, "load_taxonomy", lambda path=None: taxonomy)
+    monkeypatch.setattr(wiki_builder_module, "fetch_agendas", lambda actual: agendas)
+    monkeypatch.setattr(
+        wiki_builder_module,
+        "fetch_issue_ledger",
+        lambda actual: {},
+        raising=False,
+    )
+
+    def resolve(selected, existing, **kwargs):
+        captured["agenda_ids"] = [item["agenda_id"] for item in selected]
+        return empty_ledger
+
+    monkeypatch.setattr(
+        wiki_builder_module,
+        "resolve_issue_ledger",
+        resolve,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        wiki_builder_module,
+        "save_issue_ledger",
+        lambda actual, issues: 0,
+        raising=False,
+    )
+    monkeypatch.setattr(wiki_builder_module, "fetch_previous_pages", lambda actual: {})
+    monkeypatch.setattr(
+        wiki_builder_module,
+        "build_incremental_pages",
+        lambda *args, **kwargs: BuildResult(),
+    )
+
+    stats = run(
+        weeks=["2026-W29"],
+        allow_dummy_taxonomy=True,
+        client=client,
+        merge=valid_dynamic_document,
+        rebuild_all=rebuild_all,
+    )
+
+    assert captured["agenda_ids"] == expected_agenda_ids
+    assert stats["affected_pages"] == (23 if rebuild_all else 3)
 
 
 def test_run_rejects_absent_requested_week_before_llm_or_persistence(
@@ -2609,11 +2720,11 @@ def test_run_rejects_absent_requested_week_before_llm_or_persistence(
     persistence_calls = []
     monkeypatch.setattr("integrated_wiki_builder.load_taxonomy", lambda path=None: taxonomy)
     monkeypatch.setattr(
-        "integrated_wiki_builder.build_llm_generators",
+        "integrated_wiki_builder.build_page_merger",
         lambda: generator_calls.append(True),
     )
     monkeypatch.setattr(
-        "integrated_wiki_builder.save_integrated_pages",
+        "integrated_wiki_builder.save_integrated_page",
         lambda *args: persistence_calls.append(True),
     )
 

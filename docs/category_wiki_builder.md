@@ -10,6 +10,7 @@ combined.txt
   → weekly_mail
   → mail_agendas (기존 agenda 추출 단계가 생성, vector 없음)
   → integrated_wiki_builder.py
+      → wiki_issue_ledger (이슈 상태 누적, vector 없음)
       → LOTCD 서술형 Wiki
       → Tech 서술형 Wiki
       → Domain 서술형 Wiki
@@ -29,6 +30,28 @@ python integrated_wiki_builder.py \
   --week 2026-W28 \
   --allow-external-llm
 ```
+
+최초 전환 시 전체 taxonomy 문서를 증분 스키마로 다시 생성한다:
+
+```bash
+python integrated_wiki_builder.py \
+  --rebuild-all \
+  --allow-external-llm
+```
+
+이후 주간 실행은 해당 주차에 새로 생성되거나 수정된 Agenda가 영향을 주는
+LOTCD → Tech → Domain 경로만 갱신한다:
+
+```bash
+python integrated_wiki_builder.py \
+  --week 2026-W29 \
+  --allow-external-llm
+```
+
+초기 전체 재생성은 기존 최신 문서의 고정 섹션 본문을 입력으로 사용하지 않고,
+요청 주차까지의 모든 Agenda 근거로 Issue Ledger를 구성한다. 주간 모드는 해당
+주차 delta만 Issue Ledger에 합치며 영향받지 않은 문서는 생성하거나 저장하지
+않는다. 두 모드 모두 입력 근거와 기존 상태를 OpenSearch에서만 읽는다.
 
 더미 taxonomy로 구조 검증:
 

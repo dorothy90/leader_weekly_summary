@@ -31,15 +31,12 @@ finally:
             sys.modules[module_name] = original
 
 
-@pytest.mark.parametrize(
-    "stats",
-    [
-        {"pages": 22, "failed": 1, "expected_pages": 23},
-        {"pages": 22, "failed": 0, "expected_pages": 23},
-    ],
-)
-def test_pipeline_rejects_failed_or_incomplete_integrated_wiki(
-    stats, monkeypatch, tmp_path
+def configure_pipeline(
+    monkeypatch,
+    tmp_path,
+    stats,
+    *,
+    complete_downstream=False,
 ):
     monkeypatch.setenv("ENABLE_CATEGORY_WIKI", "true")
     monkeypatch.setenv("KNOWLEDGE_LLM_DATA_POLICY_ACK", "true")
@@ -77,6 +74,70 @@ def test_pipeline_rejects_failed_or_incomplete_integrated_wiki(
     )
     monkeypatch.setattr(integrated_wiki_builder, "run", lambda **kwargs: stats)
     monkeypatch.setattr(run_pipeline, "OVERVIEW_DIR", tmp_path)
+    if complete_downstream:
+        markdown = tmp_path / "2026-W28_전체요약.md"
+        monkeypatch.setattr(
+            run_pipeline.wiki_export,
+            "run_export",
+            lambda **kwargs: markdown.write_text("# summary", encoding="utf-8"),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            run_pipeline.generate_outlook_report,
+            "convert",
+            lambda source, target: target.write_text("html", encoding="utf-8"),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            run_pipeline.send_report,
+            "send_report",
+            lambda *args: None,
+            raising=False,
+        )
+
+
+def test_pipeline_accepts_three_page_incremental_update(monkeypatch, tmp_path):
+    configure_pipeline(
+        monkeypatch,
+        tmp_path,
+        {
+            "affected_pages": 3,
+            "saved_pages": 3,
+            "skipped_pages": 0,
+            "failed": 0,
+            "pending": 0,
+        },
+        complete_downstream=True,
+    )
+
+    assert run_pipeline.main() == 0
+
+
+@pytest.mark.parametrize(
+    "stats",
+    [
+        {
+            "affected_pages": 3,
+            "saved_pages": 2,
+            "skipped_pages": 0,
+            "failed": 1,
+            "pending": 0,
+        },
+        {
+            "affected_pages": 3,
+            "saved_pages": 1,
+            "skipped_pages": 0,
+            "failed": 1,
+            "pending": 1,
+        },
+    ],
+)
+def test_pipeline_rejects_failed_or_pending_incremental_update(
+    stats,
+    monkeypatch,
+    tmp_path,
+):
+    configure_pipeline(monkeypatch, tmp_path, stats)
 
     with pytest.raises(RuntimeError, match="통합 Wiki 생성 실패"):
         run_pipeline.main()

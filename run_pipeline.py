@@ -99,14 +99,11 @@ def main() -> int:
             allow_dummy_taxonomy=False,
             client=embed_vectordb.get_opensearch_client(),
         )
-        if (
-            category_stats["failed"] > 0
-            or category_stats["pages"] != category_stats["expected_pages"]
-        ):
+        if category_stats["failed"] > 0 or category_stats["pending"] > 0:
             raise RuntimeError(
                 "통합 Wiki 생성 실패: "
                 f"{category_stats['failed']}개 실패, "
-                f"{category_stats['pages']}/{category_stats['expected_pages']}개 생성"
+                f"{category_stats['pending']}개 상위 문서 대기"
             )
         step += 1
 
