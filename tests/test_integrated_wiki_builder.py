@@ -820,6 +820,28 @@ def test_analysis_semantic_retry_supplies_validator_feedback(taxonomy):
     assert "missing issue decision" in lotcd_contexts[1]["validation_feedback"]
 
 
+def test_analysis_context_exposes_expected_issue_statuses(taxonomy):
+    contexts = {}
+
+    def analyze(context):
+        contexts[context["node"]["id"]] = context
+        return analysis_with_expected_issues(context)
+
+    result = build_integrated_pages(
+        single_lotcd_taxonomy(taxonomy),
+        [one_open_agenda()],
+        {},
+        as_of_week="2026-W28",
+        analyze=analyze,
+        draft=lambda context, analysis: empty_draft(),
+    )
+
+    assert not result.failures
+    assert contexts["lotcd:4sa"]["expected_issue_statuses"] == {
+        "issue-open": "ongoing"
+    }
+
+
 def test_draft_semantic_retry_supplies_validator_feedback(taxonomy):
     contexts = []
 

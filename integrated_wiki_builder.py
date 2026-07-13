@@ -131,6 +131,7 @@ ANALYSIS_SYSTEM_PROMPT = """당신은 반도체 수율 Wiki 편집자입니다.
 모순, 검토 항목, 문서 목차를 구조화하십시오. mail_id와 agenda_id가 없는 주장은
 SupportedClaim으로 만들지 마십시오. 하위 digest는 원본 mail_id가 추적되는 주장만 사용하십시오.
 issue_timelines와 child_digests의 모든 이슈마다 정확히 하나의 issue_decision을 만드십시오.
+각 issue_decision의 status는 expected_issue_statuses에 지정된 값을 정확히 따르십시오.
 validation_feedback이 있으면 기존의 유효한 근거를 버리지 말고 해당 오류를 수정하십시오."""
 
 DRAFT_SYSTEM_PROMPT = """당신은 통합 서술형 반도체 수율 Wiki 작성자입니다.
@@ -884,23 +885,24 @@ def build_integrated_pages(
                 validation_by_id[agenda_id]
                 for agenda_id in sorted(validation_by_id)
             ]
-            context = {
-                "node": asdict(node),
-                "as_of_week": as_of_week,
-                "allowed_agendas": allowed_agendas,
-                "issue_timelines": compact_timelines,
-                "previous_current_body_markdown": previous.get(
-                    "current_body_markdown", ""
-                ),
-                "recent_history": _recent_history(previous),
-                "child_digests": [item.model_dump() for item in child_digests],
-            }
             available_reopened_evidence = _reopened_evidence_ids(
                 timeline_agendas, child_digests
             )
             expected_issue_statuses = _expected_issue_statuses(
                 compact_timelines, child_digests
             )
+            context = {
+                "node": asdict(node),
+                "as_of_week": as_of_week,
+                "allowed_agendas": allowed_agendas,
+                "issue_timelines": compact_timelines,
+                "expected_issue_statuses": expected_issue_statuses,
+                "previous_current_body_markdown": previous.get(
+                    "current_body_markdown", ""
+                ),
+                "recent_history": _recent_history(previous),
+                "child_digests": [item.model_dump() for item in child_digests],
+            }
 
             def validate_analysis(
                 candidate: PageAnalysis,
