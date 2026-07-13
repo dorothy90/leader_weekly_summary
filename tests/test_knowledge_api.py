@@ -65,41 +65,6 @@ def canonical_page_fixture() -> dict:
     }
 
 
-def agenda_detail_fixture(
-    agenda_id: str = "agenda-1", mail_id: str = "mail-1"
-) -> dict:
-    return {
-        "agenda": {
-            "id": agenda_id,
-            "mail_id": mail_id,
-            "source_quote": "4SA 수율 하락",
-            "summary": "4SA 수율 하락",
-            "scope": "lotcd",
-            "target_paths": [
-                {"domain": "DRAM", "tech": "Spica", "lotcd": "4SA"}
-            ],
-            "candidate_paths": [],
-            "topic": "yield",
-            "state": "open",
-            "confidence": 0.99,
-            "review_required": False,
-            "subject": "Spica 주간 수율",
-            "sender_team": "Spica수율",
-            "received_at": "2026-07-06T00:00:00Z",
-            "review_status": "confirmed",
-        },
-        "mail": {
-            "id": mail_id,
-            "subject": "Spica 주간 수율",
-            "sender_team": "Spica수율",
-            "sender": "unknown",
-            "received_at": "2026-07-06T00:00:00Z",
-            "body": "4SA 수율 하락",
-            "reply_to": None,
-        },
-    }
-
-
 def test_fixture_documents_are_valid_and_complete():
     store = get_store()
 
@@ -318,24 +283,51 @@ def test_wiki_page_list_hydrates_legacy_summary_fields(monkeypatch):
     }
 
 
-def test_wiki_citation_returns_only_page_mapped_agendas(monkeypatch):
+def test_wiki_citation_loads_mapped_agendas_and_raw_chunks(monkeypatch):
     page = canonical_page_fixture()
     page["citation_map"] = [
         {
             "mail_id": "mail-1",
             "agenda_ids": ["agenda-1"],
-            "used_in_sections": ["원인과 영향 관계"],
+            "source_doc_ids": ["chunk-1", "chunk-2"],
+            "used_in_sections": ["Chamber A 원인"],
             "category_paths": ["dram/spica/4sa"],
         }
     ]
-    monkeypatch.setattr(knowledge_api, "_get_category_wiki_page", lambda _id: page)
-    captured = []
-
-    def get_agenda(agenda_id):
-        captured.append(agenda_id)
-        return agenda_detail_fixture(agenda_id)
-
-    monkeypatch.setattr(knowledge_api, "_get_opensearch_agenda", get_agenda)
+    monkeypatch.setattr(knowledge_api, "_get_category_wiki_page", lambda category_id: page)
+    monkeypatch.setattr(
+        knowledge_api,
+        "_get_opensearch_agendas",
+        lambda agenda_ids: [
+            {
+                "agenda_id": "agenda-1",
+                "mail_id": "mail-1",
+                "source_quote": "4SA 수율 하락",
+                "summary": "4SA 수율 하락",
+                "scope": "lotcd",
+                "target_paths": [
+                    {"domain": "DRAM", "tech": "Spica", "lotcd": "4SA"}
+                ],
+                "candidate_paths": [],
+                "topic": "yield",
+                "state": "open",
+                "confidence": 0.99,
+                "review_status": "confirmed",
+                "subject": "Spica 주간 수율",
+                "sender_team": "Spica수율",
+                "received_at": "2026-07-06T00:00:00Z",
+                "source_doc_ids": ["chunk-1", "chunk-2"],
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        knowledge_api,
+        "_get_weekly_mail_parts",
+        lambda source_ids: [
+            {"_id": "chunk-1", "_source": {"text": "4SA 수율 하락.", "part_index": 0}},
+            {"_id": "chunk-2", "_source": {"text": "chamber A 편차 확인.", "part_index": 1}},
+        ],
+    )
 
     response = request(
         "GET",
@@ -344,10 +336,9 @@ def test_wiki_citation_returns_only_page_mapped_agendas(monkeypatch):
     )
 
     assert response.status_code == 200
-    assert response.json()["mail"]["id"] == "mail-1"
+    assert response.json()["mail"]["body"] == "4SA 수율 하락.\nchamber A 편차 확인."
     assert [item["id"] for item in response.json()["agendas"]] == ["agenda-1"]
-    assert response.json()["used_in_sections"] == ["원인과 영향 관계"]
-    assert captured == ["agenda-1"]
+    assert response.json()["used_in_sections"] == ["Chamber A 원인"]
 
 
 def test_wiki_citation_returns_not_found_for_unmapped_mail(monkeypatch):
@@ -365,26 +356,18 @@ def test_wiki_citation_returns_not_found_for_unmapped_mail(monkeypatch):
     assert response.json() == {"detail": "Citation is not mapped on this wiki page"}
 
 
-@pytest.mark.parametrize(
-    ("detail_mail_id", "agenda_mail_id"),
-    [("mail-2", "mail-1"), ("mail-1", "mail-2")],
-)
-def test_wiki_citation_rejects_either_mail_identity_disagreement(
-    monkeypatch, detail_mail_id, agenda_mail_id
-):
+def test_wiki_citation_rejects_missing_raw_source(monkeypatch):
     page = canonical_page_fixture()
     page["citation_map"] = [
         {
             "mail_id": "mail-1",
             "agenda_ids": ["agenda-1"],
-            "used_in_sections": ["원인과 영향 관계"],
+            "source_doc_ids": [],
+            "used_in_sections": ["상태"],
             "category_paths": ["dram/spica/4sa"],
         }
     ]
-    monkeypatch.setattr(knowledge_api, "_get_category_wiki_page", lambda _id: page)
-    detail = agenda_detail_fixture("agenda-1", mail_id=detail_mail_id)
-    detail["agenda"]["mail_id"] = agenda_mail_id
-    monkeypatch.setattr(knowledge_api, "_get_opensearch_agenda", lambda agenda_id: detail)
+    monkeypatch.setattr(knowledge_api, "_get_category_wiki_page", lambda category_id: page)
 
     response = request(
         "GET",
@@ -393,6 +376,7 @@ def test_wiki_citation_rejects_either_mail_identity_disagreement(
     )
 
     assert response.status_code == 409
+    assert response.json()["detail"] == "Citation has no weekly_mail source documents"
 
 
 def test_agenda_detail_falls_back_to_opensearch_for_generated_wiki_source(monkeypatch):

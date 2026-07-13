@@ -11,7 +11,7 @@ import re
 from datetime import UTC, date, datetime
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -236,6 +236,47 @@ def _get_opensearch_agenda(agenda_id: str) -> AgendaDetailResponse:
     return AgendaDetailResponse(agenda=view, mail=mail)
 
 
+def _get_opensearch_agendas(agenda_ids: list[str]) -> list[dict[str, Any]]:
+    if not agenda_ids:
+        return []
+    from category_wiki_builder import AGENDA_INDEX
+    from embed_vectordb import get_opensearch_client
+
+    response = get_opensearch_client().mget(
+        index=AGENDA_INDEX, body={"ids": agenda_ids}
+    )
+    found = [
+        {"_id": item["_id"], **item["_source"]}
+        for item in response.get("docs", [])
+        if item.get("found")
+    ]
+    if len(found) != len(set(agenda_ids)):
+        raise HTTPException(
+            status_code=409, detail="Citation Agenda evidence is incomplete"
+        )
+    return found
+
+
+def _get_weekly_mail_parts(source_doc_ids: list[str]) -> list[dict[str, Any]]:
+    if not source_doc_ids:
+        raise HTTPException(
+            status_code=409,
+            detail="Citation has no weekly_mail source documents",
+        )
+    from category_wiki_builder import SOURCE_INDEX
+    from embed_vectordb import get_opensearch_client
+
+    response = get_opensearch_client().mget(
+        index=SOURCE_INDEX, body={"ids": source_doc_ids}
+    )
+    found = [item for item in response.get("docs", []) if item.get("found")]
+    if len(found) != len(set(source_doc_ids)):
+        raise HTTPException(
+            status_code=409, detail="Citation raw mail evidence is incomplete"
+        )
+    return sorted(found, key=lambda item: item["_source"].get("part_index", 0))
+
+
 @lru_cache(maxsize=1)
 def get_store() -> SQLiteKnowledgeStore:
     db_path = Path(os.getenv("KNOWLEDGE_DB_PATH", str(DEFAULT_DB_PATH)))
@@ -356,20 +397,58 @@ def get_wiki_citation(mail_id: str, category_id: str) -> WikiCitationDetail:
             status_code=404, detail="Citation is not mapped on this wiki page"
         )
 
-    details = [
-        AgendaDetailResponse.model_validate(_get_opensearch_agenda(agenda_id))
-        for agenda_id in citation.agenda_ids
-    ]
-    if not details or any(
-        detail.mail.id != mail_id or detail.agenda.mail_id != mail_id
-        for detail in details
+    source_parts = _get_weekly_mail_parts(citation.source_doc_ids)
+    agenda_sources = _get_opensearch_agendas(citation.agenda_ids)
+    if not agenda_sources or any(
+        str(source.get("mail_id")) != mail_id for source in agenda_sources
     ):
         raise HTTPException(
             status_code=409, detail="Mapped agendas disagree on mail identity"
         )
+    agendas = []
+    for source in agenda_sources:
+        review_status = str(source.get("review_status", "pending"))
+        received_at = source.get("received_at") or _week_received_at(
+            str(source.get("week", "unknown"))
+        )
+        agendas.append(
+            AgendaView(
+                id=str(source.get("agenda_id") or source["_id"]),
+                mail_id=str(source["mail_id"]),
+                source_quote=str(source.get("source_quote", "")),
+                summary=str(source.get("summary", "")),
+                scope=str(source.get("scope", "unknown")),
+                target_paths=[
+                    CategoryPath.model_validate(path)
+                    for path in source.get("target_paths", [])
+                ],
+                candidate_paths=[
+                    CategoryPath.model_validate(path)
+                    for path in source.get("candidate_paths", [])
+                ],
+                topic=str(source.get("topic", "unknown")),
+                state=str(source.get("state", "unknown")),
+                confidence=float(source.get("confidence", 0)),
+                review_required=review_status != "confirmed",
+                subject=str(source.get("subject", "")),
+                sender_team=str(source.get("sender_team", "unknown")),
+                received_at=received_at,
+                review_status=review_status,
+            )
+        )
+    first_agenda = agendas[0]
+    mail = Mail(
+        id=mail_id,
+        subject=first_agenda.subject,
+        sender_team=first_agenda.sender_team,
+        sender="unknown",
+        received_at=first_agenda.received_at,
+        body="\n".join(str(part["_source"].get("text", "")) for part in source_parts),
+        reply_to=None,
+    )
     return WikiCitationDetail(
-        mail=details[0].mail,
-        agendas=[detail.agenda for detail in details],
+        mail=mail,
+        agendas=agendas,
         used_in_sections=citation.used_in_sections,
     )
 
