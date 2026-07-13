@@ -38,6 +38,18 @@ TERMINAL_STATES = {
     "resolved",
     "stable",
 }
+AGENDA_HASH_FIELDS = (
+    "mail_id",
+    "week",
+    "summary",
+    "source_quote",
+    "state",
+    "topic",
+    "target_paths",
+    "candidate_paths",
+    "source_doc_ids",
+    "review_status",
+)
 
 
 @dataclass(frozen=True)
@@ -145,6 +157,10 @@ def agenda_index_definition() -> dict[str, Any]:
                     },
                 },
                 "created_at": {"type": "date"},
+                "updated_at": {"type": "date"},
+                "updated_week": {"type": "keyword"},
+                "content_hash": {"type": "keyword"},
+                "issue_id_source": {"type": "keyword"},
             },
         },
     }
@@ -313,6 +329,13 @@ def _week_datetime(week: str) -> datetime:
     )
 
 
+def _normalize_week(week: str) -> str:
+    match = re.fullmatch(r"(\d{4})-W?(\d{1,2})", week)
+    if not match:
+        return week
+    return f"{match.group(1)}-W{int(match.group(2)):02d}"
+
+
 def _path_token(path: CategoryPath | dict[str, Any]) -> str:
     if isinstance(path, CategoryPath):
         domain, tech, lotcd = path.domain, path.tech, path.lotcd
@@ -325,6 +348,54 @@ def derive_issue_id(paths: list[CategoryPath], topic: str) -> str:
     path_key = "|".join(sorted(_path_token(path) for path in paths)) or "unclassified"
     digest = hashlib.sha256(f"{path_key}|{topic.casefold()}".encode()).hexdigest()[:12]
     return f"issue:{digest}"
+
+
+def agenda_content_hash(document: dict[str, Any]) -> str:
+    payload = {field: document.get(field) for field in AGENDA_HASH_FIELDS}
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def apply_agenda_version(
+    document: dict[str, Any],
+    previous: dict[str, Any] | None,
+    *,
+    now: datetime,
+    observed_week: str | None = None,
+) -> dict[str, Any]:
+    current = dict(document)
+    current_hash = agenda_content_hash(current)
+    previous_hash = (
+        str(previous.get("content_hash") or agenda_content_hash(previous))
+        if previous
+        else None
+    )
+    if previous and current_hash == previous_hash:
+        return {
+            **current,
+            "created_at": previous["created_at"],
+            "updated_at": previous["updated_at"],
+            "updated_week": previous["updated_week"],
+            "content_hash": previous_hash,
+        }
+    timestamp = now.isoformat()
+    change_week = str(
+        observed_week
+        or current.get("updated_week")
+        or current["week"]
+    )
+    return {
+        **current,
+        "created_at": previous.get("created_at", timestamp) if previous else timestamp,
+        "updated_at": timestamp,
+        "updated_week": change_week,
+        "content_hash": current_hash,
+    }
 
 
 def normalize_agenda_document(document: dict[str, Any]) -> dict[str, Any]:
@@ -378,6 +449,7 @@ def build_agenda_documents(
                 "topic": agenda.topic,
                 "state": agenda.state,
                 "issue_id": derive_issue_id(agenda.target_paths, agenda.topic),
+                "issue_id_source": "derived",
                 "confidence": agenda.confidence,
                 "review_status": "pending" if agenda.review_required else "confirmed",
                 "domains": sorted({path.domain for path in agenda.target_paths}),
@@ -395,19 +467,40 @@ def replace_mail_agendas(
     client: OpenSearch,
     mail_id: str,
     documents: list[dict[str, Any]],
+    *,
+    observed_week: str | None = None,
 ) -> None:
+    agenda_ids = [str(document["agenda_id"]) for document in documents]
+    previous_by_id: dict[str, dict[str, Any]] = {}
+    if agenda_ids:
+        response = client.mget(index=AGENDA_INDEX, body={"ids": agenda_ids})
+        previous_by_id = {
+            str(hit["_id"]): hit["_source"]
+            for hit in response.get("docs", [])
+            if hit.get("found")
+        }
+    now = datetime.now(UTC)
+    versioned_documents = [
+        apply_agenda_version(
+            document,
+            previous_by_id.get(str(document["agenda_id"])),
+            now=now,
+            observed_week=observed_week,
+        )
+        for document in documents
+    ]
     client.delete_by_query(
         index=AGENDA_INDEX,
         body={"query": {"term": {"mail_id": mail_id}}},
         conflicts="proceed",
         refresh=False,
     )
-    if documents:
+    if versioned_documents:
         helpers.bulk(
             client,
             [
                 {"_index": AGENDA_INDEX, "_id": doc["agenda_id"], "_source": doc}
-                for doc in documents
+                for doc in versioned_documents
             ],
         )
 
@@ -833,6 +926,7 @@ def run(
     extracted_count = 0
     mail_count = 0
     dry_run_documents: list[dict[str, Any]] = []
+    observed_week = max((_normalize_week(week) for week in weeks or []), default=None)
     if extract_agendas:
         splitter = build_splitter(taxonomy)
         resolver = CanonicalResolver(taxonomy)
@@ -849,7 +943,12 @@ def run(
             extraction = extract_mail(mail, splitter, resolver)
             documents = build_agenda_documents(source_mail, extraction)
             if not dry_run:
-                replace_mail_agendas(client, source_mail.id, documents)
+                replace_mail_agendas(
+                    client,
+                    source_mail.id,
+                    documents,
+                    observed_week=observed_week,
+                )
             else:
                 dry_run_documents.extend(documents)
             extracted_count += len(documents)

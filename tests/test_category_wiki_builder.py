@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from category_wiki_builder import (
+    apply_agenda_version,
     agenda_index_definition,
     build_page_documents,
     category_nodes,
@@ -10,6 +13,97 @@ from category_wiki_builder import (
     page_index_definition,
 )
 from knowledge_models import TaxonomyDocument
+
+
+def test_apply_agenda_version_marks_new_agenda():
+    current = {
+        "agenda_id": "agenda-29",
+        "mail_id": "2026-W29:Spica:mail-1",
+        "week": "2026-W29",
+        "summary": "4SA chamber A 원복",
+        "source_quote": "조건을 원복했습니다.",
+        "state": "in_progress",
+        "topic": "action",
+        "target_paths": [{"domain": "DRAM", "tech": "Spica", "lotcd": "4SA"}],
+        "source_doc_ids": ["chunk-29"],
+    }
+    versioned = apply_agenda_version(
+        current,
+        None,
+        now=datetime(2026, 7, 14, tzinfo=UTC),
+    )
+
+    assert versioned["created_at"] == "2026-07-14T00:00:00+00:00"
+    assert versioned["updated_at"] == "2026-07-14T00:00:00+00:00"
+    assert versioned["updated_week"] == "2026-W29"
+    assert len(versioned["content_hash"]) == 64
+
+
+def test_apply_agenda_version_preserves_unchanged_metadata():
+    previous = {
+        "agenda_id": "agenda-29",
+        "mail_id": "2026-W29:Spica:mail-1",
+        "week": "2026-W29",
+        "summary": "4SA chamber A 원복",
+        "source_quote": "조건을 원복했습니다.",
+        "state": "in_progress",
+        "topic": "action",
+        "target_paths": [{"domain": "DRAM", "tech": "Spica", "lotcd": "4SA"}],
+        "source_doc_ids": ["chunk-29"],
+        "created_at": "2026-07-13T00:00:00+00:00",
+        "updated_at": "2026-07-13T00:00:00+00:00",
+        "updated_week": "2026-W29",
+    }
+    first = apply_agenda_version(
+        previous,
+        None,
+        now=datetime(2026, 7, 13, tzinfo=UTC),
+    )
+    unchanged = apply_agenda_version(
+        previous,
+        first,
+        now=datetime(2026, 7, 14, tzinfo=UTC),
+    )
+
+    assert unchanged["created_at"] == first["created_at"]
+    assert unchanged["updated_at"] == first["updated_at"]
+    assert unchanged["updated_week"] == first["updated_week"]
+    assert unchanged["content_hash"] == first["content_hash"]
+
+
+def test_apply_agenda_version_marks_correction_in_requested_week():
+    previous = apply_agenda_version(
+        {
+            "agenda_id": "agenda-28",
+            "mail_id": "2026-W28:Spica:mail-1",
+            "week": "2026-W28",
+            "summary": "4SA 원인 분석",
+            "source_quote": "원인 분석 중입니다.",
+            "state": "investigating",
+            "topic": "yield",
+            "target_paths": [{"domain": "DRAM", "tech": "Spica", "lotcd": "4SA"}],
+            "source_doc_ids": ["chunk-28"],
+        },
+        None,
+        now=datetime(2026, 7, 7, tzinfo=UTC),
+    )
+    corrected = {
+        **previous,
+        "summary": "4SA chamber A 원인 확인",
+        "state": "confirmed",
+        "updated_week": "2026-W29",
+    }
+
+    versioned = apply_agenda_version(
+        corrected,
+        previous,
+        now=datetime(2026, 7, 14, tzinfo=UTC),
+    )
+
+    assert versioned["created_at"] == previous["created_at"]
+    assert versioned["updated_at"] == "2026-07-14T00:00:00+00:00"
+    assert versioned["updated_week"] == "2026-W29"
+    assert versioned["content_hash"] != previous["content_hash"]
 
 
 def taxonomy() -> TaxonomyDocument:
