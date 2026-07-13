@@ -199,11 +199,14 @@ class WeeklyHistoryRecord(StrictModel):
     week: str
     body_markdown: str
     source_mail_ids: list[str] = Field(default_factory=list)
+    agenda_ids: list[str] = Field(default_factory=list)
+    source_doc_ids: list[str] = Field(default_factory=list)
 
 
 class WikiCitationRecord(StrictModel):
     mail_id: str
     agenda_ids: list[str] = Field(default_factory=list)
+    source_doc_ids: list[str] = Field(default_factory=list)
     used_in_sections: list[str] = Field(default_factory=list)
     category_paths: list[str] = Field(default_factory=list)
 
@@ -229,6 +232,7 @@ class CategoryWikiPage(StrictModel):
     child_page_ids: list[str] = Field(default_factory=list)
     confidence: Literal["low", "medium", "high"] = "low"
     agenda_count: int
+    issue_ids: list[str] = Field(default_factory=list)
     open_issue_ids: list[str] = Field(default_factory=list)
     resolved_issue_ids: list[str] = Field(default_factory=list)
     open_issue_count: int = 0
@@ -240,6 +244,10 @@ class CategoryWikiPage(StrictModel):
     source_doc_ids: list[str] = Field(default_factory=list)
     source_hash: str
     taxonomy_version: int
+    schema_version: int = 1
+    generation_strategy: Literal[
+        "legacy", "fixed_sections", "incremental_merge"
+    ] = "legacy"
     generated_at: datetime
     updated_at: datetime | None = None
 

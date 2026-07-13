@@ -13,6 +13,8 @@ from integrated_wiki_builder import (
     BuildResult,
     ChildDigest,
     IssueDecision,
+    MergeValidationContext,
+    MergedWikiDocument,
     NarrativeDraft,
     NarrativeValidationError,
     PageAnalysis,
@@ -33,6 +35,7 @@ from integrated_wiki_builder import (
     save_integrated_pages,
     validate_draft,
     validate_issue_decisions,
+    validate_merged_document,
     validate_stage1_evidence,
     validate_source_documents,
 )
@@ -179,18 +182,68 @@ def test_supported_claim_requires_mail_and_agenda_evidence():
         SupportedClaim(text="4SA 수율이 하락했다", mail_ids=[], agenda_ids=[])
 
 
-def test_narrative_draft_has_the_approved_sections():
-    draft = NarrativeDraft(
-        overview="개요 [mail:mail-1]",
-        current_status="현재 상태 [mail:mail-1]",
-        cause_and_impact="원인 분석 [mail:mail-1]",
-        actions_and_effects="조치 결과 [mail:mail-1]",
-        pending_and_decisions="후속 확인 [mail:mail-1]",
-        accumulated_knowledge="누적 패턴 [mail:mail-1]",
-        weekly_update="이번 주 변경 [mail:mail-1]",
+def test_dynamic_document_accepts_content_specific_headings():
+    document = MergedWikiDocument(
+        title="4SA",
+        current_body_markdown=(
+            "## Chamber A 편차와 수율 하락\n\n"
+            "수율 하락 원인은 chamber A 편차로 확인됐다. [mail:mail-28]\n\n"
+            "## 조건 원복 후 검증\n\n"
+            "조건 원복 후 재측정 중이다. [mail:mail-29]"
+        ),
+        used_claim_ids=["claim-root-cause", "claim-action"],
+        used_issue_ids=["issue-4sa-yield"],
+        weekly_delta="원인 확인과 조건 원복이 진행됐다. [mail:mail-28][mail:mail-29]",
         confidence="high",
+        review_items=[],
     )
-    assert draft.weekly_update.startswith("이번 주")
+    context = MergeValidationContext(
+        evidence_by_mail={
+            "mail-28": ["agenda-28"],
+            "mail-29": ["agenda-29"],
+        },
+        source_docs_by_mail={
+            "mail-28": ["chunk-28"],
+            "mail-29": ["chunk-29"],
+        },
+        required_claim_ids={"claim-root-cause", "claim-action"},
+        required_issue_ids={"issue-4sa-yield"},
+        resolved_issue_ids=set(),
+        reopened_issue_ids=set(),
+        stale_claim_texts=[],
+    )
+
+    citations = validate_merged_document(document, context)
+
+    assert [item.mail_id for item in citations] == ["mail-28", "mail-29"]
+    assert {item for citation in citations for item in citation.source_doc_ids} == {
+        "chunk-28",
+        "chunk-29",
+    }
+
+
+def test_dynamic_document_rejects_missing_claim_coverage():
+    document = MergedWikiDocument(
+        title="4SA",
+        current_body_markdown="## 상태\n\n조건 원복 중이다. [mail:mail-29]",
+        used_claim_ids=["claim-action"],
+        used_issue_ids=["issue-4sa-yield"],
+        weekly_delta="조건 원복 중이다. [mail:mail-29]",
+        confidence="medium",
+        review_items=[],
+    )
+    context = MergeValidationContext(
+        evidence_by_mail={"mail-29": ["agenda-29"]},
+        source_docs_by_mail={"mail-29": ["chunk-29"]},
+        required_claim_ids={"claim-root-cause", "claim-action"},
+        required_issue_ids={"issue-4sa-yield"},
+        resolved_issue_ids=set(),
+        reopened_issue_ids=set(),
+        stale_claim_texts=[],
+    )
+
+    with pytest.raises(NarrativeValidationError, match="missing claim coverage"):
+        validate_merged_document(document, context)
 
 
 def test_integrated_mapping_adds_structured_fields_without_vectors():
@@ -607,23 +660,17 @@ def test_legacy_tech_and_domain_bootstrap_descendant_history_without_prompt_leak
         ]
 
 
-def test_render_current_body_uses_only_current_narrative_sections():
-    draft = NarrativeDraft(
-        overview=" overview ",
-        current_status="status",
-        cause_and_impact="cause",
-        actions_and_effects="actions",
-        pending_and_decisions="pending",
-        accumulated_knowledge="knowledge",
-        weekly_update="separate history entry",
+def test_render_current_body_preserves_dynamic_document_markdown():
+    document = MergedWikiDocument(
+        title="4SA",
+        current_body_markdown="## 조건 원복 후 검증\n\n재측정 중이다.",
+        weekly_delta="separate history entry",
         confidence="high",
     )
 
-    rendered = render_current_body(draft)
+    rendered = render_current_body(document)
 
-    assert rendered.startswith("## 개요\n\noverview")
-    assert "## 누적 지식\n\nknowledge" in rendered
-    assert "separate history entry" not in rendered
+    assert rendered == "## 조건 원복 후 검증\n\n재측정 중이다."
 
 
 def test_structured_invocation_retries_once_after_validation_error():
@@ -1463,7 +1510,14 @@ def test_child_digest_contains_only_traceable_analysis_and_draft_summary():
     )
 
     assert digest.model_dump() == {
+        "category_id": "",
         "canonical_id": "dram/spica/4sa",
+        "current_body_markdown": "",
+        "weekly_delta": "",
+        "used_claim_ids": [],
+        "used_issue_ids": [],
+        "citation_map": [],
+        "source_hash": "",
         "as_of_week": "2026-W28",
         "summary": "요약 [mail:mail-1]",
         "claims": [claim.model_dump()],

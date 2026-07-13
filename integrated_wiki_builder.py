@@ -89,6 +89,27 @@ class PageAnalysis(WikiModel):
     outline: list[str]
 
 
+class MergedWikiDocument(WikiModel):
+    title: str
+    current_body_markdown: str
+    used_claim_ids: list[str] = Field(default_factory=list)
+    used_issue_ids: list[str] = Field(default_factory=list)
+    weekly_delta: str
+    confidence: Literal["low", "medium", "high"]
+    review_items: list[str] = Field(default_factory=list)
+
+
+class MergeValidationContext(WikiModel):
+    evidence_by_mail: dict[str, list[str]]
+    source_docs_by_mail: dict[str, list[str]]
+    required_claim_ids: set[str]
+    required_issue_ids: set[str]
+    resolved_issue_ids: set[str]
+    reopened_issue_ids: set[str]
+    stale_claim_texts: list[str]
+
+
+# Kept until the incremental builder switches to MergedWikiDocument in Task 5.
 class NarrativeDraft(WikiModel):
     overview: str
     current_status: str
@@ -104,21 +125,32 @@ class WeeklyHistoryEntry(WikiModel):
     week: str
     body_markdown: str
     source_mail_ids: list[str] = Field(default_factory=list)
+    agenda_ids: list[str] = Field(default_factory=list)
+    source_doc_ids: list[str] = Field(default_factory=list)
 
 
 class CitationMapEntry(WikiModel):
     mail_id: str
     agenda_ids: list[str]
+    source_doc_ids: list[str] = Field(default_factory=list)
     used_in_sections: list[str]
     category_paths: list[str]
 
 
 class ChildDigest(WikiModel):
+    category_id: str = ""
     canonical_id: str
-    as_of_week: str
-    summary: str
-    claims: list[SupportedClaim]
-    issues: list[IssueDecision]
+    current_body_markdown: str = ""
+    weekly_delta: str = ""
+    used_claim_ids: list[str] = Field(default_factory=list)
+    used_issue_ids: list[str] = Field(default_factory=list)
+    citation_map: list[CitationMapEntry] = Field(default_factory=list)
+    source_hash: str = ""
+    # Legacy fields remain readable until Task 5 replaces the old pipeline.
+    as_of_week: str = ""
+    summary: str = ""
+    claims: list[SupportedClaim] = Field(default_factory=list)
+    issues: list[IssueDecision] = Field(default_factory=list)
     reopened_evidence_ids: dict[str, list[str]] = Field(default_factory=dict)
     contradictions: list[str] = Field(default_factory=list)
     confidence: Literal["low", "medium", "high"]
@@ -141,6 +173,16 @@ DRAFT_SYSTEM_PROMPT = """당신은 통합 서술형 반도체 수율 Wiki 작성
 마십시오. 메일에 없는 원인, 수치, 담당자, 해결 여부를 만들지 마십시오.
 각 섹션은 핵심 사실만 최대 네 문장으로 작성하고 섹션 간 같은 사실을 반복하지 마십시오.
 validation_feedback이 있으면 기존의 유효한 인용을 유지하며 해당 오류를 수정하십시오."""
+
+MERGE_SYSTEM_PROMPT = """당신은 반도체 수율 Wiki 편집자입니다.
+기존 현재 문서와 이번 주 근거를 병합해 하나의 완결된 최신 문서를 작성하십시오.
+내용에 맞는 동적 H2 목차를 사용하고 고정 목차를 강제하지 마십시오.
+제공된 Claim과 Issue를 빠짐없이 반영하되, 사실 문단마다 [mail:<mail_id>]를
+붙이십시오. 더 최신의 명확한 근거가 있으면 현재 본문은 최신 상태로 바꾸고,
+모호한 충돌은 양쪽 주장을 각각 인용해 유지하십시오. weekly_delta에는 이번 주
+변경점만 쓰십시오. 과거 weekly_history는 입력일 뿐이며 다시 쓰지 마십시오.
+메일에 없는 원인, 수치, 담당자, 해결 여부를 만들지 마십시오.
+validation_feedback이 있으면 유효한 인용은 유지하고 지적된 오류만 수정하십시오."""
 
 
 def invoke_structured(runnable, messages: list[dict[str, str]]):
@@ -256,6 +298,50 @@ def build_llm_generators() -> tuple[AnalysisFn, DraftFn]:
         )
 
     return analyze, draft
+
+
+def build_page_merger() -> Callable[[dict[str, Any]], MergedWikiDocument]:
+    from langchain_openai import ChatOpenAI
+
+    connection = llm_connection()
+    llm = ChatOpenAI(
+        model=connection.model,
+        api_key=connection.api_key.get_secret_value(),
+        base_url=connection.base_url,
+        temperature=0,
+        extra_body=_llm_extra_body(),
+    )
+    runnable = llm.with_structured_output(
+        MergedWikiDocument,
+        method="function_calling",
+    )
+
+    def merge(context: dict[str, Any]) -> MergedWikiDocument:
+        if (
+            not context["evidence_by_mail"]
+            and not context["previous_current_body_markdown"].strip()
+        ):
+            return MergedWikiDocument(
+                title=context["node"]["title"],
+                current_body_markdown="## 문서 범위",
+                used_claim_ids=[],
+                used_issue_ids=[],
+                weekly_delta="",
+                confidence="low",
+                review_items=[],
+            )
+        return invoke_structured(
+            runnable,
+            [
+                {"role": "system", "content": MERGE_SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": json.dumps(context, ensure_ascii=False),
+                },
+            ],
+        )
+
+    return merge
 
 
 def canonical_path(node: CategoryNode) -> str:
@@ -453,6 +539,98 @@ def _factual_units(markdown: str) -> list[str]:
     return units
 
 
+def _factual_units_by_heading(markdown: str) -> list[tuple[str, str]]:
+    section = "본문"
+    buffer: list[str] = []
+    result: list[tuple[str, str]] = []
+
+    def flush() -> None:
+        if not buffer:
+            return
+        result.extend((section, unit) for unit in _factual_units("\n".join(buffer)))
+        buffer.clear()
+
+    for line in markdown.splitlines():
+        heading = re.match(r"^##\s+(.+?)\s*$", line)
+        if heading:
+            flush()
+            section = heading.group(1)
+        else:
+            buffer.append(line)
+    flush()
+    return result
+
+
+def validate_merged_document(
+    document: MergedWikiDocument,
+    context: MergeValidationContext,
+) -> list[CitationMapEntry]:
+    missing_claims = context.required_claim_ids - set(document.used_claim_ids)
+    if missing_claims:
+        raise NarrativeValidationError(
+            "missing claim coverage: " + ", ".join(sorted(missing_claims))
+        )
+    missing_issues = context.required_issue_ids - set(document.used_issue_ids)
+    if missing_issues:
+        raise NarrativeValidationError(
+            "missing issue coverage: " + ", ".join(sorted(missing_issues))
+        )
+    headings = re.findall(r"^##\s+(.+)$", document.current_body_markdown, re.M)
+    heading_ids = [
+        re.sub(r"[^\w가-힣-]", "", re.sub(r"\s+", "-", heading.casefold()))
+        for heading in headings
+    ]
+    if not headings or len(heading_ids) != len(set(heading_ids)):
+        raise NarrativeValidationError("current body requires unique dynamic headings")
+    for stale in context.stale_claim_texts:
+        if stale and stale in document.current_body_markdown:
+            raise NarrativeValidationError("stale claim remains in current body")
+    used: dict[str, set[str]] = {}
+    sections = [
+        *_factual_units_by_heading(document.current_body_markdown),
+        *(
+            ("주차별 업데이트 이력", unit)
+            for unit in _factual_units(document.weekly_delta)
+        ),
+    ]
+    for section, unit in sections:
+        mail_ids = MAIL_CITATION.findall(unit)
+        if not mail_ids:
+            raise NarrativeValidationError("uncited factual unit")
+        for mail_id in mail_ids:
+            if mail_id not in context.evidence_by_mail:
+                raise NarrativeValidationError("unknown mail citation: " + mail_id)
+            if not context.source_docs_by_mail.get(mail_id):
+                raise NarrativeValidationError("citation has no raw source: " + mail_id)
+            used.setdefault(mail_id, set()).add(section)
+    cited_claim_ids = {
+        "claim:" + agenda_id
+        for mail_id in used
+        for agenda_id in context.evidence_by_mail[mail_id]
+    }
+    agenda_backed_claims = {
+        claim_id
+        for claim_id in context.required_claim_ids
+        if claim_id.startswith("claim:")
+    }
+    uncited_claims = agenda_backed_claims - cited_claim_ids
+    if uncited_claims:
+        raise NarrativeValidationError(
+            "claims declared used but not cited: "
+            + ", ".join(sorted(uncited_claims))
+        )
+    return [
+        CitationMapEntry(
+            mail_id=mail_id,
+            agenda_ids=context.evidence_by_mail[mail_id],
+            source_doc_ids=context.source_docs_by_mail[mail_id],
+            used_in_sections=sorted(used_in_sections),
+            category_paths=[],
+        )
+        for mail_id, used_in_sections in sorted(used.items())
+    ]
+
+
 def validate_draft(
     draft: NarrativeDraft, evidence_by_mail: dict[str, list[str]]
 ) -> list[CitationMapEntry]:
@@ -556,43 +734,52 @@ def _merge_citation_maps(
     previous: list[CitationMapEntry],
     history: list[WeeklyHistoryEntry],
 ) -> list[CitationMapEntry]:
-    history_mail_ids = {
-        mail_id for entry in history for mail_id in entry.source_mail_ids
-    }
-    history_sections_by_mail: dict[str, set[str]] = {}
+    history_sections: dict[str, set[str]] = {}
     for entry in history:
         for mail_id in entry.source_mail_ids:
-            history_sections_by_mail.setdefault(mail_id, set()).add(
+            history_sections.setdefault(mail_id, set()).add(
                 _normalize_week(entry.week)
             )
     merged: dict[str, dict[str, set[str]]] = {}
+
+    def add(citation: CitationMapEntry, sections: list[str]) -> None:
+        record = merged.setdefault(
+            citation.mail_id,
+            {
+                "agenda_ids": set(),
+                "source_doc_ids": set(),
+                "used_in_sections": set(),
+            },
+        )
+        record["agenda_ids"].update(citation.agenda_ids)
+        record["source_doc_ids"].update(citation.source_doc_ids)
+        record["used_in_sections"].update(sections)
+
     for citation in current:
-        record = merged.setdefault(
-            citation.mail_id,
-            {"agenda_ids": set(), "used_in_sections": set()},
-        )
-        record["agenda_ids"].update(citation.agenda_ids)
-        record["used_in_sections"].update(citation.used_in_sections)
+        add(citation, citation.used_in_sections)
     for citation in previous:
-        if citation.mail_id not in history_mail_ids:
-            continue
-        record = merged.setdefault(
-            citation.mail_id,
-            {"agenda_ids": set(), "used_in_sections": set()},
-        )
-        record["agenda_ids"].update(citation.agenda_ids)
-        record["used_in_sections"].update(
-            history_sections_by_mail[citation.mail_id]
-        )
-    missing = sorted(history_mail_ids - set(merged))
+        if citation.mail_id in history_sections:
+            add(citation, sorted(history_sections[citation.mail_id]))
+
+    missing = sorted(set(history_sections) - set(merged))
     if missing:
         raise NarrativeValidationError(
-            f"retained history has no citation mapping: {', '.join(missing)}"
+            "retained history has no citation mapping: " + ", ".join(missing)
+        )
+    incomplete = sorted(
+        mail_id
+        for mail_id, record in merged.items()
+        if not record["agenda_ids"] or not record["source_doc_ids"]
+    )
+    if incomplete:
+        raise NarrativeValidationError(
+            "citation evidence is incomplete: " + ", ".join(incomplete)
         )
     return [
         CitationMapEntry(
             mail_id=mail_id,
             agenda_ids=sorted(record["agenda_ids"]),
+            source_doc_ids=sorted(record["source_doc_ids"]),
             used_in_sections=sorted(record["used_in_sections"]),
             category_paths=[],
         )
@@ -649,17 +836,29 @@ def _bootstrap_legacy_history(
                 source_mail_ids=sorted(
                     {str(agenda["mail_id"]) for agenda in ordered}
                 ),
+                agenda_ids=sorted(str(agenda["agenda_id"]) for agenda in ordered),
+                source_doc_ids=sorted(
+                    {
+                        str(source_id)
+                        for agenda in ordered
+                        for source_id in agenda.get("source_doc_ids", [])
+                    }
+                ),
             )
         )
         agendas_by_mail: dict[str, list[str]] = {}
+        source_docs_by_mail: dict[str, set[str]] = {}
         for agenda in ordered:
-            agendas_by_mail.setdefault(str(agenda["mail_id"]), []).append(
-                str(agenda["agenda_id"])
+            mail_id = str(agenda["mail_id"])
+            agendas_by_mail.setdefault(mail_id, []).append(str(agenda["agenda_id"]))
+            source_docs_by_mail.setdefault(mail_id, set()).update(
+                str(source_id) for source_id in agenda.get("source_doc_ids", [])
             )
         citations.extend(
             CitationMapEntry(
                 mail_id=mail_id,
                 agenda_ids=sorted(agenda_ids),
+                source_doc_ids=sorted(source_docs_by_mail[mail_id]),
                 used_in_sections=[week],
                 category_paths=[],
             )
@@ -1035,7 +1234,25 @@ def build_integrated_pages(
                 lambda candidate: validate_draft(candidate, evidence_by_mail),
                 context,
             )
-            current_citation_map = [*validated_citations, *legacy_citations]
+            source_docs_by_mail: dict[str, set[str]] = {}
+            for agenda in eligible_agendas:
+                source_docs_by_mail.setdefault(str(agenda["mail_id"]), set()).update(
+                    str(source_id)
+                    for source_id in agenda.get("source_doc_ids", [])
+                )
+            current_citation_map = [
+                *(
+                    citation.model_copy(
+                        update={
+                            "source_doc_ids": sorted(
+                                source_docs_by_mail.get(citation.mail_id, set())
+                            )
+                        }
+                    )
+                    for citation in validated_citations
+                ),
+                *legacy_citations,
+            ]
             current_body = render_current_body(narrative)
             previous_history = legacy_history or [
                 (
@@ -1050,20 +1267,49 @@ def build_integrated_pages(
                 for item in current_citation_map
                 if "주차별 업데이트 이력" in item.used_in_sections
             )
+            current_history_citations = [
+                item
+                for item in current_citation_map
+                if item.mail_id in current_source_mail_ids
+            ]
             history = merge_weekly_history(
                 previous_history,
                 WeeklyHistoryEntry(
                     week=as_of_week,
                     body_markdown=narrative.weekly_update,
                     source_mail_ids=current_source_mail_ids,
+                    agenda_ids=sorted(
+                        {
+                            agenda_id
+                            for item in current_history_citations
+                            for agenda_id in item.agenda_ids
+                        }
+                    ),
+                    source_doc_ids=sorted(
+                        {
+                            source_id
+                            for item in current_history_citations
+                            for source_id in item.source_doc_ids
+                        }
+                    ),
                 ),
             )
-            previous_citations = [
-                item
-                if isinstance(item, CitationMapEntry)
-                else CitationMapEntry.model_validate(item)
-                for item in previous.get("citation_map", [])
-            ]
+            previous_citations = []
+            for item in previous.get("citation_map", []):
+                citation = (
+                    item
+                    if isinstance(item, CitationMapEntry)
+                    else CitationMapEntry.model_validate(item)
+                )
+                if not citation.source_doc_ids:
+                    citation = citation.model_copy(
+                        update={
+                            "source_doc_ids": sorted(
+                                source_docs_by_mail.get(citation.mail_id, set())
+                            )
+                        }
+                    )
+                previous_citations.append(citation)
             path = canonical_path(node)
             citation_map = [
                 item.model_copy(update={"category_paths": [path]})
@@ -1112,7 +1358,10 @@ def merge_weekly_history(
     return [by_week[week] for week in sorted(by_week, reverse=True)]
 
 
-def render_current_body(draft: NarrativeDraft) -> str:
+def render_current_body(document: MergedWikiDocument | NarrativeDraft) -> str:
+    if isinstance(document, MergedWikiDocument):
+        return document.current_body_markdown
+    draft = document
     sections = (
         ("개요", draft.overview),
         ("현재 상태와 주요 변화", draft.current_status),
