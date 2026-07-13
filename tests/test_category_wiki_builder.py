@@ -71,6 +71,33 @@ def test_apply_agenda_version_preserves_unchanged_metadata():
     assert unchanged["content_hash"] == first["content_hash"]
 
 
+def test_apply_agenda_version_migrates_unversioned_agenda():
+    previous = {
+        "agenda_id": "agenda-28",
+        "mail_id": "2026-W28:Spica:mail-1",
+        "week": "2026-W28",
+        "summary": "4SA 원인 분석",
+        "source_quote": "원인 분석 중입니다.",
+        "state": "investigating",
+        "topic": "yield",
+        "target_paths": [{"domain": "DRAM", "tech": "Spica", "lotcd": "4SA"}],
+        "source_doc_ids": ["chunk-28"],
+        "created_at": "2026-07-07T00:00:00+00:00",
+    }
+
+    versioned = apply_agenda_version(
+        previous,
+        previous,
+        now=datetime(2026, 7, 14, tzinfo=UTC),
+        observed_week="2026-W29",
+    )
+
+    assert versioned["created_at"] == previous["created_at"]
+    assert versioned["updated_at"] == "2026-07-14T00:00:00+00:00"
+    assert versioned["updated_week"] == "2026-W29"
+    assert len(versioned["content_hash"]) == 64
+
+
 def test_apply_agenda_version_marks_correction_in_requested_week():
     previous = apply_agenda_version(
         {

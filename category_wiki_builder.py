@@ -375,7 +375,14 @@ def apply_agenda_version(
         if previous
         else None
     )
-    if previous and current_hash == previous_hash:
+    if (
+        previous
+        and all(
+            previous.get(field)
+            for field in ("content_hash", "updated_at", "updated_week")
+        )
+        and current_hash == previous_hash
+    ):
         return {
             **current,
             "created_at": previous["created_at"],
