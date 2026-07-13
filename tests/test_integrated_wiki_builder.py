@@ -14,6 +14,7 @@ from category_wiki_builder import (
     PAGE_INDEX,
     SOURCE_INDEX,
     CategoryNode,
+    ensure_index,
     load_taxonomy,
 )
 from integrated_wiki_builder import (
@@ -34,6 +35,7 @@ from integrated_wiki_builder import (
     build_incremental_pages,
     build_integrated_pages,
     build_llm_generators,
+    build_merge_context,
     canonical_path,
     direct_agendas_for_node,
     fetch_previous_pages,
@@ -567,6 +569,68 @@ def test_dynamic_document_rejects_missing_claim_coverage():
         validate_merged_document(document, context)
 
 
+@pytest.mark.parametrize("weekly_delta", ["", "변경 없음 [mail:mail-29]"])
+def test_changed_merge_requires_a_real_weekly_delta(weekly_delta):
+    document = MergedWikiDocument(
+        title="4SA",
+        current_body_markdown="## 상태\n\n조건 원복 중이다. [mail:mail-29]",
+        used_claim_ids=["claim:agenda-29"],
+        used_issue_ids=[],
+        weekly_delta=weekly_delta,
+        confidence="medium",
+    )
+    context = MergeValidationContext(
+        evidence_by_mail={"mail-29": ["agenda-29"]},
+        source_docs_by_mail={"mail-29": ["chunk-29"]},
+        required_claim_ids={"claim:agenda-29"},
+        required_issue_ids=set(),
+        resolved_issue_ids=set(),
+        reopened_issue_ids=set(),
+        stale_claim_texts=[],
+        week="2026-W29",
+        has_weekly_change=True,
+        weekly_evidence_mail_ids={"mail-29"},
+    )
+
+    with pytest.raises(NarrativeValidationError, match="weekly_delta"):
+        validate_merged_document(document, context)
+
+
+def test_changed_merge_requires_current_week_citation_in_weekly_delta():
+    document = MergedWikiDocument(
+        title="4SA",
+        current_body_markdown=(
+            "## 상태\n\n기존 분석과 조건 원복을 반영했다. "
+            "[mail:mail-28][mail:mail-29]"
+        ),
+        used_claim_ids=["claim:agenda-28", "claim:agenda-29"],
+        used_issue_ids=[],
+        weekly_delta="기존 분석을 정리했다. [mail:mail-28]",
+        confidence="medium",
+    )
+    context = MergeValidationContext(
+        evidence_by_mail={
+            "mail-28": ["agenda-28"],
+            "mail-29": ["agenda-29"],
+        },
+        source_docs_by_mail={
+            "mail-28": ["chunk-28"],
+            "mail-29": ["chunk-29"],
+        },
+        required_claim_ids={"claim:agenda-28", "claim:agenda-29"},
+        required_issue_ids=set(),
+        resolved_issue_ids=set(),
+        reopened_issue_ids=set(),
+        stale_claim_texts=[],
+        week="2026-W29",
+        has_weekly_change=True,
+        weekly_evidence_mail_ids={"mail-29"},
+    )
+
+    with pytest.raises(NarrativeValidationError, match="current-week citation"):
+        validate_merged_document(document, context)
+
+
 def test_integrated_mapping_adds_structured_fields_without_vectors():
     properties = integrated_page_index_definition()["mappings"]["properties"]
     assert properties["doc_type"]["type"] == "keyword"
@@ -584,6 +648,61 @@ def test_incremental_mapping_adds_strategy_issue_and_source_fields():
     assert properties["weekly_history"]["properties"]["source_doc_ids"]["type"] == "keyword"
     assert properties["citation_map"]["properties"]["source_doc_ids"]["type"] == "keyword"
     assert "embedding" not in properties
+
+
+def test_existing_strict_page_mapping_adds_missing_nested_evidence_fields():
+    class MappingIndices:
+        def __init__(self):
+            self.put_calls = []
+
+        def exists(self, *, index):
+            return True
+
+        def get_mapping(self, *, index):
+            return {
+                index: {
+                    "mappings": {
+                        "dynamic": "strict",
+                        "properties": {
+                            "weekly_history": {
+                                "type": "nested",
+                                "properties": {
+                                    "week": {"type": "keyword"},
+                                    "body_markdown": {"type": "text"},
+                                    "source_mail_ids": {"type": "keyword"},
+                                },
+                            },
+                            "citation_map": {
+                                "type": "nested",
+                                "properties": {
+                                    "mail_id": {"type": "keyword"},
+                                    "agenda_ids": {"type": "keyword"},
+                                    "used_in_sections": {"type": "keyword"},
+                                    "category_paths": {"type": "keyword"},
+                                },
+                            },
+                        },
+                    }
+                }
+            }
+
+        def put_mapping(self, *, index, body):
+            self.put_calls.append((index, body))
+
+    client = SimpleNamespace(indices=MappingIndices())
+
+    ensure_index(client, PAGE_INDEX, integrated_page_index_definition())
+
+    _, body = client.indices.put_calls[0]
+    assert body["properties"]["weekly_history"] == {
+        "properties": {
+            "agenda_ids": {"type": "keyword"},
+            "source_doc_ids": {"type": "keyword"},
+        }
+    }
+    assert body["properties"]["citation_map"] == {
+        "properties": {"source_doc_ids": {"type": "keyword"}}
+    }
 
 
 def test_weekly_delta_contains_new_and_corrected_agendas_only():
@@ -720,6 +839,45 @@ def test_parent_failure_keeps_saved_child_and_marks_ancestor_pending(taxonomy):
     assert second.pending == {}
 
 
+def test_matching_hash_repairs_missing_snapshot_without_merging(taxonomy, monkeypatch):
+    agenda = w29_4sa_agenda()
+    issue_result = issue_result_for([agenda])
+    first = build_incremental_pages(
+        taxonomy,
+        [agenda],
+        {},
+        issue_result,
+        as_of_week="2026-W29",
+        merge=valid_dynamic_document,
+        selected_node_ids={"lotcd:4sa"},
+    )
+    page = first.pages[0]
+    client = StatefulWikiOpenSearch(
+        weekly_mail={"chunk-29": source_part("mail-29", "2026-W29", "조건 원복")},
+        mail_agendas={},
+    )
+    client.documents[PAGE_INDEX] = {"lotcd:4sa": page}
+    client.mappings[PAGE_INDEX] = integrated_page_index_definition()
+    monkeypatch.setattr(wiki_builder_module.helpers, "bulk", client.apply_bulk)
+    merge_calls = []
+
+    second = build_incremental_pages(
+        taxonomy,
+        [agenda],
+        {"lotcd:4sa": page},
+        issue_result,
+        as_of_week="2026-W29",
+        merge=lambda context: merge_calls.append(context) or valid_dynamic_document(context),
+        selected_node_ids={"lotcd:4sa"},
+        on_page_repair=lambda skipped: save_integrated_page(client, skipped),
+    )
+
+    assert merge_calls == []
+    assert second.pages == []
+    assert second.skipped == ["lotcd:4sa"]
+    assert client.documents[PAGE_INDEX]["lotcd:4sa:2026-W29"]["page_kind"] == "snapshot"
+
+
 def test_category_without_delta_gets_no_history_entry(taxonomy):
     def unexpected_merge(context):
         pytest.fail("merge must not run when no category is affected")
@@ -775,6 +933,125 @@ def test_affected_nodes_use_taxonomy_node_ids(taxonomy, monkeypatch):
 
 def test_no_delta_affects_no_pages(taxonomy):
     assert affected_node_ids(taxonomy, []) == set()
+
+
+def test_reclassified_agenda_affects_old_and_new_page_chains(taxonomy):
+    reclassified = {
+        **one_open_agenda(),
+        "updated_week": "2026-W29",
+        "target_paths": [
+            {"domain": "NAND", "tech": "Heraion", "lotcd": "4H1"}
+        ],
+        "previous_target_paths": [
+            {"domain": "DRAM", "tech": "Spica", "lotcd": "4SA"}
+        ],
+    }
+
+    assert affected_node_ids(taxonomy, [reclassified]) == {
+        "lotcd:4sa",
+        "tech:dram:spica",
+        "domain:dram",
+        "lotcd:4h1",
+        "tech:nand:heraion",
+        "domain:nand",
+    }
+
+
+def test_tombstone_selects_old_chain_but_is_not_current_evidence(taxonomy):
+    tombstone = {
+        **one_open_agenda(),
+        "updated_week": "2026-W29",
+        "is_deleted": True,
+        "previous_target_paths": one_open_agenda()["target_paths"],
+    }
+    node = CategoryNode(
+        id="lotcd:4sa",
+        level="lotcd",
+        domain="DRAM",
+        tech="Spica",
+        lotcd="4SA",
+        title="4SA",
+    )
+
+    assert select_weekly_delta([tombstone], "2026-W29") == [tombstone]
+    assert affected_node_ids(taxonomy, [tombstone]) == {
+        "lotcd:4sa",
+        "tech:dram:spica",
+        "domain:dram",
+    }
+    assert direct_agendas_for_node(node, [tombstone]) == []
+
+
+def test_tombstoned_previous_agenda_is_not_offered_as_merge_evidence():
+    tombstone = {
+        **one_open_agenda(),
+        "updated_week": "2026-W29",
+        "is_deleted": True,
+        "previous_target_paths": one_open_agenda()["target_paths"],
+    }
+    node = CategoryNode(
+        id="lotcd:4sa",
+        level="lotcd",
+        domain="DRAM",
+        tech="Spica",
+        lotcd="4SA",
+        title="4SA",
+    )
+    previous = complete_page_fixture("lotcd:4sa", "DRAM", "Spica", "4SA")
+    previous["issue_ids"] = ["issue-open"]
+
+    context = build_merge_context(
+        node=node,
+        week="2026-W29",
+        agendas=[tombstone],
+        delta=[tombstone],
+        previous=previous,
+        issues={},
+        agenda_to_issue={},
+        child_digests=[],
+        base_page=previous,
+    )
+
+    assert context["direct_agendas"] == []
+    assert context["evidence_by_mail"] == {}
+    assert context["required_claim_ids"] == []
+    assert context["required_issue_ids"] == []
+
+
+def test_parent_weekly_change_uses_child_deterministic_state_not_generated_text():
+    node = CategoryNode(
+        id="tech:dram:spica",
+        level="tech",
+        domain="DRAM",
+        tech="Spica",
+        lotcd=None,
+        title="Spica",
+    )
+    child = ChildDigest(
+        category_id="lotcd:4sa",
+        canonical_id="dram/spica/4sa",
+        current_body_markdown="## 상태",
+        weekly_delta="",
+        has_weekly_change=True,
+        weekly_mail_ids=["mail-29"],
+        source_hash="child-hash",
+        confidence="high",
+    )
+
+    context = build_merge_context(
+        node=node,
+        week="2026-W29",
+        agendas=[],
+        delta=[],
+        previous={},
+        issues={},
+        agenda_to_issue={},
+        child_digests=[child],
+        base_page=complete_page_fixture("tech:dram:spica", "DRAM", "Spica", None),
+    )
+
+    assert context["has_weekly_change"] is True
+    assert context["weekly_evidence_mail_ids"] == ["mail-29"]
 
 
 def test_canonical_path_uses_lowercase_category_segments():
@@ -2041,6 +2318,8 @@ def test_child_digest_contains_only_traceable_analysis_and_draft_summary():
         "used_issue_ids": [],
         "citation_map": [],
         "source_hash": "",
+        "has_weekly_change": False,
+        "weekly_mail_ids": [],
         "as_of_week": "2026-W28",
         "summary": "요약 [mail:mail-1]",
         "claims": [claim.model_dump()],
@@ -3004,6 +3283,47 @@ def test_run_rejects_absent_requested_week_before_llm_or_persistence(
     assert generator_calls == []
     assert persistence_calls == []
     assert client.indices.created == []
+
+
+def test_run_accepts_week_with_only_a_corrected_prior_agenda(taxonomy, monkeypatch):
+    corrected = {
+        **one_open_agenda(),
+        "week": "2026-W28",
+        "updated_week": "2026-W29",
+        "content_hash": "corrected-in-w29",
+    }
+    client = SourceMgetClient(found_ids=[])
+    client.indices = FakeIndices(existing=[AGENDA_INDEX])
+    captured = {}
+    empty_ledger = IssueLedgerResult(
+        issues={},
+        agenda_to_issue={},
+        changed_issue_ids=[],
+        review_items=[],
+    )
+    monkeypatch.setattr(wiki_builder_module, "load_taxonomy", lambda path=None: taxonomy)
+    monkeypatch.setattr(wiki_builder_module, "fetch_agendas", lambda actual: [corrected])
+    monkeypatch.setattr(
+        wiki_builder_module,
+        "resolve_issue_ledger",
+        lambda selected, existing, **kwargs: empty_ledger,
+    )
+    monkeypatch.setattr(
+        wiki_builder_module,
+        "build_incremental_pages",
+        lambda *args, **kwargs: captured.setdefault("called", BuildResult()),
+    )
+
+    stats = run(
+        weeks=["2026-W29"],
+        allow_dummy_taxonomy=True,
+        dry_run=True,
+        client=client,
+        merge=valid_dynamic_document,
+    )
+
+    assert captured["called"] == BuildResult()
+    assert stats["affected_pages"] == 3
 
 
 def test_run_rejects_unacknowledged_external_llm_before_index_changes(

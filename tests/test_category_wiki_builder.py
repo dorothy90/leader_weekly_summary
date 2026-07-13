@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import category_wiki_builder as category_builder_module
+
 from category_wiki_builder import (
     apply_agenda_version,
     agenda_index_definition,
@@ -11,6 +13,7 @@ from category_wiki_builder import (
     merge_overlapping_chunks,
     normalize_agenda_document,
     page_index_definition,
+    replace_mail_agendas,
 )
 from knowledge_models import TaxonomyDocument
 
@@ -131,6 +134,90 @@ def test_apply_agenda_version_marks_correction_in_requested_week():
     assert versioned["updated_at"] == "2026-07-14T00:00:00+00:00"
     assert versioned["updated_week"] == "2026-W29"
     assert versioned["content_hash"] != previous["content_hash"]
+
+
+def test_apply_agenda_version_preserves_old_path_when_reclassified():
+    previous = {
+        "agenda_id": "agenda-28",
+        "mail_id": "mail-28",
+        "week": "2026-W28",
+        "summary": "분류 정정",
+        "source_quote": "분류 정정",
+        "state": "open",
+        "topic": "yield",
+        "target_paths": [{"domain": "DRAM", "tech": "Spica", "lotcd": "4SA"}],
+        "source_doc_ids": ["chunk-28"],
+    }
+    current = {
+        **previous,
+        "target_paths": [{"domain": "NAND", "tech": "Heraion", "lotcd": "4H1"}],
+    }
+
+    versioned = apply_agenda_version(
+        current,
+        previous,
+        now=datetime(2026, 7, 14, tzinfo=UTC),
+        observed_week="2026-W29",
+    )
+
+    assert versioned["previous_target_paths"] == previous["target_paths"]
+    assert versioned["is_deleted"] is False
+
+
+def test_replace_mail_agendas_retains_removed_agenda_as_tombstone(monkeypatch):
+    previous = {
+        "agenda_id": "agenda-removed",
+        "mail_id": "mail-28",
+        "raw_mail_id": "raw-28",
+        "week": "2026-W28",
+        "updated_week": "2026-W28",
+        "summary": "기존 수율 이슈",
+        "source_quote": "기존 수율 이슈",
+        "state": "open",
+        "topic": "yield",
+        "review_status": "confirmed",
+        "target_paths": [{"domain": "DRAM", "tech": "Spica", "lotcd": "4SA"}],
+        "candidate_paths": [],
+        "source_doc_ids": ["chunk-28"],
+        "created_at": "2026-07-07T00:00:00+00:00",
+    }
+
+    class Client:
+        def search(self, *, index, body):
+            return {
+                "hits": {
+                    "hits": [
+                        {"_id": "agenda-removed", "_source": previous, "sort": ["agenda-removed"]}
+                    ]
+                }
+            }
+
+        def delete_by_query(self, **kwargs):
+            return None
+
+    actions = []
+    monkeypatch.setattr(
+        category_builder_module.helpers,
+        "bulk",
+        lambda client, batch: actions.extend(batch),
+    )
+
+    replace_mail_agendas(Client(), "mail-28", [], observed_week="2026-W29")
+
+    tombstone = actions[0]["_source"]
+    assert tombstone["agenda_id"] == "agenda-removed"
+    assert tombstone["is_deleted"] is True
+    assert tombstone["updated_week"] == "2026-W29"
+    assert tombstone["target_paths"] == previous["target_paths"]
+    assert tombstone["previous_target_paths"] == previous["target_paths"]
+    assert tombstone["source_doc_ids"] == ["chunk-28"]
+
+
+def test_agenda_mapping_supports_deletion_and_reclassification_metadata():
+    properties = agenda_index_definition()["mappings"]["properties"]
+
+    assert properties["is_deleted"] == {"type": "boolean"}
+    assert properties["previous_target_paths"]["type"] == "nested"
 
 
 def taxonomy() -> TaxonomyDocument:

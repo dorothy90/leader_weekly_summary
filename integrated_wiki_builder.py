@@ -37,6 +37,7 @@ from wiki_issue_ledger import (
     IssueLedgerResult,
     IssueSuggestionFn,
     WikiIssue,
+    delete_issue_ledger,
     fetch_issue_ledger,
     issue_index_definition,
     resolve_issue_ledger,
@@ -69,7 +70,10 @@ def select_weekly_delta(
         (
             agenda
             for agenda in agendas
-            if agenda.get("review_status", "confirmed") == "confirmed"
+            if (
+                agenda.get("review_status", "confirmed") == "confirmed"
+                or agenda.get("is_deleted")
+            )
             and (
                 _normalize_week(agenda.get("week")) == normalized
                 or _normalize_week(agenda.get("updated_week")) == normalized
@@ -140,6 +144,9 @@ class MergeValidationContext(WikiModel):
     resolved_issue_ids: set[str]
     reopened_issue_ids: set[str]
     stale_claim_texts: list[str]
+    week: str = ""
+    has_weekly_change: bool = False
+    weekly_evidence_mail_ids: set[str] = Field(default_factory=set)
 
 
 # Legacy fixed-contract model used by build_integrated_pages and the current CLI.
@@ -179,6 +186,8 @@ class ChildDigest(WikiModel):
     used_issue_ids: list[str] = Field(default_factory=list)
     citation_map: list[CitationMapEntry] = Field(default_factory=list)
     source_hash: str = ""
+    has_weekly_change: bool = False
+    weekly_mail_ids: list[str] = Field(default_factory=list)
     # Legacy fields remain readable until Task 5 replaces the old pipeline.
     as_of_week: str = ""
     summary: str = ""
@@ -402,7 +411,17 @@ def affected_node_ids(
     selected: set[str] = set()
     for agenda in delta:
         for node in nodes:
-            if not agenda_matches_node(agenda, node):
+            paths = [
+                *agenda.get("target_paths", []),
+                *agenda.get("candidate_paths", []),
+                *agenda.get("previous_target_paths", []),
+            ]
+            if not any(
+                path.get("domain") == node.domain
+                and (node.tech is None or path.get("tech") == node.tech)
+                and (node.lotcd is None or path.get("lotcd") == node.lotcd)
+                for path in paths
+            ):
                 continue
             selected.add(node.id)
             if node.level in {"tech", "lotcd"}:
@@ -427,7 +446,8 @@ def direct_agendas_for_node(
     return [
         agenda
         for agenda in agendas
-        if agenda.get("review_status", "confirmed") == "confirmed"
+        if not agenda.get("is_deleted")
+        and agenda.get("review_status", "confirmed") == "confirmed"
         and any(matches(path) for path in agenda.get("target_paths", []))
     ]
 
@@ -627,6 +647,16 @@ def validate_merged_document(
     document: MergedWikiDocument,
     context: MergeValidationContext,
 ) -> list[CitationMapEntry]:
+    if context.has_weekly_change:
+        if not document.weekly_delta.strip():
+            raise NarrativeValidationError("weekly_delta is required for a changed node")
+        if "변경 없음" in document.weekly_delta:
+            raise NarrativeValidationError("weekly_delta cannot claim 변경 없음")
+        weekly_citations = set(MAIL_CITATION.findall(document.weekly_delta))
+        if not weekly_citations & context.weekly_evidence_mail_ids:
+            raise NarrativeValidationError(
+                "weekly_delta requires a current-week citation"
+            )
     missing_claims = context.required_claim_ids - set(document.used_claim_ids)
     if missing_claims:
         raise NarrativeValidationError(
@@ -1151,10 +1181,18 @@ def build_merge_context(
         else CitationMapEntry.model_validate(item)
         for item in previous.get("citation_map", [])
     ]
+    canonical_agendas = {
+        str(agenda["agenda_id"]): agenda for agenda in agendas
+    }
     for citation in previous_citations:
-        evidence_by_mail.setdefault(citation.mail_id, set()).update(
-            citation.agenda_ids
-        )
+        active_agenda_ids = {
+            agenda_id
+            for agenda_id in citation.agenda_ids
+            if agenda_id not in canonical_agendas or agenda_id in direct_ids
+        }
+        if not active_agenda_ids:
+            continue
+        evidence_by_mail.setdefault(citation.mail_id, set()).update(active_agenda_ids)
         source_docs_by_mail.setdefault(citation.mail_id, set()).update(
             citation.source_doc_ids
         )
@@ -1188,12 +1226,20 @@ def build_merge_context(
         for issue_id in child.used_issue_ids
     )
     required_issue_ids.update(
-        str(issue_id) for issue_id in previous.get("issue_ids", [])
+        str(issue_id)
+        for issue_id in previous.get("issue_ids", [])
+        if str(issue_id) in issues
     )
     relevant_issues = {
         issue_id: issues[issue_id].model_dump(mode="json")
         for issue_id in sorted(required_issue_ids)
     }
+    weekly_evidence_mail_ids = {
+        str(agenda["mail_id"]) for agenda in direct_delta
+    }
+    weekly_evidence_mail_ids.update(
+        mail_id for child in child_digests for mail_id in child.weekly_mail_ids
+    )
     return {
         "node": asdict(node),
         "week": week,
@@ -1220,7 +1266,8 @@ def build_merge_context(
         "required_issue_ids": sorted(required_issue_ids),
         "issues": relevant_issues,
         "has_weekly_change": bool(direct_delta)
-        or any(child.weekly_delta.strip() for child in child_digests),
+        or any(child.has_weekly_change for child in child_digests),
+        "weekly_evidence_mail_ids": sorted(weekly_evidence_mail_ids),
     }
 
 
@@ -1276,6 +1323,9 @@ def retry_context_to_validation_context(
         resolved_issue_ids=resolved,
         reopened_issue_ids=reopened,
         stale_claim_texts=[],
+        week=context["week"],
+        has_weekly_change=context["has_weekly_change"],
+        weekly_evidence_mail_ids=set(context["weekly_evidence_mail_ids"]),
     )
 
 
@@ -1415,15 +1465,16 @@ def build_page_from_merge(
 
 def child_digest_from_page(page: dict[str, Any]) -> ChildDigest:
     history = page.get("weekly_history", [])
-    weekly_delta = next(
+    current_history = next(
         (
-            str(item["body_markdown"])
+            item
             for item in history
             if _normalize_week(item["week"])
             == _normalize_week(page["as_of_week"])
         ),
-        "",
+        None,
     )
+    weekly_delta = str(current_history["body_markdown"]) if current_history else ""
     citation_map = [
         item
         if isinstance(item, CitationMapEntry)
@@ -1442,6 +1493,12 @@ def child_digest_from_page(page: dict[str, Any]) -> ChildDigest:
         used_issue_ids=[str(item) for item in page.get("issue_ids", [])],
         citation_map=citation_map,
         source_hash=str(page["source_hash"]),
+        has_weekly_change=current_history is not None,
+        weekly_mail_ids=(
+            [str(item) for item in current_history.get("source_mail_ids", [])]
+            if current_history
+            else []
+        ),
         confidence=str(page.get("confidence", "low")),
     )
 
@@ -1456,6 +1513,7 @@ def build_incremental_pages(
     merge: MergeFn,
     rebuild_all: bool = False,
     on_page: Callable[[dict[str, Any]], None] | None = None,
+    on_page_repair: Callable[[dict[str, Any]], None] | None = None,
     selected_node_ids: set[str] | None = None,
 ) -> BuildResult:
     week = _normalize_week(as_of_week)
@@ -1524,6 +1582,8 @@ def build_incremental_pages(
                 not rebuild_all
                 and previous.get("source_hash") == source_hash
             ):
+                if on_page_repair:
+                    on_page_repair(previous)
                 result.skipped.append(node.id)
                 digests[node.id] = child_digest_from_page(previous)
                 continue
@@ -2044,9 +2104,10 @@ def run(
     )
     available_weeks = sorted(
         {
-            _normalize_week(agenda["week"])
+            _normalize_week(value)
             for agenda in agendas
-            if agenda.get("week") and agenda.get("week") != "unknown"
+            for value in (agenda.get("week"), agenda.get("updated_week"))
+            if value and value != "unknown"
         }
     )
     requested_weeks = sorted(
@@ -2098,6 +2159,7 @@ def run(
     )
     if not dry_run:
         save_issue_ledger(client, issue_result.issues)
+        delete_issue_ledger(client, issue_result.deleted_issue_ids)
 
     if merge is None:
         merge = build_page_merger()
@@ -2111,6 +2173,10 @@ def run(
         save_integrated_page(client, page)
         print(f"[wiki] saved {page['category_id']}")
 
+    def repair_page(page: dict[str, Any]) -> None:
+        save_integrated_page(client, page)
+        print(f"[wiki] repaired {page['category_id']}")
+
     result = build_incremental_pages(
         taxonomy,
         eligible_agendas,
@@ -2120,6 +2186,7 @@ def run(
         merge=merge,
         rebuild_all=rebuild_all,
         on_page=None if dry_run else persist_page,
+        on_page_repair=None if dry_run else repair_page,
         selected_node_ids=selected_ids,
     )
     return {

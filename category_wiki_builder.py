@@ -156,6 +156,15 @@ def agenda_index_definition() -> dict[str, Any]:
                         "lotcd": {"type": "keyword"},
                     },
                 },
+                "previous_target_paths": {
+                    "type": "nested",
+                    "properties": {
+                        "domain": {"type": "keyword"},
+                        "tech": {"type": "keyword"},
+                        "lotcd": {"type": "keyword"},
+                    },
+                },
+                "is_deleted": {"type": "boolean"},
                 "created_at": {"type": "date"},
                 "updated_at": {"type": "date"},
                 "updated_week": {"type": "keyword"},
@@ -229,7 +238,24 @@ def ensure_index(client: OpenSearch, index: str, definition: dict[str, Any]) -> 
         current.get(index, {}).get("mappings", {}).get("properties", {})
     )
     desired = definition["mappings"]["properties"]
-    missing = {key: value for key, value in desired.items() if key not in current_properties}
+
+    def missing_properties(
+        current: dict[str, Any], wanted: dict[str, Any]
+    ) -> dict[str, Any]:
+        missing: dict[str, Any] = {}
+        for key, value in wanted.items():
+            if key not in current:
+                missing[key] = value
+                continue
+            nested = missing_properties(
+                current[key].get("properties", {}),
+                value.get("properties", {}),
+            )
+            if nested:
+                missing[key] = {"properties": nested}
+        return missing
+
+    missing = missing_properties(current_properties, desired)
     if missing:
         client.indices.put_mapping(index=index, body={"properties": missing})
 
@@ -352,6 +378,10 @@ def derive_issue_id(paths: list[CategoryPath], topic: str) -> str:
 
 def agenda_content_hash(document: dict[str, Any]) -> str:
     payload = {field: document.get(field) for field in AGENDA_HASH_FIELDS}
+    if document.get("is_deleted"):
+        payload["is_deleted"] = True
+    if document.get("previous_target_paths"):
+        payload["previous_target_paths"] = document["previous_target_paths"]
     encoded = json.dumps(
         payload,
         ensure_ascii=False,
@@ -369,6 +399,24 @@ def apply_agenda_version(
     observed_week: str | None = None,
 ) -> dict[str, Any]:
     current = dict(document)
+    current["is_deleted"] = bool(current.get("is_deleted", False))
+    prior_paths = {
+        _path_token(path): dict(path)
+        for path in (previous or {}).get("previous_target_paths", [])
+    }
+    if previous and (
+        current["is_deleted"]
+        or current.get("target_paths", []) != previous.get("target_paths", [])
+    ):
+        prior_paths.update(
+            {
+                _path_token(path): dict(path)
+                for path in previous.get("target_paths", [])
+            }
+        )
+    current["previous_target_paths"] = [
+        prior_paths[key] for key in sorted(prior_paths)
+    ]
     current_hash = agenda_content_hash(current)
     previous_hash = (
         str(previous.get("content_hash") or agenda_content_hash(previous))
@@ -420,7 +468,9 @@ def normalize_agenda_document(document: dict[str, Any]) -> dict[str, Any]:
         except (TypeError, ValueError):
             normalized["week"] = "unknown"
     normalized.setdefault("candidate_paths", [])
+    normalized.setdefault("previous_target_paths", [])
     normalized.setdefault("source_doc_ids", [])
+    normalized.setdefault("is_deleted", False)
     normalized.setdefault("review_status", "confirmed")
     normalized.setdefault(
         "issue_id",
@@ -477,15 +527,24 @@ def replace_mail_agendas(
     *,
     observed_week: str | None = None,
 ) -> None:
-    agenda_ids = [str(document["agenda_id"]) for document in documents]
+    search_after = None
     previous_by_id: dict[str, dict[str, Any]] = {}
-    if agenda_ids:
-        response = client.mget(index=AGENDA_INDEX, body={"ids": agenda_ids})
-        previous_by_id = {
-            str(hit["_id"]): hit["_source"]
-            for hit in response.get("docs", [])
-            if hit.get("found")
+    while True:
+        body: dict[str, Any] = {
+            "size": 500,
+            "query": {"term": {"mail_id": mail_id}},
+            "sort": [{"_id": "asc"}],
         }
+        if search_after is not None:
+            body["search_after"] = search_after
+        response = client.search(index=AGENDA_INDEX, body=body)
+        hits = response.get("hits", {}).get("hits", [])
+        previous_by_id.update(
+            {str(hit["_id"]): hit["_source"] for hit in hits}
+        )
+        if len(hits) < 500:
+            break
+        search_after = hits[-1]["sort"]
     now = datetime.now(UTC)
     versioned_documents = [
         apply_agenda_version(
@@ -496,6 +555,24 @@ def replace_mail_agendas(
         )
         for document in documents
     ]
+    current_ids = {str(document["agenda_id"]) for document in documents}
+    versioned_documents.extend(
+        apply_agenda_version(
+            {
+                **previous,
+                "is_deleted": True,
+                "previous_target_paths": [
+                    *previous.get("previous_target_paths", []),
+                    *previous.get("target_paths", []),
+                ],
+            },
+            previous,
+            now=now,
+            observed_week=observed_week,
+        )
+        for agenda_id, previous in previous_by_id.items()
+        if agenda_id not in current_ids
+    )
     client.delete_by_query(
         index=AGENDA_INDEX,
         body={"query": {"term": {"mail_id": mail_id}}},
@@ -784,7 +861,11 @@ def build_page_documents(
     generated_at = datetime.now(UTC).isoformat()
     pages: list[dict[str, Any]] = []
     for node in category_nodes(taxonomy):
-        related = [agenda for agenda in agendas if agenda_matches_node(agenda, node)]
+        related = [
+            agenda
+            for agenda in agendas
+            if not agenda.get("is_deleted") and agenda_matches_node(agenda, node)
+        ]
         issues = issue_timelines(related, as_of_week=as_of_week)
         confirmed = [
             agenda for agenda in related if agenda.get("review_status") == "confirmed"
