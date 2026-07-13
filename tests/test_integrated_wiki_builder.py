@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import integrated_wiki_builder as wiki_builder_module
 import pytest
 from pydantic import ValidationError
 
@@ -794,14 +795,14 @@ def test_issue_validation_rejects_a_missing_expected_decision():
         )
 
 
-def test_analysis_semantic_retry_supplies_validator_feedback(taxonomy):
+def test_analysis_uses_deterministic_issue_decisions_when_model_omits_them(
+    taxonomy,
+):
     contexts = []
 
     def analyze(context):
         contexts.append(context)
-        if context["node"]["id"] == "lotcd:4sa" and len(contexts) == 1:
-            return PageAnalysis(outline=["개요"])
-        return analysis_with_expected_issues(context)
+        return PageAnalysis(outline=["개요"])
 
     result = build_integrated_pages(
         single_lotcd_taxonomy(taxonomy),
@@ -812,12 +813,13 @@ def test_analysis_semantic_retry_supplies_validator_feedback(taxonomy):
         draft=lambda context, analysis: empty_draft(),
     )
 
-    lotcd_contexts = [
-        item for item in contexts if item["node"]["id"] == "lotcd:4sa"
-    ]
     assert not result.failures
-    assert len(lotcd_contexts) == 2
-    assert "missing issue decision" in lotcd_contexts[1]["validation_feedback"]
+    assert [item["node"]["id"] for item in contexts] == [
+        "lotcd:4sa",
+        "tech:dram:spica",
+        "domain:dram",
+    ]
+    assert all("validation_feedback" not in item for item in contexts)
 
 
 def test_analysis_context_exposes_expected_issue_statuses(taxonomy):
@@ -898,7 +900,16 @@ def test_semantic_retry_stops_after_three_invalid_analyses(taxonomy):
     def analyze(context):
         if context["node"]["id"] == "lotcd:4sa":
             calls.append(context)
-            return PageAnalysis(outline=["개요"])
+            return PageAnalysis(
+                new_claims=[
+                    SupportedClaim(
+                        text="허용 범위 밖 주장",
+                        mail_ids=["mail-unknown"],
+                        agenda_ids=["agenda-unknown"],
+                    )
+                ],
+                outline=["개요"],
+            )
         return analysis_with_expected_issues(context)
 
     result = build_integrated_pages(
@@ -912,9 +923,74 @@ def test_semantic_retry_stops_after_three_invalid_analyses(taxonomy):
 
     assert len(calls) == 3
     assert result.pages == []
-    assert "missing issue decision" in result.failures["lotcd:4sa"]
+    assert "unknown agenda" in result.failures["lotcd:4sa"]
     assert result.failures["tech:dram:spica"] == "required child failed"
     assert result.failures["domain:dram"] == "required child failed"
+
+
+def test_deterministic_issue_decisions_use_latest_timeline_evidence():
+    decisions = wiki_builder_module.deterministic_issue_decisions(
+        [
+            {
+                "issue_id": "issue-open",
+                "title": "4SA 수율 하락",
+                "event_type": "updated",
+                "is_open": True,
+                "events": [
+                    {
+                        "agenda_id": "agenda-27",
+                        "mail_id": "mail-27",
+                    },
+                    {
+                        "agenda_id": "agenda-28",
+                        "mail_id": "mail-28",
+                    },
+                ],
+            }
+        ],
+        [],
+    )
+
+    assert decisions == [
+        IssueDecision(
+            issue_id="issue-open",
+            status="ongoing",
+            summary="4SA 수율 하락",
+            mail_ids=["mail-28"],
+            agenda_ids=["agenda-28"],
+        )
+    ]
+
+
+def test_deterministic_issue_decisions_merge_child_evidence():
+    child = ChildDigest(
+        canonical_id="dram/spica/4sa",
+        as_of_week="2026-W28",
+        summary="4SA 요약",
+        claims=[],
+        issues=[
+            IssueDecision(
+                issue_id="issue-open",
+                status="ongoing",
+                summary="4SA 수율 하락",
+                mail_ids=["mail-28"],
+                agenda_ids=["agenda-28"],
+            )
+        ],
+        confidence="high",
+    )
+
+    assert wiki_builder_module.deterministic_issue_decisions([], [child]) == child.issues
+
+
+def test_llm_extra_body_uses_optional_reasoning_effort(monkeypatch):
+    monkeypatch.delenv("KNOWLEDGE_LLM_REASONING_EFFORT", raising=False)
+    assert wiki_builder_module._llm_extra_body() is None
+
+    monkeypatch.setenv("KNOWLEDGE_LLM_REASONING_EFFORT", "none")
+    assert wiki_builder_module._llm_extra_body() == {
+        "reasoning": {"effort": "none"}
+    }
 
 
 def test_issue_validation_rejects_terminal_agenda_for_another_issue():
@@ -1597,7 +1673,7 @@ def test_compact_issue_timeline_keeps_latest_distinct_transition_event():
     assert len(timeline["events"]) <= 3
 
 
-def test_parent_requires_issue_decisions_promoted_by_child_digest(taxonomy):
+def test_parent_deterministically_promotes_child_issue_decisions(taxonomy):
     agendas = [
         {
             "agenda_id": "agenda-child",
@@ -1616,20 +1692,10 @@ def test_parent_requires_issue_decisions_promoted_by_child_digest(taxonomy):
             "candidate_paths": [],
         }
     ]
-    child_decision = IssueDecision(
-        issue_id="issue-child",
-        status="ongoing",
-        summary="child issue",
-        mail_ids=["mail-child"],
-        agenda_ids=["agenda-child"],
-    )
+    contexts = {}
 
     def analyze(context):
-        if context["node"]["id"] == "lotcd:4sa":
-            return PageAnalysis(
-                issue_decisions=[child_decision],
-                outline=["개요"],
-            )
+        contexts[context["node"]["id"]] = context
         return PageAnalysis(outline=["개요"])
 
     result = build_integrated_pages(
@@ -1641,8 +1707,20 @@ def test_parent_requires_issue_decisions_promoted_by_child_digest(taxonomy):
         draft=lambda context, analysis: empty_draft(),
     )
 
-    assert "missing issue decision: issue-child" in result.failures[
-        "tech:dram:spica"
+    assert not result.failures
+    tech_child = next(
+        digest
+        for digest in contexts["tech:dram:spica"]["child_digests"]
+        if digest["canonical_id"] == "dram/spica/4sa"
+    )
+    assert tech_child["issues"] == [
+        {
+            "issue_id": "issue-child",
+            "status": "ongoing",
+            "summary": "child issue",
+            "mail_ids": ["mail-child"],
+            "agenda_ids": ["agenda-child"],
+        }
     ]
 
 
@@ -1700,7 +1778,7 @@ def test_parent_accepts_validated_reopened_child_issue_without_raw_terminal(taxo
     assert not result.failures
 
 
-def test_reopened_proof_propagates_exact_agenda_ids_lotcd_to_domain(taxonomy):
+def test_reopened_proof_propagates_deterministically_lotcd_to_domain(taxonomy):
     agendas = [
         {
             "agenda_id": "agenda-preterminal",
@@ -1752,55 +1830,22 @@ def test_reopened_proof_propagates_exact_agenda_ids_lotcd_to_domain(taxonomy):
         },
     ]
 
-    def build_with_parent_evidence(parent_agenda_id):
-        contexts = {}
+    contexts = {}
 
-        def decision(agenda_ids):
-            mail_by_agenda = {
-                agenda["agenda_id"]: agenda["mail_id"] for agenda in agendas
-            }
-            return IssueDecision(
-                issue_id="issue-child",
-                status="reopened",
-                summary="child reopened",
-                mail_ids=[mail_by_agenda[agenda_id] for agenda_id in agenda_ids],
-                agenda_ids=agenda_ids,
-            )
+    def analyze(context):
+        contexts[context["node"]["id"]] = context
+        return PageAnalysis(outline=["개요"])
 
-        def analyze(context):
-            node_id = context["node"]["id"]
-            contexts[node_id] = context
-            if node_id == "lotcd:4sa":
-                return PageAnalysis(
-                    issue_decisions=[
-                        decision(["agenda-preterminal", "agenda-reopened"])
-                    ],
-                    outline=["개요"],
-                )
-            if node_id in {"tech:dram:spica", "domain:dram"}:
-                return PageAnalysis(
-                    issue_decisions=[decision([parent_agenda_id])],
-                    outline=["개요"],
-                )
-            return PageAnalysis(outline=["개요"])
+    result = build_integrated_pages(
+        taxonomy,
+        agendas,
+        {},
+        as_of_week="2026-W28",
+        analyze=analyze,
+        draft=lambda context, analysis: empty_draft(),
+    )
 
-        result = build_integrated_pages(
-            taxonomy,
-            agendas,
-            {},
-            as_of_week="2026-W28",
-            analyze=analyze,
-            draft=lambda context, analysis: empty_draft(),
-        )
-        return result, contexts
-
-    invalid, _ = build_with_parent_evidence("agenda-preterminal")
-
-    assert "later than terminal" in invalid.failures["tech:dram:spica"]
-
-    valid, contexts = build_with_parent_evidence("agenda-reopened")
-
-    assert not valid.failures
+    assert not result.failures
     tech_child = next(
         digest
         for digest in contexts["tech:dram:spica"]["child_digests"]

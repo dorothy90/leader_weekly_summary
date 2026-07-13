@@ -12,6 +12,10 @@ validation. Invalid pages must never overwrite the previous canonical page.
 - Retry only semantic validation failures produced by the integrated Wiki
   pipeline.
 - Allow at most two corrective retries per analysis or narrative draft.
+- Derive ongoing, resolved, and reopened issue decisions from validated
+  timelines and child digests rather than asking the LLM to restate them.
+- Allow OpenRouter reasoning effort to be set through
+  `KNOWLEDGE_LLM_REASONING_EFFORT`.
 - Preserve the existing taxonomy, OpenSearch indexes, page schema, citations,
   issue continuity rules, and parent-after-child generation order.
 
@@ -34,9 +38,11 @@ stages:
      and regenerate the draft.
    - Stop after the initial attempt plus two corrective retries.
 
-The retry controller belongs in `integrated_wiki_builder.py`. It will not add
-missing issue decisions or citations itself; the LLM must correct its response,
-and existing deterministic validators remain the authority.
+The retry controller belongs in `integrated_wiki_builder.py`. Issue status and
+its latest evidence are deterministic because the existing state normalization
+already defines them. The LLM remains responsible for supported claims,
+contradictions, outline, and narrative prose. It must correct invalid claims or
+citations, while existing deterministic validators remain the authority.
 
 ## Failure behavior
 
@@ -48,8 +54,10 @@ and existing deterministic validators remain the authority.
 
 ## Verification
 
-- Unit test: first analysis omits an expected issue decision, corrective retry
-  supplies it, and page generation continues.
+- Unit test: analysis omits issue decisions, deterministic timeline and child
+  evidence supplies them, and page generation continues without an LLM retry.
+- Unit test: reopened evidence propagates from LOTCD to Tech and Domain.
+- Unit test: optional reasoning effort becomes the OpenRouter `reasoning` body.
 - Unit test: first draft contains an uncited factual unit, corrective retry adds
   a valid `[mail:...]` citation.
 - Unit test: three invalid responses produce one page failure and no saved page.

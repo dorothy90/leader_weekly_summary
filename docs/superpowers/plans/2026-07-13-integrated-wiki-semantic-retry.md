@@ -4,7 +4,7 @@
 
 **Goal:** Retry schema-valid but semantically invalid Wiki analysis and narrative responses with exact validator feedback, then regenerate all 23 canonical pages.
 
-**Architecture:** Add one generic retry helper in `integrated_wiki_builder.py`. `build_integrated_pages` will pass analysis and draft generation through this helper, while existing deterministic validators remain the acceptance gate. OpenSearch persistence remains unchanged and receives only successfully validated pages.
+**Architecture:** Add one generic retry helper in `integrated_wiki_builder.py`. `build_integrated_pages` derives issue decisions from validated timelines and child digests, then passes LLM claims and drafts through semantic validation. OpenSearch persistence remains unchanged and receives only successfully validated pages.
 
 **Tech Stack:** Python 3.13, Pydantic v2, LangChain `ChatOpenAI`, OpenRouter `z-ai/glm-4.7`, OpenSearch, pytest
 
@@ -12,10 +12,30 @@
 
 - Initial generation plus at most two corrective retries per analysis or draft.
 - Retry only `NarrativeValidationError`; schema validation retains its existing retry path.
-- Never synthesize missing decisions or citations in deterministic code.
+- Derive issue decisions only from deterministic timeline and child evidence.
+- Never synthesize missing factual claims or citations in deterministic code.
+- Set `KNOWLEDGE_LLM_REASONING_EFFORT=none` for GLM-4.7 generation.
 - Never persist a page that still fails validation.
 - Keep API keys in process environment only.
 - Preserve existing indexes, page schema, citations, issue continuity, and child-before-parent ordering.
+
+---
+
+## Approved Architecture Amendment
+
+Live GLM-4.7 smoke tests showed that asking the model to restate every issue
+decision was not reliable, even with validation feedback. The approved final
+design therefore supersedes any later step in this plan that expects the LLM to
+create or repair `issue_decisions`:
+
+- `deterministic_issue_decisions()` creates ongoing, resolved, and reopened
+  decisions from `issue_timelines` and validated child digests.
+- The generated `PageAnalysis.issue_decisions` value is replaced before
+  validation; the LLM still owns supported claims, contradictions, review
+  items, outline, and prose.
+- `KNOWLEDGE_LLM_REASONING_EFFORT` maps to OpenRouter's `reasoning.effort` body.
+- Semantic retries continue to handle invalid claims, citations, and empty
+  structured responses.
 
 ---
 
@@ -197,7 +217,7 @@ ANALYSIS_SYSTEM_PROMPT = """당신은 반도체 수율 Wiki 편집자입니다.
 이전 문서와 허용된 근거를 비교해 새 사실, 유지 사실, 낡은 사실, 이슈 상태 전환,
 모순, 검토 항목, 문서 목차를 구조화하십시오. mail_id와 agenda_id가 없는 주장은
 SupportedClaim으로 만들지 마십시오. 하위 digest는 원본 mail_id가 추적되는 주장만 사용하십시오.
-issue_timelines와 child_digests의 모든 이슈마다 정확히 하나의 issue_decision을 만드십시오.
+issue_decisions는 deterministic pipeline이 채우므로 빈 배열로 반환하십시오.
 validation_feedback이 있으면 기존의 유효한 근거를 버리지 말고 해당 오류를 수정하십시오."""
 
 DRAFT_SYSTEM_PROMPT = """당신은 통합 서술형 반도체 수율 Wiki 작성자입니다.
@@ -305,6 +325,7 @@ Run with the OpenRouter key already present in process environment:
 ```bash
 OPENROUTER_BASE_URL=https://openrouter.ai/api/v1 \
 KNOWLEDGE_LLM_MODEL=z-ai/glm-4.7 \
+KNOWLEDGE_LLM_REASONING_EFFORT=none \
 python integrated_wiki_builder.py \
   --week 2026-28 \
   --allow-external-llm \

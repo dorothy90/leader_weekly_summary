@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
@@ -130,8 +131,7 @@ ANALYSIS_SYSTEM_PROMPT = """당신은 반도체 수율 Wiki 편집자입니다.
 이전 문서와 허용된 근거를 비교해 새 사실, 유지 사실, 낡은 사실, 이슈 상태 전환,
 모순, 검토 항목, 문서 목차를 구조화하십시오. mail_id와 agenda_id가 없는 주장은
 SupportedClaim으로 만들지 마십시오. 하위 digest는 원본 mail_id가 추적되는 주장만 사용하십시오.
-issue_timelines와 child_digests의 모든 이슈마다 정확히 하나의 issue_decision을 만드십시오.
-각 issue_decision의 status는 expected_issue_statuses에 지정된 값을 정확히 따르십시오.
+issue_decisions는 deterministic pipeline이 채우므로 빈 배열로 반환하십시오.
 validation_feedback이 있으면 기존의 유효한 근거를 버리지 말고 해당 오류를 수정하십시오."""
 
 DRAFT_SYSTEM_PROMPT = """당신은 통합 서술형 반도체 수율 Wiki 작성자입니다.
@@ -183,6 +183,13 @@ def generate_with_semantic_retry(
     raise AssertionError("unreachable")
 
 
+def _llm_extra_body() -> dict[str, Any] | None:
+    reasoning_effort = os.getenv("KNOWLEDGE_LLM_REASONING_EFFORT")
+    if not reasoning_effort:
+        return None
+    return {"reasoning": {"effort": reasoning_effort}}
+
+
 def build_llm_generators() -> tuple[AnalysisFn, DraftFn]:
     from langchain_openai import ChatOpenAI
 
@@ -192,6 +199,7 @@ def build_llm_generators() -> tuple[AnalysisFn, DraftFn]:
         api_key=connection.api_key.get_secret_value(),
         base_url=connection.base_url,
         temperature=0,
+        extra_body=_llm_extra_body(),
     )
     analysis_llm = llm.with_structured_output(PageAnalysis, method="function_calling")
     draft_llm = llm.with_structured_output(NarrativeDraft, method="function_calling")
@@ -745,6 +753,52 @@ def _expected_issue_statuses(
     return expected
 
 
+def deterministic_issue_decisions(
+    timelines: list[dict[str, Any]], child_digests: list[ChildDigest]
+) -> list[IssueDecision]:
+    decisions: dict[str, IssueDecision] = {}
+
+    def merge(decision: IssueDecision) -> None:
+        existing = decisions.get(decision.issue_id)
+        if existing is None:
+            decisions[decision.issue_id] = decision
+            return
+        if existing.status != decision.status:
+            raise NarrativeValidationError(
+                f"conflicting deterministic issue state: {decision.issue_id}"
+            )
+        decisions[decision.issue_id] = existing.model_copy(
+            update={
+                "mail_ids": sorted({*existing.mail_ids, *decision.mail_ids}),
+                "agenda_ids": sorted(
+                    {*existing.agenda_ids, *decision.agenda_ids}
+                ),
+            }
+        )
+
+    for timeline in timelines:
+        latest = timeline["events"][-1]
+        merge(
+            IssueDecision(
+                issue_id=str(timeline["issue_id"]),
+                status=(
+                    "reopened"
+                    if timeline["event_type"] == "reopened"
+                    else "ongoing"
+                    if timeline["is_open"]
+                    else "resolved"
+                ),
+                summary=str(timeline["title"]),
+                mail_ids=[str(latest["mail_id"])],
+                agenda_ids=[str(latest["agenda_id"])],
+            )
+        )
+    for digest in child_digests:
+        for decision in digest.issues:
+            merge(decision)
+    return [decisions[issue_id] for issue_id in sorted(decisions)]
+
+
 def _reopened_evidence_ids(
     agendas: list[dict[str, Any]], child_digests: list[ChildDigest]
 ) -> dict[str, set[str]]:
@@ -893,6 +947,9 @@ def build_integrated_pages(
             expected_issue_statuses = _expected_issue_statuses(
                 compact_timelines, child_digests
             )
+            deterministic_decisions = deterministic_issue_decisions(
+                compact_timelines, child_digests
+            )
             context = {
                 "node": asdict(node),
                 "as_of_week": as_of_week,
@@ -918,8 +975,18 @@ def build_integrated_pages(
                 )
                 return evidence
 
+            def generate_analysis(
+                retry_context: dict[str, Any],
+            ) -> PageAnalysis | None:
+                candidate = analyze(retry_context)
+                if candidate is None:
+                    return None
+                return candidate.model_copy(
+                    update={"issue_decisions": deterministic_decisions}
+                )
+
             analysis, evidence_by_mail = generate_with_semantic_retry(
-                analyze,
+                generate_analysis,
                 validate_analysis,
                 context,
             )
