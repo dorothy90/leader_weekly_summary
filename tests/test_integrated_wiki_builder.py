@@ -5,10 +5,17 @@ from typing import Any
 
 import integrated_wiki_builder as wiki_builder_module
 import pytest
+import wiki_issue_ledger as issue_ledger_module
 from langchain_core.exceptions import OutputParserException
 from pydantic import SecretStr, ValidationError
 
-from category_wiki_builder import PAGE_INDEX, CategoryNode, load_taxonomy
+from category_wiki_builder import (
+    AGENDA_INDEX,
+    PAGE_INDEX,
+    SOURCE_INDEX,
+    CategoryNode,
+    load_taxonomy,
+)
 from integrated_wiki_builder import (
     _compact_issue_timelines,
     BuildResult,
@@ -324,6 +331,171 @@ class SearchClient:
     def search(self, *, index, body):
         self.query = body
         return {"hits": {"hits": self.hits}}
+
+
+class StatefulIndices:
+    def __init__(self, owner):
+        self.owner = owner
+        self.refreshed: list[str] = []
+
+    def exists(self, *, index):
+        return index in self.owner.documents
+
+    def create(self, *, index, body):
+        self.owner.documents[index] = {}
+        self.owner.mappings[index] = body
+
+    def get_mapping(self, *, index):
+        return {index: self.owner.mappings[index]}
+
+    def put_mapping(self, *, index, body):
+        properties = self.owner.mappings[index]["mappings"]["properties"]
+        properties.update(body["properties"])
+
+    def refresh(self, *, index):
+        self.refreshed.append(index)
+
+
+class StatefulWikiOpenSearch:
+    def __init__(self, *, weekly_mail, mail_agendas):
+        self.documents = {
+            SOURCE_INDEX: dict(weekly_mail),
+            AGENDA_INDEX: dict(mail_agendas),
+        }
+        self.mappings = {
+            SOURCE_INDEX: {"mappings": {"properties": {}}},
+            AGENDA_INDEX: {"mappings": {"properties": {}}},
+        }
+        self.indices = StatefulIndices(self)
+
+    def search(self, *, index, body):
+        records = sorted(self.documents.get(index, {}).items())
+        page_kind = body.get("query", {}).get("term", {}).get("page_kind")
+        if page_kind:
+            records = [
+                (document_id, source)
+                for document_id, source in records
+                if source.get("page_kind") == page_kind
+            ]
+        search_after = body.get("search_after")
+        if search_after:
+            records = [
+                item for item in records if item[0] > str(search_after[0])
+            ]
+        hits = [
+            {"_id": document_id, "_source": source, "sort": [document_id]}
+            for document_id, source in records[: body.get("size", 10)]
+        ]
+        return {"hits": {"hits": hits}}
+
+    def mget(self, *, index, body):
+        records = self.documents.get(index, {})
+        return {
+            "docs": [
+                (
+                    {
+                        "_id": document_id,
+                        "found": True,
+                        "_source": records[document_id],
+                    }
+                    if document_id in records
+                    else {"_id": document_id, "found": False}
+                )
+                for document_id in body["ids"]
+            ]
+        }
+
+    def get(self, *, index, id):
+        return {
+            "_id": id,
+            "_source": self.documents[index][id],
+            "found": True,
+        }
+
+    def apply_bulk(self, actual_client, actions):
+        assert actual_client is self
+        batch = list(actions)
+        for action in batch:
+            self.documents.setdefault(action["_index"], {})[
+                action["_id"]
+            ] = dict(action["_source"])
+        return len(batch), []
+
+    def latest_page(self, category_id):
+        return self.documents[PAGE_INDEX][category_id]
+
+
+def source_part(mail_id: str, week: str, text: str) -> dict[str, Any]:
+    return {
+        "mail_id": mail_id,
+        "week": week,
+        "text": text,
+        "part_index": 0,
+        "subject": "[Spica] 4SA 주간 수율",
+    }
+
+
+def agenda_document(
+    agenda_id: str,
+    mail_id: str,
+    source_doc_id: str,
+    week: str,
+    state: str,
+) -> dict[str, Any]:
+    return {
+        "agenda_id": agenda_id,
+        "mail_id": mail_id,
+        "week": week,
+        "updated_week": week,
+        "summary": "4SA " + state,
+        "source_quote": "4SA " + state,
+        "state": state,
+        "topic": "yield",
+        "scope": "lotcd",
+        "subject": (
+            "[Spica] 4SA 주간 수율"
+            if week == "2026-W28"
+            else "RE: [Spica] 4SA 주간 수율"
+        ),
+        "target_paths": [
+            {"domain": "DRAM", "tech": "Spica", "lotcd": "4SA"}
+        ],
+        "candidate_paths": [],
+        "review_status": "confirmed",
+        "confidence": 0.99,
+        "source_doc_ids": [source_doc_id],
+        "content_hash": agenda_id + ":" + state,
+        "created_at": "2026-07-07T00:00:00+00:00",
+        "updated_at": "2026-07-07T00:00:00+00:00",
+        "issue_id_source": "derived",
+    }
+
+
+def recording_merger(calls: list[str]):
+    def merge(context: dict[str, Any]) -> MergedWikiDocument:
+        calls.append(context["node"]["id"])
+        citations = "".join(
+            "[mail:" + mail_id + "]"
+            for mail_id in sorted(context["evidence_by_mail"])
+        )
+        current_body = "## 통합 현황"
+        if citations:
+            current_body += "\n\n근거를 통합했다. " + citations
+        return MergedWikiDocument(
+            title=context["node"]["title"],
+            current_body_markdown=current_body,
+            used_claim_ids=sorted(context["required_claim_ids"]),
+            used_issue_ids=sorted(context["required_issue_ids"]),
+            weekly_delta=(
+                "이번 주 근거를 갱신했다. " + citations
+                if context["has_weekly_change"]
+                else ""
+            ),
+            confidence="high" if citations else "low",
+            review_items=[],
+        )
+
+    return merge
 
 
 def test_supported_claim_requires_mail_and_agenda_evidence():
@@ -2616,6 +2788,99 @@ def test_run_reads_existing_agendas_and_persists_successful_pages(
         "category_wiki_pages",
     ]
     assert len(captured) == 7
+
+
+def test_rebuild_then_weekly_merge_is_idempotent_and_cited(
+    monkeypatch, taxonomy
+):
+    client = StatefulWikiOpenSearch(
+        weekly_mail={
+            "chunk-28": source_part(
+                "mail-28", "2026-W28", "4SA 수율 1.2%p 하락"
+            ),
+            "chunk-29": source_part(
+                "mail-29", "2026-W29", "chamber A 원인 확인 후 조건 원복"
+            ),
+        },
+        mail_agendas={
+            "agenda-28": agenda_document(
+                "agenda-28",
+                "mail-28",
+                "chunk-28",
+                "2026-W28",
+                "investigating",
+            ),
+            "agenda-29": agenda_document(
+                "agenda-29",
+                "mail-29",
+                "chunk-29",
+                "2026-W29",
+                "in_progress",
+            ),
+        },
+    )
+    calls = []
+    monkeypatch.setattr(
+        wiki_builder_module.helpers,
+        "bulk",
+        client.apply_bulk,
+    )
+    monkeypatch.setattr(
+        issue_ledger_module.helpers,
+        "bulk",
+        client.apply_bulk,
+    )
+
+    first = run(
+        weeks=["2026-W28"],
+        allow_external_llm=True,
+        allow_dummy_taxonomy=True,
+        rebuild_all=True,
+        client=client,
+        merge=recording_merger(calls),
+    )
+    calls.clear()
+    second = run(
+        weeks=["2026-W29"],
+        allow_external_llm=True,
+        allow_dummy_taxonomy=True,
+        client=client,
+        merge=recording_merger(calls),
+    )
+    calls_after_second = list(calls)
+    calls.clear()
+    third = run(
+        weeks=["2026-W29"],
+        allow_external_llm=True,
+        allow_dummy_taxonomy=True,
+        client=client,
+        merge=recording_merger(calls),
+    )
+
+    assert first["failed"] == 0
+    assert second["saved_pages"] == 3
+    assert calls_after_second == [
+        "lotcd:4sa",
+        "tech:dram:spica",
+        "domain:dram",
+    ]
+    assert third["saved_pages"] == 0
+    assert calls == []
+    page = client.latest_page("lotcd:4sa")
+    assert [entry["week"] for entry in page["weekly_history"]] == [
+        "2026-W29",
+        "2026-W28",
+    ]
+    source_docs_by_mail: dict[str, set[str]] = {}
+    for citation in page["citation_map"]:
+        source_docs_by_mail.setdefault(citation["mail_id"], set()).update(
+            citation["source_doc_ids"]
+        )
+    assert source_docs_by_mail == {
+        "mail-28": {"chunk-28"},
+        "mail-29": {"chunk-29"},
+    }
+    assert page["generation_strategy"] == "incremental_merge"
 
 
 @pytest.mark.parametrize(
