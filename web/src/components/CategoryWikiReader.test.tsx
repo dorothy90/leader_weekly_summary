@@ -33,8 +33,9 @@ category_id: lotcd:4sa
   child_page_ids: [],
   confidence: 'high',
   agenda_count: 1,
-  open_issue_ids: ['issue:4sa-yield'],
-  resolved_issue_ids: [],
+  issue_ids: ['issue:4sa-yield'],
+  open_issue_ids: [],
+  resolved_issue_ids: ['legacy-resolved'],
   open_issue_count: 1,
   resolved_issue_count: 0,
   contradictions: [],
@@ -44,17 +45,32 @@ category_id: lotcd:4sa
   source_doc_ids: ['chunk-1'],
   source_hash: 'hash',
   taxonomy_version: 1,
+  schema_version: 2,
+  generation_strategy: 'incremental_merge',
   generated_at: '2026-07-12T00:00:00Z',
   updated_at: '2026-07-12T00:00:00Z',
 }
 
 describe('CategoryWikiReader', () => {
-  it('renders narrative sections and opens an inline mail citation', () => {
+  it('derives outline from dynamic markdown headings', () => {
     const onSelectCitation = vi.fn()
     const onOutlineChange = vi.fn()
+    const dynamicPage = {
+      ...page,
+      current_body_markdown: [
+        '## Chamber A 편차와 수율 하락',
+        '',
+        '원인이 확인됐다. [mail:mail-1]',
+        '',
+        '## 조건 원복 후 검증',
+        '',
+        '재측정 중이다. [mail:mail-2]',
+      ].join('\n'),
+    }
+
     render(
       <CategoryWikiReader
-        page={page}
+        page={dynamicPage}
         loading={false}
         error={null}
         onSelectCitation={onSelectCitation}
@@ -62,17 +78,14 @@ describe('CategoryWikiReader', () => {
       />,
     )
 
-    expect(screen.getByRole('heading', { name: '개요' })).toHaveAttribute('id', '개요')
     fireEvent.click(screen.getByRole('button', { name: 'mail:mail-1' }))
     expect(onSelectCitation).toHaveBeenCalledWith('mail-1')
     expect(onOutlineChange).toHaveBeenCalledWith([
-      { id: '개요', label: '개요' },
-      { id: '현재-상태와-주요-변화', label: '현재 상태와 주요 변화' },
-      { id: '원인과-영향-관계', label: '원인과 영향 관계' },
-      { id: '조치와-효과', label: '조치와 효과' },
-      { id: '펜딩-이슈와-의사결정', label: '펜딩 이슈와 의사결정' },
-      { id: '누적-지식', label: '누적 지식' },
+      { id: 'chamber-a-편차와-수율-하락', label: 'Chamber A 편차와 수율 하락' },
+      { id: '조건-원복-후-검증', label: '조건 원복 후 검증' },
     ])
+    expect(screen.queryByRole('heading', { name: '개요' })).not.toBeInTheDocument()
+    expect(screen.getByText(/개 Agenda/)).toHaveTextContent('진행 1건 · 해결 0건')
   })
 
   it('expands the newest week and collapses older weeks', () => {
@@ -80,8 +93,20 @@ describe('CategoryWikiReader', () => {
     const historyPage = {
       ...page,
       weekly_history: [
-        { week: '2026-W28', body_markdown: '이번 주 [mail:mail-1]', source_mail_ids: ['mail-1'] },
-        { week: '2026-W27', body_markdown: '지난 주 [mail:mail-1]', source_mail_ids: ['mail-1'] },
+        {
+          week: '2026-W28',
+          body_markdown: '이번 주 [mail:mail-1]',
+          source_mail_ids: ['mail-1'],
+          agenda_ids: ['agenda-w28'],
+          source_doc_ids: ['chunk-1'],
+        },
+        {
+          week: '2026-W27',
+          body_markdown: '지난 주 [mail:mail-1]',
+          source_mail_ids: ['mail-1'],
+          agenda_ids: ['agenda-w27'],
+          source_doc_ids: ['chunk-1'],
+        },
       ],
     }
     const { container } = render(

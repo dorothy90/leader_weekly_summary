@@ -131,11 +131,14 @@ export interface WeeklyHistoryRecord {
   week: string
   body_markdown: string
   source_mail_ids: string[]
+  agenda_ids?: string[]
+  source_doc_ids?: string[]
 }
 
 export interface WikiCitationRecord {
   mail_id: string
   agenda_ids: string[]
+  source_doc_ids?: string[]
   used_in_sections: string[]
   category_paths: string[]
 }
@@ -161,6 +164,7 @@ export interface CategoryWikiPage {
   child_page_ids: string[]
   confidence: 'low' | 'medium' | 'high'
   agenda_count: number
+  issue_ids?: string[]
   open_issue_ids: string[]
   resolved_issue_ids: string[]
   open_issue_count: number
@@ -172,6 +176,8 @@ export interface CategoryWikiPage {
   source_doc_ids: string[]
   source_hash: string
   taxonomy_version: number
+  schema_version?: number
+  generation_strategy?: 'legacy' | 'fixed_sections' | 'incremental_merge'
   generated_at: string
   updated_at: string | null
 }

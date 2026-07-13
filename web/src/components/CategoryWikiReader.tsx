@@ -17,15 +17,6 @@ interface CategoryWikiReaderProps {
   onOutlineChange: (headings: WikiHeading[]) => void
 }
 
-const SECTION_LABELS = [
-  '개요',
-  '현재 상태와 주요 변화',
-  '원인과 영향 관계',
-  '조치와 효과',
-  '펜딩 이슈와 의사결정',
-  '누적 지식',
-]
-
 function readerMarkdown(markdown: string) {
   return markdown
     .replace(/^---\n[\s\S]*?\n---\n+/, '')
@@ -40,6 +31,14 @@ function headingId(label: string) {
   return label.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^\p{L}\p{N}-]/gu, '')
 }
 
+export function extractWikiHeadings(markdown: string): WikiHeading[] {
+  return markdown
+    .split('\n')
+    .map((line) => line.match(/^##\s+(.+?)\s*$/)?.[1])
+    .filter((label): label is string => Boolean(label))
+    .map((label) => ({ id: headingId(label), label }))
+}
+
 export function CategoryWikiReader({
   page,
   loading,
@@ -47,12 +46,15 @@ export function CategoryWikiReader({
   onSelectCitation,
   onOutlineChange,
 }: CategoryWikiReaderProps) {
+  const markdown = page
+    ? page.current_body_markdown || readerMarkdown(page.body_markdown)
+    : ''
   const headings = useMemo(() => [
-    ...SECTION_LABELS.map((label) => ({ id: headingId(label), label })),
+    ...extractWikiHeadings(markdown),
     ...(page?.weekly_history.length
       ? [{ id: 'weekly-history-title', label: '주차별 업데이트 이력' }]
       : []),
-  ], [page?.weekly_history.length])
+  ], [markdown, page?.weekly_history.length])
 
   useEffect(() => {
     onOutlineChange(headings)
@@ -102,12 +104,12 @@ export function CategoryWikiReader({
         </div>
         <h1>{page.title}</h1>
         <p>
-          {page.agenda_count}개 Agenda · 진행 {page.open_issue_ids.length}건 · 해결 {page.resolved_issue_ids.length}건
+          {page.agenda_count}개 Agenda · 진행 {page.open_issue_count}건 · 해결 {page.resolved_issue_count}건
         </p>
       </header>
       <div className="reader-body">
         <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-          {citationMarkdown(page.current_body_markdown || readerMarkdown(page.body_markdown))}
+          {citationMarkdown(markdown)}
         </ReactMarkdown>
         {page.weekly_history.length ? (
           <section className="wiki-weekly-history" aria-labelledby="weekly-history-title">
