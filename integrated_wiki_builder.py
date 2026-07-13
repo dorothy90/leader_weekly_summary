@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal, TypeVar
 
+from langchain_core.exceptions import OutputParserException
 from opensearchpy import OpenSearch, helpers
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
@@ -138,6 +139,7 @@ DRAFT_SYSTEM_PROMPT = """당신은 통합 서술형 반도체 수율 Wiki 작성
 승인된 분석과 근거만 사용해 여섯 개 현재 본문 섹션과 이번 주 이력을 한국어로
 작성하십시오. 사실 문단마다 [mail:<mail_id>]를 붙이십시오. 과거 이력은 작성하지
 마십시오. 메일에 없는 원인, 수치, 담당자, 해결 여부를 만들지 마십시오.
+각 섹션은 핵심 사실만 최대 네 문장으로 작성하고 섹션 간 같은 사실을 반복하지 마십시오.
 validation_feedback이 있으면 기존의 유효한 인용을 유지하며 해당 오류를 수정하십시오."""
 
 
@@ -146,7 +148,7 @@ def invoke_structured(runnable, messages: list[dict[str, str]]):
     for attempt in range(2):
         try:
             return runnable.invoke(current)
-        except ValidationError as exc:
+        except (ValidationError, OutputParserException) as exc:
             if attempt == 1:
                 raise
             current.append(

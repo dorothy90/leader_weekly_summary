@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import integrated_wiki_builder as wiki_builder_module
 import pytest
+from langchain_core.exceptions import OutputParserException
 from pydantic import SecretStr, ValidationError
 
 from category_wiki_builder import CategoryNode, load_taxonomy
@@ -643,6 +644,36 @@ def test_structured_invocation_retries_once_after_validation_error():
     assert (
         invoke_structured(runnable, [{"role": "user", "content": "evidence"}]) == valid
     )
+    assert runnable.calls == 2
+
+
+def test_structured_invocation_retries_once_after_output_parser_error():
+    valid = NarrativeDraft(
+        overview="",
+        current_status="",
+        cause_and_impact="",
+        actions_and_effects="",
+        pending_and_decisions="",
+        accumulated_knowledge="",
+        weekly_update="",
+        confidence="low",
+    )
+
+    class FakeRunnable:
+        def __init__(self):
+            self.calls = 0
+
+        def invoke(self, messages):
+            self.calls += 1
+            if self.calls == 1:
+                raise OutputParserException("unterminated tool arguments")
+            return valid
+
+    runnable = FakeRunnable()
+
+    assert invoke_structured(
+        runnable, [{"role": "user", "content": "evidence"}]
+    ) == valid
     assert runnable.calls == 2
 
 

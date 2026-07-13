@@ -38,6 +38,8 @@ create or repair `issue_decisions`:
   six-section canonical document.
 - Semantic retries continue to handle invalid claims, citations, and empty
   structured responses.
+- Pydantic and structured-output parser failures receive one corrective retry;
+  narrative sections are capped at four concise sentences.
 
 ---
 

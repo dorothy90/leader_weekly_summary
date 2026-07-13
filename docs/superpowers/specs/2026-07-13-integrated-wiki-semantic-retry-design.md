@@ -11,6 +11,8 @@ validation. Invalid pages must never overwrite the previous canonical page.
 - Keep `z-ai/glm-4.7` and the existing OpenRouter-compatible generator.
 - Retry only semantic validation failures produced by the integrated Wiki
   pipeline.
+- Retry malformed structured-output parser responses once before treating the
+  page as failed.
 - Allow at most two corrective retries per analysis or narrative draft.
 - Derive ongoing, resolved, and reopened issue decisions from validated
   timelines and child digests rather than asking the LLM to restate them.
@@ -61,6 +63,7 @@ citations, while existing deterministic validators remain the authority.
 - Unit test: reopened evidence propagates from LOTCD to Tech and Domain.
 - Unit test: optional reasoning effort becomes the OpenRouter `reasoning` body.
 - Unit test: an evidence-free leaf does not call the LLM generator.
+- Unit test: malformed tool arguments receive one structured-output retry.
 - Unit test: first draft contains an uncited factual unit, corrective retry adds
   a valid `[mail:...]` citation.
 - Unit test: three invalid responses produce one page failure and no saved page.
