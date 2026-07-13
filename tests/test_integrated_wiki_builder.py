@@ -842,6 +842,30 @@ def test_analysis_context_exposes_expected_issue_statuses(taxonomy):
     }
 
 
+def test_analysis_semantic_retry_recovers_from_empty_structured_response(taxonomy):
+    lotcd_contexts = []
+
+    def analyze(context):
+        if context["node"]["id"] == "lotcd:4sa":
+            lotcd_contexts.append(context)
+            if len(lotcd_contexts) == 1:
+                return None
+        return analysis_with_expected_issues(context)
+
+    result = build_integrated_pages(
+        single_lotcd_taxonomy(taxonomy),
+        [one_open_agenda()],
+        {},
+        as_of_week="2026-W28",
+        analyze=analyze,
+        draft=lambda context, analysis: empty_draft(),
+    )
+
+    assert not result.failures
+    assert len(lotcd_contexts) == 2
+    assert "no structured response" in lotcd_contexts[1]["validation_feedback"]
+
+
 def test_draft_semantic_retry_supplies_validator_feedback(taxonomy):
     contexts = []
 

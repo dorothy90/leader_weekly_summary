@@ -173,6 +173,8 @@ def generate_with_semantic_retry(
     for attempt in range(attempts):
         generated = generator(retry_context)
         try:
+            if generated is None:
+                raise NarrativeValidationError("model returned no structured response")
             return generated, validator(generated)
         except NarrativeValidationError as exc:
             if attempt == attempts - 1:
