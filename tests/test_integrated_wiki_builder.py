@@ -78,6 +78,42 @@ def analysis_with_expected_issues(context) -> PageAnalysis:
     return PageAnalysis(issue_decisions=decisions, outline=["개요"])
 
 
+def single_lotcd_taxonomy(taxonomy):
+    domain = next(item for item in taxonomy.domains if item.name == "DRAM")
+    tech = next(item for item in domain.techs if item.name == "Spica")
+    lotcd = next(item for item in tech.lotcds if item.code == "4SA")
+    return taxonomy.model_copy(
+        update={
+            "domains": [
+                domain.model_copy(
+                    update={
+                        "techs": [tech.model_copy(update={"lotcds": [lotcd]})]
+                    }
+                )
+            ]
+        }
+    )
+
+
+def one_open_agenda():
+    return {
+        "agenda_id": "agenda-28",
+        "mail_id": "mail-28",
+        "week": "2026-W28",
+        "state": "open",
+        "review_status": "confirmed",
+        "issue_id": "issue-open",
+        "summary": "4SA 수율 하락",
+        "subject": "4SA weekly",
+        "topic": "yield",
+        "source_doc_ids": ["chunk-28"],
+        "target_paths": [
+            {"domain": "DRAM", "tech": "Spica", "lotcd": "4SA"}
+        ],
+        "candidate_paths": [],
+    }
+
+
 def sample_integrated_page(
     category_id: str = "lotcd:4sa", week: str = "2026-W28"
 ) -> dict:
@@ -756,6 +792,83 @@ def test_issue_validation_rejects_a_missing_expected_decision():
             [],
             {"issue-open": "ongoing"},
         )
+
+
+def test_analysis_semantic_retry_supplies_validator_feedback(taxonomy):
+    contexts = []
+
+    def analyze(context):
+        contexts.append(context)
+        if context["node"]["id"] == "lotcd:4sa" and len(contexts) == 1:
+            return PageAnalysis(outline=["개요"])
+        return analysis_with_expected_issues(context)
+
+    result = build_integrated_pages(
+        single_lotcd_taxonomy(taxonomy),
+        [one_open_agenda()],
+        {},
+        as_of_week="2026-W28",
+        analyze=analyze,
+        draft=lambda context, analysis: empty_draft(),
+    )
+
+    lotcd_contexts = [
+        item for item in contexts if item["node"]["id"] == "lotcd:4sa"
+    ]
+    assert not result.failures
+    assert len(lotcd_contexts) == 2
+    assert "missing issue decision" in lotcd_contexts[1]["validation_feedback"]
+
+
+def test_draft_semantic_retry_supplies_validator_feedback(taxonomy):
+    contexts = []
+
+    def make_draft(context, analysis):
+        if context["node"]["id"] == "lotcd:4sa":
+            contexts.append(context)
+            if len(contexts) == 1:
+                return empty_draft().model_copy(
+                    update={"overview": "인용 없는 사실"}
+                )
+        return empty_draft()
+
+    result = build_integrated_pages(
+        single_lotcd_taxonomy(taxonomy),
+        [one_open_agenda()],
+        {},
+        as_of_week="2026-W28",
+        analyze=analysis_with_expected_issues,
+        draft=make_draft,
+    )
+
+    assert not result.failures
+    assert len(contexts) == 2
+    assert "uncited factual unit" in contexts[1]["validation_feedback"]
+
+
+def test_semantic_retry_stops_after_three_invalid_analyses(taxonomy):
+    calls = []
+
+    def analyze(context):
+        if context["node"]["id"] == "lotcd:4sa":
+            calls.append(context)
+            return PageAnalysis(outline=["개요"])
+        return analysis_with_expected_issues(context)
+
+    result = build_integrated_pages(
+        single_lotcd_taxonomy(taxonomy),
+        [one_open_agenda()],
+        {},
+        as_of_week="2026-W28",
+        analyze=analyze,
+        draft=lambda context, analysis: empty_draft(),
+    )
+
+    assert len(calls) == 3
+    assert result.pages == []
+    assert "missing issue decision" in result.failures["lotcd:4sa"]
+    assert result.failures["tech:dram:spica"] == "required child failed"
+    assert result.failures["domain:dram"] == "required child failed"
 
 
 def test_issue_validation_rejects_terminal_agenda_for_another_issue():

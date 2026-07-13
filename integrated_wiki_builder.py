@@ -6,7 +6,7 @@ import re
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, TypeVar
 
 from opensearchpy import OpenSearch, helpers
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
@@ -129,12 +129,15 @@ DraftFn = Callable[[dict[str, Any], PageAnalysis], NarrativeDraft]
 ANALYSIS_SYSTEM_PROMPT = """당신은 반도체 수율 Wiki 편집자입니다.
 이전 문서와 허용된 근거를 비교해 새 사실, 유지 사실, 낡은 사실, 이슈 상태 전환,
 모순, 검토 항목, 문서 목차를 구조화하십시오. mail_id와 agenda_id가 없는 주장은
-SupportedClaim으로 만들지 마십시오. 하위 digest는 원본 mail_id가 추적되는 주장만 사용하십시오."""
+SupportedClaim으로 만들지 마십시오. 하위 digest는 원본 mail_id가 추적되는 주장만 사용하십시오.
+issue_timelines와 child_digests의 모든 이슈마다 정확히 하나의 issue_decision을 만드십시오.
+validation_feedback이 있으면 기존의 유효한 근거를 버리지 말고 해당 오류를 수정하십시오."""
 
 DRAFT_SYSTEM_PROMPT = """당신은 통합 서술형 반도체 수율 Wiki 작성자입니다.
 승인된 분석과 근거만 사용해 여섯 개 현재 본문 섹션과 이번 주 이력을 한국어로
 작성하십시오. 사실 문단마다 [mail:<mail_id>]를 붙이십시오. 과거 이력은 작성하지
-마십시오. 메일에 없는 원인, 수치, 담당자, 해결 여부를 만들지 마십시오."""
+마십시오. 메일에 없는 원인, 수치, 담당자, 해결 여부를 만들지 마십시오.
+validation_feedback이 있으면 기존의 유효한 인용을 유지하며 해당 오류를 수정하십시오."""
 
 
 def invoke_structured(runnable, messages: list[dict[str, str]]):
@@ -151,6 +154,29 @@ def invoke_structured(runnable, messages: list[dict[str, str]]):
                     "content": f"스키마 오류를 수정해 다시 반환하십시오: {exc}",
                 }
             )
+    raise AssertionError("unreachable")
+
+
+GeneratedT = TypeVar("GeneratedT")
+ValidatedT = TypeVar("ValidatedT")
+
+
+def generate_with_semantic_retry(
+    generator: Callable[[dict[str, Any]], GeneratedT],
+    validator: Callable[[GeneratedT], ValidatedT],
+    context: dict[str, Any],
+    *,
+    attempts: int = 3,
+) -> tuple[GeneratedT, ValidatedT]:
+    retry_context = context
+    for attempt in range(attempts):
+        generated = generator(retry_context)
+        try:
+            return generated, validator(generated)
+        except NarrativeValidationError as exc:
+            if attempt == attempts - 1:
+                raise
+            retry_context = {**context, "validation_feedback": str(exc)}
     raise AssertionError("unreachable")
 
 
@@ -869,18 +895,29 @@ def build_integrated_pages(
                 "recent_history": _recent_history(previous),
                 "child_digests": [item.model_dump() for item in child_digests],
             }
-            analysis = analyze(context)
             available_reopened_evidence = _reopened_evidence_ids(
                 timeline_agendas, child_digests
             )
-            evidence_by_mail = validate_stage1_evidence(
-                analysis, validation_agendas
+            expected_issue_statuses = _expected_issue_statuses(
+                compact_timelines, child_digests
             )
-            validate_issue_decisions(
-                analysis,
-                validation_agendas,
-                _expected_issue_statuses(compact_timelines, child_digests),
-                available_reopened_evidence,
+
+            def validate_analysis(
+                candidate: PageAnalysis,
+            ) -> dict[str, list[str]]:
+                evidence = validate_stage1_evidence(candidate, validation_agendas)
+                validate_issue_decisions(
+                    candidate,
+                    validation_agendas,
+                    expected_issue_statuses,
+                    available_reopened_evidence,
+                )
+                return evidence
+
+            analysis, evidence_by_mail = generate_with_semantic_retry(
+                analyze,
+                validate_analysis,
+                context,
             )
             validated_reopened_evidence = {
                 decision.issue_id: set(decision.agenda_ids)
@@ -890,11 +927,12 @@ def build_integrated_pages(
                 and set(decision.agenda_ids)
                 & available_reopened_evidence.get(decision.issue_id, set())
             }
-            narrative = draft(context, analysis)
-            current_citation_map = [
-                *validate_draft(narrative, evidence_by_mail),
-                *legacy_citations,
-            ]
+            narrative, validated_citations = generate_with_semantic_retry(
+                lambda retry_context: draft(retry_context, analysis),
+                lambda candidate: validate_draft(candidate, evidence_by_mail),
+                context,
+            )
+            current_citation_map = [*validated_citations, *legacy_citations]
             current_body = render_current_body(narrative)
             previous_history = legacy_history or [
                 (
