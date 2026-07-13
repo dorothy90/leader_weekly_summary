@@ -48,6 +48,25 @@ def _normalize_week(value: object) -> str:
     return f"{match.group(1)}-W{match.group(2)}"
 
 
+def select_weekly_delta(
+    agendas: list[dict[str, Any]],
+    week: str,
+) -> list[dict[str, Any]]:
+    normalized = _normalize_week(week)
+    return sorted(
+        (
+            agenda
+            for agenda in agendas
+            if agenda.get("review_status", "confirmed") == "confirmed"
+            and (
+                _normalize_week(agenda.get("week")) == normalized
+                or _normalize_week(agenda.get("updated_week")) == normalized
+            )
+        ),
+        key=lambda agenda: str(agenda["agenda_id"]),
+    )
+
+
 @dataclass
 class BuildResult:
     pages: list[dict[str, Any]] = field(default_factory=list)
@@ -348,6 +367,34 @@ def canonical_path(node: CategoryNode) -> str:
     return "/".join(
         value.lower() for value in (node.domain, node.tech, node.lotcd) if value
     )
+
+
+def affected_node_ids(
+    taxonomy: TaxonomyDocument,
+    delta: list[dict[str, Any]],
+    *,
+    rebuild_all: bool = False,
+) -> set[str]:
+    nodes = category_nodes(taxonomy)
+    if rebuild_all:
+        return {node.id for node in nodes}
+    domain_ids = {
+        node.domain: node.id for node in nodes if node.level == "domain"
+    }
+    tech_ids = {
+        (node.domain, node.tech): node.id for node in nodes if node.level == "tech"
+    }
+    selected: set[str] = set()
+    for agenda in delta:
+        for node in nodes:
+            if not agenda_matches_node(agenda, node):
+                continue
+            selected.add(node.id)
+            if node.level in {"tech", "lotcd"}:
+                selected.add(domain_ids[node.domain])
+            if node.level == "lotcd":
+                selected.add(tech_ids[(node.domain, node.tech)])
+    return selected
 
 
 def direct_agendas_for_node(

@@ -20,6 +20,7 @@ from integrated_wiki_builder import (
     PageAnalysis,
     SupportedClaim,
     WeeklyHistoryEntry,
+    affected_node_ids,
     assemble_body,
     build_child_digest,
     build_integrated_pages,
@@ -33,6 +34,7 @@ from integrated_wiki_builder import (
     render_current_body,
     run,
     save_integrated_pages,
+    select_weekly_delta,
     validate_draft,
     validate_issue_decisions,
     validate_merged_document,
@@ -252,6 +254,64 @@ def test_integrated_mapping_adds_structured_fields_without_vectors():
     assert properties["weekly_history"]["type"] == "nested"
     assert properties["citation_map"]["type"] == "nested"
     assert "embedding" not in properties
+
+
+def test_weekly_delta_contains_new_and_corrected_agendas_only():
+    agendas = [
+        {**one_open_agenda(), "week": "2026-W28", "updated_week": "2026-W28"},
+        {
+            **one_open_agenda(),
+            "agenda_id": "agenda-corrected",
+            "week": "2026-W28",
+            "updated_week": "2026-W29",
+        },
+        {
+            **one_open_agenda(),
+            "agenda_id": "agenda-new",
+            "week": "2026-W29",
+            "updated_week": "2026-W29",
+        },
+    ]
+
+    delta = select_weekly_delta(agendas, "2026-W29")
+
+    assert [item["agenda_id"] for item in delta] == [
+        "agenda-corrected",
+        "agenda-new",
+    ]
+
+
+def test_lotcd_delta_affects_only_lotcd_and_ancestors(taxonomy):
+    ids = affected_node_ids(
+        taxonomy,
+        [
+            {
+                **one_open_agenda(),
+                "target_paths": [
+                    {"domain": "DRAM", "tech": "Spica", "lotcd": "4SA"}
+                ],
+            }
+        ],
+    )
+
+    assert ids == {"lotcd:4sa", "tech:dram:spica", "domain:dram"}
+
+
+def test_affected_nodes_use_taxonomy_node_ids(taxonomy, monkeypatch):
+    nodes = [
+        CategoryNode("dram-node", "domain", "DRAM", None, None, "DRAM"),
+        CategoryNode("spica-node", "tech", "DRAM", "Spica", None, "Spica"),
+        CategoryNode("4sa-node", "lotcd", "DRAM", "Spica", "4SA", "4SA"),
+    ]
+    monkeypatch.setattr(wiki_builder_module, "category_nodes", lambda _: nodes)
+
+    ids = affected_node_ids(taxonomy, [one_open_agenda()])
+
+    assert ids == {"4sa-node", "spica-node", "dram-node"}
+
+
+def test_no_delta_affects_no_pages(taxonomy):
+    assert affected_node_ids(taxonomy, []) == set()
 
 
 def test_canonical_path_uses_lowercase_category_segments():
