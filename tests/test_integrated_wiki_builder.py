@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Any
 
 import integrated_wiki_builder as wiki_builder_module
 import pytest
@@ -23,6 +24,7 @@ from integrated_wiki_builder import (
     affected_node_ids,
     assemble_body,
     build_child_digest,
+    build_incremental_pages,
     build_integrated_pages,
     build_llm_generators,
     canonical_path,
@@ -40,6 +42,11 @@ from integrated_wiki_builder import (
     validate_merged_document,
     validate_stage1_evidence,
     validate_source_documents,
+)
+from wiki_issue_ledger import (
+    IssueLedgerResult,
+    IssueStateEvent,
+    WikiIssue,
 )
 
 
@@ -122,6 +129,145 @@ def one_open_agenda():
         ],
         "candidate_paths": [],
     }
+
+
+def complete_page_fixture(
+    category_id: str,
+    domain: str,
+    tech: str | None,
+    lotcd: str | None,
+) -> dict[str, Any]:
+    level = "lotcd" if lotcd else "tech" if tech else "domain"
+    title = lotcd or tech or domain
+    canonical_id = "/".join(
+        value.casefold() for value in (domain, tech, lotcd) if value
+    )
+    return {
+        "category_id": category_id,
+        "page_kind": "latest",
+        "doc_type": "canonical",
+        "canonical_id": canonical_id,
+        "level": level,
+        "domain": domain,
+        "tech": tech,
+        "lotcd": lotcd,
+        "title": title,
+        "product": None,
+        "fab_id": lotcd[:1] if lotcd else None,
+        "aliases": [],
+        "as_of_week": "2026-W28",
+        "current_body_markdown": "## 기존 상태\n\n수율 분석 중이다. [mail:mail-28]",
+        "weekly_history": [],
+        "body_markdown": "## 기존 상태\n\n수율 분석 중이다. [mail:mail-28]",
+        "citation_map": [
+            {
+                "mail_id": "mail-28",
+                "agenda_ids": ["agenda-28"],
+                "source_doc_ids": ["chunk-28"],
+                "used_in_sections": ["기존 상태"],
+                "category_paths": [canonical_id],
+            }
+        ],
+        "child_page_ids": [],
+        "confidence": "medium",
+        "agenda_count": 1,
+        "open_issue_ids": ["issue:4sa-yield"],
+        "resolved_issue_ids": [],
+        "open_issue_count": 1,
+        "resolved_issue_count": 0,
+        "contradictions": [],
+        "generation_review_items": [],
+        "review_agenda_ids": [],
+        "source_agenda_ids": ["agenda-28"],
+        "source_doc_ids": ["chunk-28"],
+        "source_hash": "old",
+        "taxonomy_version": 1,
+        "schema_version": 2,
+        "generation_strategy": "incremental_merge",
+        "generated_at": "2026-07-07T00:00:00+00:00",
+        "updated_at": "2026-07-07T00:00:00+00:00",
+    }
+
+
+def w29_4sa_agenda() -> dict[str, Any]:
+    return {
+        **one_open_agenda(),
+        "agenda_id": "agenda-29",
+        "mail_id": "mail-29",
+        "week": "2026-W29",
+        "updated_week": "2026-W29",
+        "summary": "chamber A 원인 확인 후 조건 원복",
+        "topic": "root_cause",
+        "state": "in_progress",
+        "source_doc_ids": ["chunk-29"],
+        "content_hash": "w29",
+    }
+
+
+def previous_page_chain() -> dict[str, dict[str, Any]]:
+    return {
+        "lotcd:4sa": complete_page_fixture(
+            "lotcd:4sa", "DRAM", "Spica", "4SA"
+        ),
+        "tech:dram:spica": complete_page_fixture(
+            "tech:dram:spica", "DRAM", "Spica", None
+        ),
+        "domain:dram": complete_page_fixture(
+            "domain:dram", "DRAM", None, None
+        ),
+    }
+
+
+def issue_result_for(agendas: list[dict[str, Any]]) -> IssueLedgerResult:
+    issue_id = "issue:4sa-yield"
+    agenda_ids = [str(item["agenda_id"]) for item in agendas]
+    events = [
+        IssueStateEvent(
+            week=str(item["week"]),
+            agenda_id=str(item["agenda_id"]),
+            state=str(item["state"]),
+            event_type="created" if index == 0 else "updated",
+        )
+        for index, item in enumerate(agendas)
+    ]
+    issue = WikiIssue(
+        issue_id=issue_id,
+        category_paths=["dram/spica/4sa"],
+        topic="yield",
+        title="4SA 수율 하락",
+        current_status="ongoing",
+        agenda_ids=agenda_ids,
+        state_history=events,
+        first_seen_week=str(agendas[0]["week"]),
+        last_updated_week=str(agendas[-1]["updated_week"]),
+    )
+    return IssueLedgerResult(
+        issues={issue_id: issue},
+        agenda_to_issue={agenda_id: issue_id for agenda_id in agenda_ids},
+        changed_issue_ids=[issue_id],
+        review_items=[],
+    )
+
+
+def valid_dynamic_document(context: dict[str, Any]) -> MergedWikiDocument:
+    mail_ids = sorted(context["evidence_by_mail"])
+    citations = "".join("[mail:" + mail_id + "]" for mail_id in mail_ids)
+    body = "## 이번 주 상태\n\n"
+    if citations:
+        body += "근거가 반영됐다. " + citations
+    return MergedWikiDocument(
+        title=context["node"]["title"],
+        current_body_markdown=body,
+        used_claim_ids=sorted(context["required_claim_ids"]),
+        used_issue_ids=sorted(context["required_issue_ids"]),
+        weekly_delta=(
+            "이번 주 근거가 반영됐다. " + citations
+            if context["has_weekly_change"]
+            else ""
+        ),
+        confidence="high" if citations else "low",
+        review_items=[],
+    )
 
 
 def sample_integrated_page(
@@ -279,6 +425,139 @@ def test_weekly_delta_contains_new_and_corrected_agendas_only():
         "agenda-corrected",
         "agenda-new",
     ]
+
+
+def test_w29_merges_only_4sa_spica_dram_and_keeps_dynamic_headings(taxonomy):
+    calls = []
+    saved = []
+    agendas = [
+        {
+            **one_open_agenda(),
+            "updated_week": "2026-W28",
+            "content_hash": "w28",
+        },
+        w29_4sa_agenda(),
+    ]
+    previous = {
+        "lotcd:4sa": {
+            **complete_page_fixture("lotcd:4sa", "DRAM", "Spica", "4SA"),
+            "current_body_markdown": "## 수율 하락\n\n원인 분석 중이다. [mail:mail-28]",
+            "source_hash": "old-lot",
+        },
+        "tech:dram:spica": {
+            **complete_page_fixture("tech:dram:spica", "DRAM", "Spica", None),
+            "source_hash": "old-tech",
+        },
+        "domain:dram": {
+            **complete_page_fixture("domain:dram", "DRAM", None, None),
+            "source_hash": "old-domain",
+        },
+    }
+
+    def merge(context):
+        node_id = context["node"]["id"]
+        calls.append(node_id)
+        mail_ids = sorted(context["evidence_by_mail"])
+        citations = "".join("[mail:" + mail_id + "]" for mail_id in mail_ids)
+        return MergedWikiDocument(
+            title=context["node"]["title"],
+            current_body_markdown=(
+                "## Chamber A 원인과 조건 원복\n\n"
+                "원인 확인 후 조건 원복을 진행 중이다. " + citations
+            ),
+            used_claim_ids=sorted(context["required_claim_ids"]),
+            used_issue_ids=sorted(context["required_issue_ids"]),
+            weekly_delta="이번 주 원인과 조치가 갱신됐다. " + citations,
+            confidence="high",
+            review_items=[],
+        )
+
+    result = build_incremental_pages(
+        taxonomy,
+        agendas,
+        previous,
+        issue_result_for(agendas),
+        as_of_week="2026-W29",
+        merge=merge,
+        on_page=saved.append,
+    )
+
+    assert calls == ["lotcd:4sa", "tech:dram:spica", "domain:dram"]
+    assert [page["category_id"] for page in saved] == calls
+    assert not result.failures
+    assert "## 개요" not in saved[0]["current_body_markdown"]
+    assert saved[0]["weekly_history"][0]["week"] == "2026-W29"
+
+
+def test_parent_failure_keeps_saved_child_and_marks_ancestor_pending(taxonomy):
+    saved = []
+
+    def first_merge(context):
+        if context["node"]["id"] == "tech:dram:spica":
+            raise RuntimeError("provider timeout")
+        return valid_dynamic_document(context)
+
+    agenda = w29_4sa_agenda()
+    issue_result = issue_result_for([agenda])
+    first = build_incremental_pages(
+        taxonomy,
+        [agenda],
+        previous_page_chain(),
+        issue_result,
+        as_of_week="2026-W29",
+        merge=first_merge,
+        on_page=saved.append,
+    )
+
+    assert [page["category_id"] for page in saved] == ["lotcd:4sa"]
+    assert first.failures == {"tech:dram:spica": "provider timeout"}
+    assert first.pending == {"domain:dram": "required child failed"}
+
+    resumed_previous = previous_page_chain()
+    resumed_previous["lotcd:4sa"] = saved[0]
+    resumed_calls = []
+
+    def resumed_merge(context):
+        resumed_calls.append(context["node"]["id"])
+        return valid_dynamic_document(context)
+
+    second = build_incremental_pages(
+        taxonomy,
+        [agenda],
+        resumed_previous,
+        issue_result,
+        as_of_week="2026-W29",
+        merge=resumed_merge,
+    )
+
+    assert resumed_calls == ["tech:dram:spica", "domain:dram"]
+    assert second.skipped == ["lotcd:4sa"]
+    assert second.failures == {}
+    assert second.pending == {}
+
+
+def test_category_without_delta_gets_no_history_entry(taxonomy):
+    def unexpected_merge(context):
+        pytest.fail("merge must not run when no category is affected")
+
+    result = build_incremental_pages(
+        taxonomy,
+        [],
+        previous_page_chain(),
+        IssueLedgerResult(
+            issues={},
+            agenda_to_issue={},
+            changed_issue_ids=[],
+            review_items=[],
+        ),
+        as_of_week="2026-W29",
+        merge=unexpected_merge,
+    )
+
+    assert result.pages == []
+    assert result.failures == {}
+    assert result.pending == {}
+    assert result.skipped == []
 
 
 def test_lotcd_delta_affects_only_lotcd_and_ancestors(taxonomy):

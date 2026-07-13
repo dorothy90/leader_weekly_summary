@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, TypeVar
 
@@ -30,6 +32,7 @@ from category_wiki_builder import (
     page_index_definition,
 )
 from knowledge_models import TaxonomyDocument
+from wiki_issue_ledger import IssueLedgerResult, WikiIssue
 
 
 MAIL_CITATION = re.compile(r"\[mail:([^\]]+)\]")
@@ -71,6 +74,8 @@ def select_weekly_delta(
 class BuildResult:
     pages: list[dict[str, Any]] = field(default_factory=list)
     failures: dict[str, str] = field(default_factory=dict)
+    pending: dict[str, str] = field(default_factory=dict)
+    skipped: list[str] = field(default_factory=list)
 
 
 class WikiModel(BaseModel):
@@ -128,7 +133,7 @@ class MergeValidationContext(WikiModel):
     stale_claim_texts: list[str]
 
 
-# Kept until the incremental builder switches to MergedWikiDocument in Task 5.
+# Legacy fixed-contract model used by build_integrated_pages and the current CLI.
 class NarrativeDraft(WikiModel):
     overview: str
     current_status: str
@@ -177,6 +182,7 @@ class ChildDigest(WikiModel):
 
 AnalysisFn = Callable[[dict[str, Any]], PageAnalysis]
 DraftFn = Callable[[dict[str, Any], PageAnalysis], NarrativeDraft]
+MergeFn = Callable[[dict[str, Any]], MergedWikiDocument]
 
 
 ANALYSIS_SYSTEM_PROMPT = """당신은 반도체 수율 Wiki 편집자입니다.
@@ -1103,6 +1109,435 @@ def _reopened_evidence_ids(
         for issue_id, agenda_ids in digest.reopened_evidence_ids.items():
             evidence.setdefault(issue_id, set()).update(agenda_ids)
     return evidence
+
+
+def build_merge_context(
+    *,
+    node: CategoryNode,
+    week: str,
+    agendas: list[dict[str, Any]],
+    delta: list[dict[str, Any]],
+    previous: dict[str, Any],
+    issues: dict[str, WikiIssue],
+    agenda_to_issue: dict[str, str],
+    child_digests: list[ChildDigest],
+    base_page: dict[str, Any],
+) -> dict[str, Any]:
+    direct = direct_agendas_for_node(node, agendas)
+    direct_ids = {str(item["agenda_id"]) for item in direct}
+    direct_delta = [
+        item for item in delta if str(item["agenda_id"]) in direct_ids
+    ]
+    evidence_by_mail: dict[str, set[str]] = {}
+    source_docs_by_mail: dict[str, set[str]] = {}
+    for agenda in direct:
+        mail_id = str(agenda["mail_id"])
+        evidence_by_mail.setdefault(mail_id, set()).add(str(agenda["agenda_id"]))
+        source_docs_by_mail.setdefault(mail_id, set()).update(
+            str(item) for item in agenda.get("source_doc_ids", [])
+        )
+    previous_citations = [
+        item
+        if isinstance(item, CitationMapEntry)
+        else CitationMapEntry.model_validate(item)
+        for item in previous.get("citation_map", [])
+    ]
+    for citation in previous_citations:
+        evidence_by_mail.setdefault(citation.mail_id, set()).update(
+            citation.agenda_ids
+        )
+        source_docs_by_mail.setdefault(citation.mail_id, set()).update(
+            citation.source_doc_ids
+        )
+    for child in child_digests:
+        for citation in child.citation_map:
+            evidence_by_mail.setdefault(citation.mail_id, set()).update(
+                citation.agenda_ids
+            )
+            source_docs_by_mail.setdefault(citation.mail_id, set()).update(
+                citation.source_doc_ids
+            )
+
+    required_claim_ids = {
+        "claim:" + agenda_id
+        for agenda_ids in evidence_by_mail.values()
+        for agenda_id in agenda_ids
+    }
+    required_claim_ids.update(
+        claim_id
+        for child in child_digests
+        for claim_id in child.used_claim_ids
+    )
+    required_issue_ids = {
+        agenda_to_issue[str(agenda["agenda_id"])]
+        for agenda in direct
+        if str(agenda["agenda_id"]) in agenda_to_issue
+    }
+    required_issue_ids.update(
+        issue_id
+        for child in child_digests
+        for issue_id in child.used_issue_ids
+    )
+    required_issue_ids.update(
+        str(issue_id) for issue_id in previous.get("issue_ids", [])
+    )
+    relevant_issues = {
+        issue_id: issues[issue_id].model_dump(mode="json")
+        for issue_id in sorted(required_issue_ids)
+    }
+    return {
+        "node": asdict(node),
+        "week": week,
+        "base_page": base_page,
+        "previous_current_body_markdown": previous.get(
+            "current_body_markdown", ""
+        ),
+        "previous_weekly_history": previous.get("weekly_history", []),
+        "previous_citation_map": previous.get("citation_map", []),
+        "direct_agendas": direct,
+        "weekly_delta_agendas": direct_delta,
+        "child_digests": [
+            item.model_dump(mode="json") for item in child_digests
+        ],
+        "evidence_by_mail": {
+            key: sorted(value)
+            for key, value in sorted(evidence_by_mail.items())
+        },
+        "source_docs_by_mail": {
+            key: sorted(value)
+            for key, value in sorted(source_docs_by_mail.items())
+        },
+        "required_claim_ids": sorted(required_claim_ids),
+        "required_issue_ids": sorted(required_issue_ids),
+        "issues": relevant_issues,
+        "has_weekly_change": bool(direct_delta)
+        or any(child.weekly_delta.strip() for child in child_digests),
+    }
+
+
+def merge_source_hash(context: dict[str, Any]) -> str:
+    payload = {
+        "strategy": "incremental_merge:v2",
+        "node_id": context["node"]["id"],
+        "week": context["week"],
+        "agendas": [
+            {
+                "agenda_id": item["agenda_id"],
+                "content_hash": item.get("content_hash", ""),
+            }
+            for item in context["direct_agendas"]
+        ],
+        "issues": context["issues"],
+        "children": [
+            {
+                "category_id": item["category_id"],
+                "source_hash": item["source_hash"],
+            }
+            for item in context["child_digests"]
+        ],
+    }
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def retry_context_to_validation_context(
+    context: dict[str, Any],
+) -> MergeValidationContext:
+    validate_canonical_issue_states(context["issues"])
+    resolved = {
+        issue_id
+        for issue_id, issue in context["issues"].items()
+        if issue["current_status"] == "resolved"
+    }
+    reopened = {
+        issue_id
+        for issue_id, issue in context["issues"].items()
+        if issue["current_status"] == "reopened"
+    }
+    return MergeValidationContext(
+        evidence_by_mail=context["evidence_by_mail"],
+        source_docs_by_mail=context["source_docs_by_mail"],
+        required_claim_ids=set(context["required_claim_ids"]),
+        required_issue_ids=set(context["required_issue_ids"]),
+        resolved_issue_ids=resolved,
+        reopened_issue_ids=reopened,
+        stale_claim_texts=[],
+    )
+
+
+def validate_canonical_issue_states(
+    issues: dict[str, dict[str, Any]],
+) -> None:
+    for issue_id, issue in issues.items():
+        events = sorted(
+            issue["state_history"],
+            key=lambda item: (
+                _normalize_week(item["week"]),
+                item["agenda_id"],
+            ),
+        )
+        terminal_positions = [
+            index
+            for index, event in enumerate(events)
+            if str(event["state"]).casefold() in TERMINAL_STATES
+        ]
+        if issue["current_status"] == "resolved":
+            if not events or len(events) - 1 not in terminal_positions:
+                raise NarrativeValidationError(
+                    "resolved issue has no latest terminal evidence: " + issue_id
+                )
+        if issue["current_status"] == "reopened":
+            if not terminal_positions or terminal_positions[-1] >= len(events) - 1:
+                raise NarrativeValidationError(
+                    "reopened issue has no later non-terminal evidence: " + issue_id
+                )
+
+
+def build_page_from_merge(
+    node: CategoryNode,
+    document: MergedWikiDocument,
+    citations: list[CitationMapEntry],
+    context: dict[str, Any],
+    previous: dict[str, Any],
+    source_hash: str,
+) -> dict[str, Any]:
+    path = canonical_path(node)
+    current_citations = [
+        item.model_copy(update={"category_paths": [path]})
+        for item in citations
+    ]
+    history = [
+        item
+        if isinstance(item, WeeklyHistoryEntry)
+        else WeeklyHistoryEntry.model_validate(item)
+        for item in previous.get("weekly_history", [])
+    ]
+    if context["has_weekly_change"]:
+        weekly_mail_ids = sorted(
+            item.mail_id
+            for item in current_citations
+            if "주차별 업데이트 이력" in item.used_in_sections
+        )
+        history = merge_weekly_history(
+            history,
+            WeeklyHistoryEntry(
+                week=context["week"],
+                body_markdown=document.weekly_delta,
+                source_mail_ids=weekly_mail_ids,
+                agenda_ids=sorted(
+                    {
+                        agenda_id
+                        for item in current_citations
+                        if item.mail_id in weekly_mail_ids
+                        for agenda_id in item.agenda_ids
+                    }
+                ),
+                source_doc_ids=sorted(
+                    {
+                        source_id
+                        for item in current_citations
+                        if item.mail_id in weekly_mail_ids
+                        for source_id in item.source_doc_ids
+                    }
+                ),
+            ),
+        )
+    previous_citations = [
+        item
+        if isinstance(item, CitationMapEntry)
+        else CitationMapEntry.model_validate(item)
+        for item in previous.get("citation_map", [])
+    ]
+    citation_map = [
+        item.model_copy(update={"category_paths": [path]})
+        for item in _merge_citation_maps(
+            current_citations,
+            previous_citations,
+            history,
+        )
+    ]
+    source_agenda_ids = sorted(
+        {agenda_id for item in citation_map for agenda_id in item.agenda_ids}
+    )
+    source_doc_ids = sorted(
+        {source_id for item in citation_map for source_id in item.source_doc_ids}
+    )
+    issue_ids = sorted(document.used_issue_ids)
+    resolved_ids = sorted(
+        issue_id
+        for issue_id in issue_ids
+        if context["issues"][issue_id]["current_status"] == "resolved"
+    )
+    open_ids = sorted(set(issue_ids) - set(resolved_ids))
+    base = context["base_page"]
+    now = datetime.now(UTC).isoformat()
+    return {
+        **base,
+        "doc_type": "canonical",
+        "canonical_id": path,
+        "current_body_markdown": document.current_body_markdown,
+        "weekly_history": [item.model_dump() for item in history],
+        "body_markdown": assemble_body(document.current_body_markdown, history),
+        "citation_map": [item.model_dump() for item in citation_map],
+        "child_page_ids": [
+            item["canonical_id"] for item in context["child_digests"]
+        ],
+        "confidence": document.confidence,
+        "agenda_count": len(source_agenda_ids),
+        "issue_ids": issue_ids,
+        "open_issue_ids": open_ids,
+        "resolved_issue_ids": resolved_ids,
+        "open_issue_count": len(open_ids),
+        "resolved_issue_count": len(resolved_ids),
+        "generation_review_items": document.review_items,
+        "source_agenda_ids": source_agenda_ids,
+        "source_doc_ids": source_doc_ids,
+        "source_hash": source_hash,
+        "schema_version": 2,
+        "generation_strategy": "incremental_merge",
+        "updated_at": now,
+    }
+
+
+def child_digest_from_page(page: dict[str, Any]) -> ChildDigest:
+    history = page.get("weekly_history", [])
+    weekly_delta = next(
+        (
+            str(item["body_markdown"])
+            for item in history
+            if _normalize_week(item["week"])
+            == _normalize_week(page["as_of_week"])
+        ),
+        "",
+    )
+    citation_map = [
+        item
+        if isinstance(item, CitationMapEntry)
+        else CitationMapEntry.model_validate(item)
+        for item in page.get("citation_map", [])
+    ]
+    agenda_ids = sorted(
+        {agenda_id for item in citation_map for agenda_id in item.agenda_ids}
+    )
+    return ChildDigest(
+        category_id=str(page["category_id"]),
+        canonical_id=str(page["canonical_id"]),
+        current_body_markdown=str(page["current_body_markdown"]),
+        weekly_delta=weekly_delta,
+        used_claim_ids=["claim:" + agenda_id for agenda_id in agenda_ids],
+        used_issue_ids=[str(item) for item in page.get("issue_ids", [])],
+        citation_map=citation_map,
+        source_hash=str(page["source_hash"]),
+        confidence=str(page.get("confidence", "low")),
+    )
+
+
+def build_incremental_pages(
+    taxonomy: TaxonomyDocument,
+    agendas: list[dict[str, Any]],
+    previous_pages: dict[str, dict[str, Any]],
+    issue_result: IssueLedgerResult,
+    *,
+    as_of_week: str,
+    merge: MergeFn,
+    rebuild_all: bool = False,
+    on_page: Callable[[dict[str, Any]], None] | None = None,
+) -> BuildResult:
+    week = _normalize_week(as_of_week)
+    eligible_agendas = [
+        agenda
+        for agenda in agendas
+        if not agenda.get("week")
+        or _normalize_week(agenda["week"]) <= week
+    ]
+    delta = select_weekly_delta(eligible_agendas, week)
+    selected_ids = affected_node_ids(
+        taxonomy,
+        delta,
+        rebuild_all=rebuild_all,
+    )
+    compatibility_pages = {
+        page["category_id"]: page
+        for page in build_page_documents(
+            taxonomy,
+            eligible_agendas,
+            as_of_week=week,
+        )
+    }
+    order = {"lotcd": 0, "tech": 1, "domain": 2}
+    nodes = sorted(
+        category_nodes(taxonomy),
+        key=lambda node: (order[node.level], node.id),
+    )
+    result = BuildResult()
+    digests: dict[str, ChildDigest] = {}
+    for node in nodes:
+        if node.id not in selected_ids:
+            continue
+        children = [
+            child
+            for child in _direct_children(node, nodes)
+            if child.id in selected_ids
+        ]
+        failed_children = [
+            child.id
+            for child in children
+            if child.id in result.failures or child.id in result.pending
+        ]
+        if failed_children:
+            result.pending[node.id] = "required child failed"
+            continue
+        try:
+            context = build_merge_context(
+                node=node,
+                week=week,
+                agendas=eligible_agendas,
+                delta=delta,
+                previous=(
+                    {} if rebuild_all else previous_pages.get(node.id, {})
+                ),
+                issues=issue_result.issues,
+                agenda_to_issue=issue_result.agenda_to_issue,
+                child_digests=[digests[child.id] for child in children],
+                base_page=compatibility_pages[node.id],
+            )
+            source_hash = merge_source_hash(context)
+            previous = previous_pages.get(node.id, {})
+            if (
+                not rebuild_all
+                and previous.get("source_hash") == source_hash
+            ):
+                result.skipped.append(node.id)
+                digests[node.id] = child_digest_from_page(previous)
+                continue
+            document, citations = generate_with_semantic_retry(
+                lambda retry_context: merge(retry_context),
+                lambda candidate: validate_merged_document(
+                    candidate,
+                    retry_context_to_validation_context(context),
+                ),
+                context,
+            )
+            page = build_page_from_merge(
+                node,
+                document,
+                citations,
+                context,
+                previous,
+                source_hash,
+            )
+            result.pages.append(page)
+            digests[node.id] = child_digest_from_page(page)
+            if on_page:
+                on_page(page)
+        except Exception as exc:
+            result.failures[node.id] = str(exc)
+    return result
 
 
 def build_integrated_pages(
