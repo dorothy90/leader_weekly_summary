@@ -7,6 +7,7 @@ import os
 import re
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlparse
 
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
@@ -281,8 +282,9 @@ def llm_connection() -> LLMConnection:
         raise RuntimeError(
             "KNOWLEDGE_LLM_BASE_URL or OPENROUTER_BASE_URL is required"
         )
+    is_loopback = urlparse(base_url).hostname in {"localhost", "127.0.0.1", "::1"}
     if (
-        knowledge_base_url is None
+        not is_loopback
         and os.getenv("KNOWLEDGE_LLM_DATA_POLICY_ACK", "").casefold() != "true"
     ):
         raise RuntimeError(

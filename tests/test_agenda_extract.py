@@ -137,10 +137,11 @@ def test_extract_mail_keeps_aggregate_without_targets():
     assert result.agendas[0].target_paths == []
 
 
-def test_knowledge_llm_configuration_overrides_openrouter(monkeypatch):
+def test_external_knowledge_llm_configuration_is_allowed_with_ack(monkeypatch):
     monkeypatch.setenv("KNOWLEDGE_LLM_BASE_URL", "http://internal-llm.example/v1")
     monkeypatch.setenv("KNOWLEDGE_LLM_API_KEY", "internal-secret")
     monkeypatch.setenv("KNOWLEDGE_LLM_MODEL", "internal-model")
+    monkeypatch.setenv("KNOWLEDGE_LLM_DATA_POLICY_ACK", "TrUe")
     monkeypatch.setenv("OPENROUTER_BASE_URL", "https://openrouter.example/v1")
 
     connection = llm_connection()
@@ -149,6 +150,31 @@ def test_knowledge_llm_configuration_overrides_openrouter(monkeypatch):
     assert connection.model == "internal-model"
     assert connection.api_key.get_secret_value() == "internal-secret"
     assert "internal-secret" not in repr(connection)
+
+
+def test_external_knowledge_llm_configuration_requires_data_policy_ack(monkeypatch):
+    monkeypatch.setenv(
+        "KNOWLEDGE_LLM_BASE_URL", "https://internal-llm.example/v1"
+    )
+    monkeypatch.delenv("KNOWLEDGE_LLM_DATA_POLICY_ACK", raising=False)
+
+    with pytest.raises(RuntimeError, match="KNOWLEDGE_LLM_DATA_POLICY_ACK=true"):
+        llm_connection()
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "http://localhost:8000/v1",
+        "http://127.0.0.1:8000/v1",
+        "http://[::1]:8000/v1",
+    ],
+)
+def test_loopback_llm_configuration_does_not_require_ack(monkeypatch, base_url):
+    monkeypatch.setenv("KNOWLEDGE_LLM_BASE_URL", base_url)
+    monkeypatch.delenv("KNOWLEDGE_LLM_DATA_POLICY_ACK", raising=False)
+
+    assert llm_connection().base_url == base_url
 
 
 def test_openrouter_llm_configuration_requires_data_policy_ack(monkeypatch):
