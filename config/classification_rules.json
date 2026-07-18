@@ -180,5 +180,11 @@
       "alias": "Colosseum QLC 1T",
       "target_lotcds": ["4C1", "6C1"]
     }
-  ]
+  ],
+  "learned_aliases": [],
+  "policies": {
+    "multi_lotcd_metric": "aggregate",
+    "unknown_phrase": "review_required",
+    "derive_parent_from_lotcd": true
+  }
 }

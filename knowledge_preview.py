@@ -1,4 +1,4 @@
-"""Standalone Knowledge Explorer API for local frontend development."""
+"""Standalone LOTCD Classification Workbench API."""
 
 from fastapi import FastAPI
 

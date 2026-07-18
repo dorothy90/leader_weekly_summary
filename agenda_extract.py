@@ -21,7 +21,7 @@ from knowledge_models import (
     Mail,
     TaxonomyDocument,
 )
-from knowledge_store import DEFAULT_DB_PATH, SQLiteKnowledgeStore
+from classification_store import DEFAULT_DATA_DIR, DEFAULT_RULES_PATH, JsonClassificationStore
 
 
 load_dotenv(Path(__file__).resolve().parent / ".env")
@@ -407,6 +407,9 @@ def extract_mail(
     )
 
 
-def default_resolver(db_path: Path = DEFAULT_DB_PATH) -> CanonicalResolver:
-    store = SQLiteKnowledgeStore(db_path)
+def default_resolver(
+    data_dir: Path = DEFAULT_DATA_DIR,
+    rules_path: Path = DEFAULT_RULES_PATH,
+) -> CanonicalResolver:
+    store = JsonClassificationStore(data_dir=data_dir, rules_path=rules_path)
     return CanonicalResolver(store.taxonomy, store.aliases())

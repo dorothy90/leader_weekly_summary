@@ -271,6 +271,7 @@ mail
 ppt_render/node_modules/
 web/node_modules/
 web/dist/
+classification_data/**/*.tmp
 exports/deep_mining/*_qa/
 
 # 생성 산출물(데모/작업물)

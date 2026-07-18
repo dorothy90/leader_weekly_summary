@@ -1,0 +1,273 @@
+{
+  "week": "2026-28",
+  "workflow_state": "review_in_progress",
+  "active_run_id": "348a0b0189b3448695c23a85ff7ac883",
+  "approved_at": null,
+  "approved_by": null,
+  "runs": {
+    "348a0b0189b3448695c23a85ff7ac883": {
+      "id": "348a0b0189b3448695c23a85ff7ac883",
+      "week": "2026-28",
+      "status": "completed",
+      "prompt_version": "agenda-v2-demo",
+      "classifier_version": "lotcd-v1",
+      "taxonomy_version": 1,
+      "alias_version": 1,
+      "prior_run_id": null,
+      "started_at": "2026-07-18T14:43:30.362859Z",
+      "completed_at": "2026-07-18T14:43:30.378756Z",
+      "error": null
+    }
+  },
+  "items": {
+    "dummy_mail_002_agenda_6405f4d2313c": {
+      "agenda_id": "dummy_mail_002_agenda_6405f4d2313c",
+      "mail_id": "dummy_mail_002",
+      "summary": "Spica 전체 수율 전주 수준 유지",
+      "source_quote": "Spica 전체 수율은 전주 수준을 유지했습니다.",
+      "classification_context": "Spica 전체 수율은 전주 수준을 유지했습니다.",
+      "item_kind": "aggregate",
+      "decision": {
+        "status": "aggregate",
+        "target_path": {
+          "domain": "DRAM",
+          "tech": "Spica",
+          "lotcd": null
+        },
+        "matches": [],
+        "diagnostics": [
+          "AGGREGATE_METRIC"
+        ],
+        "confidence": 1.0
+      },
+      "revision_count": 0
+    },
+    "dummy_mail_002_agenda_3a9d4ab0fca4": {
+      "agenda_id": "dummy_mail_002_agenda_3a9d4ab0fca4",
+      "mail_id": "dummy_mail_002",
+      "summary": "4SA 장비 조건 변경 후 수율 1.2%p 하락",
+      "source_quote": "4SA는 장비 조건 변경 이후 수율이 1.2%p 하락해 원인 분석 중입니다.",
+      "classification_context": "4SA는 장비 조건 변경 이후 수율이 1.2%p 하락해 원인 분석 중입니다.",
+      "item_kind": "lotcd_specific",
+      "decision": {
+        "status": "confirmed",
+        "target_path": {
+          "domain": "DRAM",
+          "tech": "Spica",
+          "lotcd": "4SA"
+        },
+        "matches": [
+          {
+            "phrase": "4SA",
+            "lotcd": "4SA",
+            "match_type": "canonical",
+            "rule_id": "canonical:4SA",
+            "score": 1.0
+          }
+        ],
+        "diagnostics": [],
+        "confidence": 1.0
+      },
+      "revision_count": 0
+    },
+    "dummy_mail_002_agenda_8a84ad72715e": {
+      "agenda_id": "dummy_mail_002_agenda_8a84ad72715e",
+      "mail_id": "dummy_mail_002",
+      "summary": "6SA 세정 조건 원복 후 수율 96.4% 정상화",
+      "source_quote": "6SA는 세정 조건 원복 후 96.4%로 정상화됐습니다.",
+      "classification_context": "6SA는 세정 조건 원복 후 96.4%로 정상화됐습니다.",
+      "item_kind": "lotcd_specific",
+      "decision": {
+        "status": "confirmed",
+        "target_path": {
+          "domain": "DRAM",
+          "tech": "Spica",
+          "lotcd": "6SA"
+        },
+        "matches": [
+          {
+            "phrase": "6SA",
+            "lotcd": "6SA",
+            "match_type": "canonical",
+            "rule_id": "canonical:6SA",
+            "score": 1.0
+          }
+        ],
+        "diagnostics": [],
+        "confidence": 1.0
+      },
+      "revision_count": 0
+    },
+    "dummy_mail_003_agenda_3e1001b63eac": {
+      "agenda_id": "dummy_mail_003_agenda_3e1001b63eac",
+      "mail_id": "dummy_mail_003",
+      "summary": "SP LPDDR5 24G Edge defect 증가",
+      "source_quote": "SP LPDDR5 24G 제품군의 Edge defect가 증가했습니다.",
+      "classification_context": "SP LPDDR5 24G 제품군의 Edge defect가 증가했습니다.",
+      "item_kind": "lotcd_specific",
+      "decision": {
+        "status": "conflict",
+        "target_path": null,
+        "matches": [
+          {
+            "phrase": "SP LPDDR5 24G",
+            "lotcd": "4SA",
+            "match_type": "alias",
+            "rule_id": "alias:15",
+            "score": 1.0
+          },
+          {
+            "phrase": "SP LPDDR5 24G",
+            "lotcd": "6SA",
+            "match_type": "alias",
+            "rule_id": "alias:15",
+            "score": 1.0
+          }
+        ],
+        "diagnostics": [
+          "ALIAS_COLLISION"
+        ],
+        "confidence": 0.0
+      },
+      "revision_count": 0
+    },
+    "dummy_mail_003_agenda_2a77079d5221": {
+      "agenda_id": "dummy_mail_003_agenda_2a77079d5221",
+      "mail_id": "dummy_mail_003",
+      "summary": "4SA·6SA 세정 recipe 변경안 순차 적용",
+      "source_quote": "Fab 공통 세정 recipe 변경안을 4SA와 6SA에 순차 적용할 예정입니다.",
+      "classification_context": "Fab 공통 세정 recipe 변경안을 4SA와 6SA에 순차 적용할 예정입니다.",
+      "item_kind": "lotcd_specific",
+      "decision": {
+        "status": "manually_corrected",
+        "target_path": {
+          "domain": "DRAM",
+          "tech": "Spica",
+          "lotcd": "4SA"
+        },
+        "matches": [],
+        "diagnostics": [],
+        "confidence": 1.0
+      },
+      "revision_count": 1
+    },
+    "dummy_mail_012_agenda_b7797d0684fc": {
+      "agenda_id": "dummy_mail_012_agenda_b7797d0684fc",
+      "mail_id": "dummy_mail_012",
+      "summary": "4SA chamber A 편차 원인 확인",
+      "source_quote": "4SA 장비 조건 분석 결과 chamber A 편차가 원인으로 확인됐습니다.",
+      "classification_context": "4SA 장비 조건 분석 결과 chamber A 편차가 원인으로 확인됐습니다.",
+      "item_kind": "lotcd_specific",
+      "decision": {
+        "status": "confirmed",
+        "target_path": {
+          "domain": "DRAM",
+          "tech": "Spica",
+          "lotcd": "4SA"
+        },
+        "matches": [
+          {
+            "phrase": "4SA",
+            "lotcd": "4SA",
+            "match_type": "canonical",
+            "rule_id": "canonical:4SA",
+            "score": 1.0
+          }
+        ],
+        "diagnostics": [],
+        "confidence": 1.0
+      },
+      "revision_count": 0
+    },
+    "dummy_mail_012_agenda_4c7f93aa3862": {
+      "agenda_id": "dummy_mail_012_agenda_4c7f93aa3862",
+      "mail_id": "dummy_mail_012",
+      "summary": "4SA 조건 원복 후 재측정",
+      "source_quote": "오늘 조건 원복 후 재측정합니다.",
+      "classification_context": "4SA 장비 조건 분석 결과 chamber A 편차가 원인으로 확인됐습니다. 오늘 조건 원복 후 재측정합니다.",
+      "item_kind": "lotcd_specific",
+      "decision": {
+        "status": "confirmed",
+        "target_path": {
+          "domain": "DRAM",
+          "tech": "Spica",
+          "lotcd": "4SA"
+        },
+        "matches": [
+          {
+            "phrase": "4SA",
+            "lotcd": "4SA",
+            "match_type": "canonical",
+            "rule_id": "canonical:4SA",
+            "score": 1.0
+          }
+        ],
+        "diagnostics": [],
+        "confidence": 1.0
+      },
+      "revision_count": 0
+    }
+  },
+  "revisions": {
+    "dummy_mail_003_agenda_2a77079d5221": [
+      {
+        "before": {
+          "agenda_id": "dummy_mail_003_agenda_2a77079d5221",
+          "mail_id": "dummy_mail_003",
+          "summary": "4SA·6SA 세정 recipe 변경안 순차 적용",
+          "source_quote": "Fab 공통 세정 recipe 변경안을 4SA와 6SA에 순차 적용할 예정입니다.",
+          "classification_context": "Fab 공통 세정 recipe 변경안을 4SA와 6SA에 순차 적용할 예정입니다.",
+          "item_kind": "unknown",
+          "decision": {
+            "status": "conflict",
+            "target_path": null,
+            "matches": [
+              {
+                "phrase": "4SA",
+                "lotcd": "4SA",
+                "match_type": "canonical",
+                "rule_id": "canonical:4SA",
+                "score": 1.0
+              },
+              {
+                "phrase": "6SA",
+                "lotcd": "6SA",
+                "match_type": "canonical",
+                "rule_id": "canonical:6SA",
+                "score": 1.0
+              }
+            ],
+            "diagnostics": [
+              "MULTIPLE_LOTCD_CONFLICT"
+            ],
+            "confidence": 0.0
+          },
+          "revision_count": 0
+        },
+        "after": {
+          "agenda_id": "dummy_mail_003_agenda_2a77079d5221",
+          "mail_id": "dummy_mail_003",
+          "summary": "4SA·6SA 세정 recipe 변경안 순차 적용",
+          "source_quote": "Fab 공통 세정 recipe 변경안을 4SA와 6SA에 순차 적용할 예정입니다.",
+          "classification_context": "Fab 공통 세정 recipe 변경안을 4SA와 6SA에 순차 적용할 예정입니다.",
+          "item_kind": "lotcd_specific",
+          "decision": {
+            "status": "manually_corrected",
+            "target_path": {
+              "domain": "DRAM",
+              "tech": "Spica",
+              "lotcd": "4SA"
+            },
+            "matches": [],
+            "diagnostics": [],
+            "confidence": 1.0
+          },
+          "revision_count": 0
+        },
+        "changed_at": "2026-07-18T14:57:12.836905+00:00",
+        "changed_by": "demo-user",
+        "reason": "ㅅㄷㄴㅅ"
+      }
+    ]
+  }
+}

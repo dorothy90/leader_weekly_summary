@@ -1,4 +1,4 @@
-"""Serve the built Knowledge Web from FastAPI without a separate web server."""
+"""Serve the built Classification Workbench from FastAPI."""
 
 from __future__ import annotations
 
@@ -39,45 +39,10 @@ def mount_knowledge_web(app: FastAPI, dist_path: Path | None = None) -> bool:
         name="knowledge-root",
     )
     app.add_api_route(
-        "/explorer",
-        serve_index,
-        methods=["GET"],
-        include_in_schema=False,
-        name="knowledge-explorer",
-    )
-    app.add_api_route(
-        "/explorer/{category_path:path}",
-        serve_index,
-        methods=["GET"],
-        include_in_schema=False,
-        name="knowledge-explorer-category",
-    )
-    app.add_api_route(
-        "/mappings",
-        serve_index,
-        methods=["GET"],
-        include_in_schema=False,
-        name="knowledge-mappings",
-    )
-    app.add_api_route(
-        "/review",
-        serve_index,
-        methods=["GET"],
-        include_in_schema=False,
-        name="knowledge-review",
-    )
-    app.add_api_route(
         "/classification",
         serve_index,
         methods=["GET"],
         include_in_schema=False,
         name="knowledge-classification",
-    )
-    app.add_api_route(
-        "/wiki/{wiki_path:path}",
-        serve_index,
-        methods=["GET"],
-        include_in_schema=False,
-        name="knowledge-wiki",
     )
     return True

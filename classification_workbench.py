@@ -82,9 +82,22 @@ def classify_context(
     aliases: list[AliasRecord] | None = None,
     sender_team: str = "",
 ) -> ClassificationDecision:
+    parent_path = None
+    for domain in taxonomy.domains:
+        for tech in domain.techs:
+            if any(_contains(text, term) for term in [tech.name, *tech.aliases]):
+                parent_path = CategoryPath(
+                    domain=domain.name, tech=tech.name, lotcd=None
+                )
+                break
+        if parent_path is not None:
+            break
+        if _contains(text, domain.name):
+            parent_path = CategoryPath(domain=domain.name, tech=None, lotcd=None)
     if item_kind == "aggregate":
         return ClassificationDecision(
             status="aggregate",
+            target_path=parent_path,
             diagnostics=["AGGREGATE_METRIC"],
             confidence=1.0,
         )
@@ -166,6 +179,13 @@ def classify_context(
             matches=matches,
             diagnostics=["MULTIPLE_LOTCD_CONFLICT"],
             confidence=0.0,
+        )
+    if parent_path is not None:
+        return ClassificationDecision(
+            status="confirmed",
+            target_path=parent_path,
+            diagnostics=[],
+            confidence=0.97,
         )
     return ClassificationDecision(
         status="unclassified",

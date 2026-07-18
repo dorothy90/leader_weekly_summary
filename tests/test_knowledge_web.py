@@ -30,11 +30,6 @@ def test_mount_knowledge_web_serves_spa_routes_and_assets(tmp_path):
     mounted = mount_knowledge_web(app, dist)
 
     assert mounted is True
-    assert "Knowledge Web" in get(app, "/explorer/dram/spica/4sa").text
-    assert "Knowledge Web" in get(app, "/review").text
-    assert "Knowledge Web" in get(app, "/wiki/docs/dram/spica/4sa").text
-    assert "Knowledge Web" in get(app, "/wiki/graph").text
-    assert "Knowledge Web" in get(app, "/mappings").text
     assert "Knowledge Web" in get(app, "/classification").text
     assert get(app, "/assets/app.js").status_code == 200
 
@@ -45,4 +40,4 @@ def test_mount_knowledge_web_skips_missing_build(tmp_path):
     mounted = mount_knowledge_web(app, tmp_path / "missing")
 
     assert mounted is False
-    assert get(app, "/explorer").status_code == 404
+    assert get(app, "/classification").status_code == 404
