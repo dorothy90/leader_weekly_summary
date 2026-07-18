@@ -94,6 +94,30 @@ def store_with_completed_run(tmp_path, status: str = "unclassified"):
     return store, run, result.agendas[0]
 
 
+def protected_item_snapshot(store, agenda_id):
+    with store._connect() as connection:
+        return {
+            "agenda": connection.execute(
+                "SELECT * FROM agenda WHERE id = ?", (agenda_id,)
+            ).fetchone(),
+            "targets": connection.execute(
+                "SELECT * FROM agenda_target WHERE agenda_id = ? ORDER BY category_id",
+                (agenda_id,),
+            ).fetchall(),
+            "trace": connection.execute(
+                "SELECT * FROM classification_trace WHERE agenda_id = ?",
+                (agenda_id,),
+            ).fetchone(),
+            "week": connection.execute(
+                "SELECT * FROM week_classification WHERE week = '2026-01'"
+            ).fetchone(),
+            "revision_count": connection.execute(
+                "SELECT COUNT(*) FROM classification_revision WHERE agenda_id = ?",
+                (agenda_id,),
+            ).fetchone()[0],
+        }
+
+
 def test_run_and_trace_survive_reload(tmp_path):
     db_path = tmp_path / "knowledge.db"
     store = SQLiteKnowledgeStore(db_path)
@@ -485,6 +509,68 @@ def test_manual_correction_records_one_lotcd_revision_and_readiness(tmp_path):
     assert store.week_summary("2026-01").workflow_state == "ready_for_approval"
 
 
+@pytest.mark.parametrize("workflow_state", ["approved", "revalidation_required"])
+@pytest.mark.parametrize("action", ["correct", "disposition", "split"])
+def test_protected_week_rejects_item_mutations_without_changing_data(
+    tmp_path, workflow_state, action
+):
+    store, _, agenda = store_with_completed_run(tmp_path, "confirmed")
+    store.approve_week("2026-01", "approver")
+    if workflow_state == "revalidation_required":
+        with sqlite3.connect(store.db_path) as connection:
+            connection.execute(
+                "UPDATE week_classification SET workflow_state = ? WHERE week = ?",
+                (workflow_state, "2026-01"),
+            )
+    before = protected_item_snapshot(store, agenda.id)
+
+    with pytest.raises(ValueError, match=workflow_state):
+        if action == "correct":
+            store.correct_classification(agenda.id, "6SA", "reviewer", "reason")
+        elif action == "disposition":
+            store.set_item_disposition(
+                agenda.id, "excluded", "reviewer", "reason"
+            )
+        else:
+            store.split_classification_item(
+                agenda.id,
+                [
+                    ItemSplitPart(
+                        source_quote="4SA", summary="first", lotcd="4SA"
+                    ),
+                    ItemSplitPart(
+                        source_quote="수율 하락", summary="second", lotcd="6SA"
+                    ),
+                ],
+                "reviewer",
+                "reason",
+            )
+
+    assert protected_item_snapshot(store, agenda.id) == before
+
+
+@pytest.mark.parametrize("workflow_state", ["approved", "revalidation_required"])
+def test_readiness_recalculation_does_not_overwrite_protected_state(
+    tmp_path, workflow_state
+):
+    store, run, _ = store_with_completed_run(tmp_path, "confirmed")
+    store.approve_week("2026-01", "approver")
+    with store._connect() as connection:
+        connection.execute(
+            "UPDATE week_classification SET workflow_state = ? WHERE week = ?",
+            (workflow_state, "2026-01"),
+        )
+        before = connection.execute(
+            "SELECT * FROM week_classification WHERE week = '2026-01'"
+        ).fetchone()
+        store._recalculate_week_readiness(connection, run.id)
+        after = connection.execute(
+            "SELECT * FROM week_classification WHERE week = '2026-01'"
+        ).fetchone()
+
+    assert after == before
+
+
 @pytest.mark.parametrize(
     ("status", "diagnostics"),
     [("aggregate", ["AGGREGATE_METRIC"]), ("excluded", [])],
@@ -534,6 +620,63 @@ def test_split_is_deterministic_and_excludes_original(tmp_path):
         assert connection.execute(
             "SELECT COUNT(*) FROM classification_trace WHERE run_id = ?", (run.id,)
         ).fetchone()[0] == 3
+
+
+def test_split_offsets_are_anchored_to_original_context_occurrence(tmp_path):
+    store = SQLiteKnowledgeStore(tmp_path / "knowledge.db")
+    run = store.start_classification_run(
+        week="2026-01",
+        prompt_version="agenda-v2",
+        classifier_version="lotcd-v1",
+    )
+    mail, result = classified_extraction("unclassified")
+    repeated = "4SA 수율 하락"
+    mail = mail.model_copy(update={"body": f"{repeated}\nignore\n{repeated}"})
+    second_start = mail.body.rfind(repeated)
+    agenda = result.agendas[0].model_copy(
+        update={
+            "source_quote": repeated,
+            "source_start": second_start,
+            "source_end": second_start + len(repeated),
+            "classification_context": repeated,
+        }
+    )
+    result = result.model_copy(update={"agendas": [agenda]})
+    store.save_classified_extraction(run.id, mail, result)
+    store.finish_classification_run(run.id)
+
+    children = store.split_classification_item(
+        agenda.id,
+        [
+            ItemSplitPart(source_quote="4SA", summary="first", lotcd="4SA"),
+            ItemSplitPart(
+                source_quote="수율 하락", summary="second", lotcd="6SA"
+            ),
+        ],
+        "reviewer",
+        "split repeated context",
+    )
+
+    with sqlite3.connect(store.db_path) as connection:
+        offsets = {
+            row[0]: row[1]
+            for row in connection.execute(
+                "SELECT id, source_start FROM agenda WHERE id IN (?, ?)",
+                (children[0].agenda_id, children[1].agenda_id),
+            )
+        }
+    assert offsets[children[0].agenda_id] == second_start
+    assert offsets[children[1].agenda_id] == second_start + repeated.index("수율 하락")
+
+
+def test_revision_snapshots_exclude_derived_revision_count(tmp_path):
+    store, _, agenda = store_with_completed_run(tmp_path)
+
+    store.correct_classification(agenda.id, "4SA", "reviewer", "reason")
+
+    revision = store.revisions(agenda.id)[0]
+    assert "revision_count" not in revision.before
+    assert "revision_count" not in revision.after
 
 
 @pytest.mark.parametrize(

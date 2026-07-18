@@ -370,6 +370,7 @@ def extract_mail(
             draft.item_kind,
             resolver.taxonomy,
             resolver.aliases,
+            sender_team=mail.sender_team,
         )
         resolved = resolver.resolve(draft.classification_context, mail.sender_team)
         target_paths = [decision.target_path] if decision.target_path else []

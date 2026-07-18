@@ -804,13 +804,51 @@ class SQLiteKnowledgeStore:
         )
 
     @staticmethod
+    def _revision_snapshot(item: ClassificationItem) -> dict:
+        snapshot = item.model_dump(mode="json")
+        snapshot.pop("revision_count")
+        return snapshot
+
+    @staticmethod
+    def _ensure_item_week_mutable(
+        connection: sqlite3.Connection, agenda_id: str
+    ) -> str:
+        row = connection.execute(
+            """
+            SELECT trace.run_id, week.workflow_state
+            FROM classification_trace trace
+            JOIN classification_run run ON run.id = trace.run_id
+            JOIN week_classification week ON week.week = run.week
+            WHERE trace.agenda_id = ?
+            """,
+            (agenda_id,),
+        ).fetchone()
+        if row is None:
+            raise KeyError(agenda_id)
+        if row["workflow_state"] in {"approved", "revalidation_required"}:
+            raise ValueError(
+                f"Cannot modify item in {row['workflow_state']} week: {agenda_id}"
+            )
+        return row["run_id"]
+
+    @staticmethod
     def _recalculate_week_readiness(
         connection: sqlite3.Connection, run_id: str
     ) -> None:
         run = connection.execute(
-            "SELECT week, status FROM classification_run WHERE id = ?", (run_id,)
+            """
+            SELECT run.week, run.status, week.workflow_state
+            FROM classification_run run
+            JOIN week_classification week ON week.week = run.week
+            WHERE run.id = ?
+            """,
+            (run_id,),
         ).fetchone()
-        if run is None or run["status"] != "completed":
+        if (
+            run is None
+            or run["status"] != "completed"
+            or run["workflow_state"] in {"approved", "revalidation_required"}
+        ):
             return
         counts = connection.execute(
             """
@@ -848,14 +886,12 @@ class SQLiteKnowledgeStore:
     ) -> ClassificationItem:
         from classification_workbench import lotcd_path
 
-        path = lotcd_path(self.taxonomy, lotcd)
-        target_id = self._category_id(path, self._lookups())
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            run_id = self._ensure_item_week_mutable(connection, agenda_id)
+            path = lotcd_path(self.taxonomy, lotcd)
+            target_id = self._category_id(path, self._lookups())
             before = self._classification_item_for_agenda(connection, agenda_id)
-            trace = connection.execute(
-                "SELECT run_id FROM classification_trace WHERE agenda_id = ?",
-                (agenda_id,),
-            ).fetchone()
             connection.execute(
                 """
                 UPDATE agenda
@@ -887,12 +923,12 @@ class SQLiteKnowledgeStore:
             self._record_classification_revision(
                 connection,
                 agenda_id,
-                before.model_dump(mode="json"),
-                after.model_dump(mode="json"),
+                self._revision_snapshot(before),
+                self._revision_snapshot(after),
                 changed_by,
                 reason,
             )
-            self._recalculate_week_readiness(connection, trace["run_id"])
+            self._recalculate_week_readiness(connection, run_id)
             return self._classification_item_for_agenda(connection, agenda_id)
 
     def set_item_disposition(
@@ -902,16 +938,14 @@ class SQLiteKnowledgeStore:
         changed_by: str,
         reason: str,
     ) -> ClassificationItem:
-        if status not in {"aggregate", "excluded"}:
-            raise ValueError(f"Unknown disposition: {status}")
-        diagnostics = ["AGGREGATE_METRIC"] if status == "aggregate" else []
-        item_kind = "aggregate" if status == "aggregate" else "unknown"
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            run_id = self._ensure_item_week_mutable(connection, agenda_id)
+            if status not in {"aggregate", "excluded"}:
+                raise ValueError(f"Unknown disposition: {status}")
+            diagnostics = ["AGGREGATE_METRIC"] if status == "aggregate" else []
+            item_kind = "aggregate" if status == "aggregate" else "unknown"
             before = self._classification_item_for_agenda(connection, agenda_id)
-            trace = connection.execute(
-                "SELECT run_id FROM classification_trace WHERE agenda_id = ?",
-                (agenda_id,),
-            ).fetchone()
             connection.execute(
                 """
                 UPDATE agenda
@@ -937,12 +971,12 @@ class SQLiteKnowledgeStore:
             self._record_classification_revision(
                 connection,
                 agenda_id,
-                before.model_dump(mode="json"),
-                after.model_dump(mode="json"),
+                self._revision_snapshot(before),
+                self._revision_snapshot(after),
                 changed_by,
                 reason,
             )
-            self._recalculate_week_readiness(connection, trace["run_id"])
+            self._recalculate_week_readiness(connection, run_id)
             return self._classification_item_for_agenda(connection, agenda_id)
 
     def split_classification_item(
@@ -954,22 +988,22 @@ class SQLiteKnowledgeStore:
     ) -> list[ClassificationItem]:
         from classification_workbench import lotcd_path
 
-        if len(parts) < 2:
-            raise ValueError("A split requires at least two parts")
-        paths = [lotcd_path(self.taxonomy, part.lotcd) for part in parts]
-        target_ids = [
-            self._category_id(path, self._lookups()) for path in paths
-        ]
-        child_ids = [
-            hashlib.sha256(
-                "\0".join((agenda_id, part.source_quote, path.lotcd)).encode()
-            ).hexdigest()
-            for part, path in zip(parts, paths, strict=True)
-        ]
-        if len(set(child_ids)) != len(child_ids):
-            raise ValueError("Split produces duplicate child IDs")
-
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            run_id = self._ensure_item_week_mutable(connection, agenda_id)
+            if len(parts) < 2:
+                raise ValueError("A split requires at least two parts")
+            paths = [lotcd_path(self.taxonomy, part.lotcd) for part in parts]
+            lookups = self._lookups()
+            target_ids = [self._category_id(path, lookups) for path in paths]
+            child_ids = [
+                hashlib.sha256(
+                    "\0".join((agenda_id, part.source_quote, path.lotcd)).encode()
+                ).hexdigest()
+                for part, path in zip(parts, paths, strict=True)
+            ]
+            if len(set(child_ids)) != len(child_ids):
+                raise ValueError("Split produces duplicate child IDs")
             original = connection.execute(
                 """
                 SELECT a.*, m.body AS mail_body, t.run_id, t.prompt_version,
@@ -983,6 +1017,32 @@ class SQLiteKnowledgeStore:
             ).fetchone()
             if original is None:
                 raise KeyError(agenda_id)
+            if original["mail_body"][
+                original["source_start"]:original["source_end"]
+            ] != original["source_quote"]:
+                raise ValueError("Original source range does not match source_quote")
+            context_starts = []
+            search_from = 0
+            while True:
+                context_start = original["mail_body"].find(
+                    original["classification_context"], search_from
+                )
+                if context_start < 0:
+                    break
+                context_end = context_start + len(
+                    original["classification_context"]
+                )
+                if (
+                    context_start <= original["source_start"]
+                    and original["source_end"] <= context_end
+                ):
+                    context_starts.append(context_start)
+                search_from = context_start + 1
+            if len(context_starts) != 1:
+                raise ValueError(
+                    "classification_context cannot be anchored to original source range"
+                )
+            context_start = context_starts[0]
             ranges = []
             for part in parts:
                 start = original["classification_context"].find(part.source_quote)
@@ -1006,7 +1066,10 @@ class SQLiteKnowledgeStore:
             for child_id, part, path, target_id in zip(
                 child_ids, parts, paths, target_ids, strict=True
             ):
-                source_start = original["mail_body"].find(part.source_quote)
+                part_index = original["classification_context"].find(
+                    part.source_quote
+                )
+                source_start = context_start + part_index
                 connection.execute(
                     """
                     INSERT INTO agenda(
@@ -1064,7 +1127,7 @@ class SQLiteKnowledgeStore:
                 (agenda_id,),
             )
             after = self._classification_item_for_agenda(connection, agenda_id)
-            after_payload = after.model_dump(mode="json")
+            after_payload = self._revision_snapshot(after)
             after_payload["split_parts"] = [
                 part.model_dump(mode="json") for part in parts
             ]
@@ -1072,12 +1135,12 @@ class SQLiteKnowledgeStore:
             self._record_classification_revision(
                 connection,
                 agenda_id,
-                before.model_dump(mode="json"),
+                self._revision_snapshot(before),
                 after_payload,
                 changed_by,
                 reason,
             )
-            self._recalculate_week_readiness(connection, original["run_id"])
+            self._recalculate_week_readiness(connection, run_id)
             return [
                 self._classification_item_for_agenda(connection, child_id)
                 for child_id in child_ids

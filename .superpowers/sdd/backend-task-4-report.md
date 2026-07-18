@@ -32,4 +32,20 @@ Warnings are pre-existing dependency deprecations from Pydantic v1 compatibility
 
 ## Scope note
 
-`classification_workbench.py` was necessarily modified although omitted from the brief's file list, because Step 6 explicitly requires changing `classify_context()`. No extraction/process orchestration, API, Wiki, embedding, report-generation, or Web code was changed.
+`classification_workbench.py` was necessarily modified although omitted from the brief's file list, because Step 6 explicitly requires changing `classify_context()`. The review follow-up also required the single sender-team propagation change in `agenda_extract.py`. No other process orchestration, API, Wiki, embedding, report-generation, or Web code was changed.
+
+## Review Fixes
+
+All Task 4 review findings were addressed with regression tests:
+
+- Correction, disposition, and split now take an immediate write transaction, check the owning week's state before operation-specific work, and reject `approved` or `revalidation_required` items. Tests compare the full agenda, targets, trace, week row (including active run and approval provenance), and revision count before and after rejection.
+- Readiness recalculation reads the persisted workflow state and returns without changing either protected state.
+- `extract_mail()` now forwards `mail.sender_team` into `classify_context()`. An extraction-level regression confirms an alias constrained to Spica matches when only the sender team supplies that context.
+- Split context is located as the unique mail-body occurrence containing the original agenda source range. Child offsets are calculated from the already validated in-context ranges; a repeated-identical-text regression confirms children point to the second occurrence selected by the original agenda.
+- Revision history snapshots omit derived `revision_count`, avoiding stale before/after values after the revision insert.
+
+### Review TDD Evidence
+
+- Review RED: focused command produced 11 failures and 72 passes. Nine failures reproduced the product findings; two exposed a test-only row-factory mismatch in the direct private-helper test, which was corrected before evaluating behavior.
+- Review GREEN: `python -m pytest tests/test_classification_workbench.py tests/test_agenda_extract.py tests/test_knowledge_api.py -q` -> 83 passed, 8 warnings.
+- Review full suite: `python -m pytest -q` -> 102 passed, 8 warnings.

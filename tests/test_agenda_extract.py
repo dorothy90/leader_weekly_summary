@@ -13,7 +13,12 @@ from agenda_extract import (
     prior_sentence_context,
     strip_quoted_history,
 )
-from knowledge_models import MailDocument, TaxonomyDocument
+from knowledge_models import (
+    AliasRecord,
+    CategoryPath,
+    MailDocument,
+    TaxonomyDocument,
+)
 from knowledge_store import SQLiteKnowledgeStore
 
 
@@ -135,6 +140,41 @@ def test_extract_mail_keeps_aggregate_without_targets():
     assert result.agendas[0].item_kind == "aggregate"
     assert result.agendas[0].decision.status == "aggregate"
     assert result.agendas[0].target_paths == []
+
+
+def test_extract_mail_applies_contextual_alias_via_sender_team():
+    taxonomy = TaxonomyDocument.model_validate_json(
+        (FIXTURES / "taxonomy.json").read_text(encoding="utf-8")
+    )
+    mail = MailDocument.model_validate_json(
+        (FIXTURES / "mails.json").read_text(encoding="utf-8")
+    ).mails[0].model_copy(
+        update={"body": "legacy edge defect", "sender_team": "Spica team"}
+    )
+    alias = AliasRecord(
+        id=101,
+        value="legacy edge",
+        target_paths=[CategoryPath(domain="DRAM", tech="Spica", lotcd="4SA")],
+        context_tech="Spica",
+    )
+
+    def splitter(_text: str) -> AgendaDraftList:
+        return AgendaDraftList(
+            agendas=[
+                AgendaDraft(
+                    source_quote=mail.body,
+                    classification_context=mail.body,
+                    summary="legacy edge defect",
+                    topic="quality",
+                    state="investigating",
+                    item_kind="lotcd_specific",
+                )
+            ]
+        )
+
+    result = extract_mail(mail, splitter, CanonicalResolver(taxonomy, [alias]))
+
+    assert result.agendas[0].decision.target_path.lotcd == "4SA"
 
 
 def test_external_knowledge_llm_configuration_is_allowed_with_ack(monkeypatch):
