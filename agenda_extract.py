@@ -298,7 +298,7 @@ def llm_connection() -> LLMConnection:
     model = (
         os.getenv("KNOWLEDGE_LLM_MODEL")
         or os.getenv("LLM_MODEL")
-        or "gpt-4.1-mini"
+        or "z-ai/glm-4.7-flash"
     )
     return LLMConnection(
         api_key=SecretStr(api_key),

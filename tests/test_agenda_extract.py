@@ -177,6 +177,16 @@ def test_loopback_llm_configuration_does_not_require_ack(monkeypatch, base_url):
     assert llm_connection().base_url == base_url
 
 
+def test_knowledge_llm_uses_glm_default_model(monkeypatch):
+    monkeypatch.delenv("KNOWLEDGE_LLM_MODEL", raising=False)
+    monkeypatch.delenv("LLM_MODEL", raising=False)
+    monkeypatch.setenv("KNOWLEDGE_LLM_BASE_URL", "http://localhost:8000/v1")
+
+    connection = llm_connection()
+
+    assert connection.model == "z-ai/glm-4.7-flash"
+
+
 def test_openrouter_llm_configuration_requires_data_policy_ack(monkeypatch):
     monkeypatch.delenv("KNOWLEDGE_LLM_BASE_URL", raising=False)
     monkeypatch.delenv("KNOWLEDGE_LLM_DATA_POLICY_ACK", raising=False)
