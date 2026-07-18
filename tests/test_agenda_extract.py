@@ -78,6 +78,7 @@ def test_extraction_upsert_is_idempotent_and_preserves_review(tmp_path):
                     summary="4SA 수율 하락",
                     topic="yield",
                     state="investigating",
+                    item_kind="lotcd_specific",
                 )
             ]
         )
@@ -101,6 +102,37 @@ def test_extraction_upsert_is_idempotent_and_preserves_review(tmp_path):
     )
     third = store.save_extraction(mail, result)
     assert third["preserved"] == 1
+
+
+def test_extract_mail_keeps_aggregate_without_targets():
+    taxonomy = TaxonomyDocument.model_validate_json(
+        (FIXTURES / "taxonomy.json").read_text(encoding="utf-8")
+    )
+    mails = MailDocument.model_validate_json(
+        (FIXTURES / "mails.json").read_text(encoding="utf-8")
+    ).mails
+    mail = next(item for item in mails if item.id == "dummy_mail_002")
+    quote = "Spica 전체 수율은 전주 수준을 유지했습니다."
+
+    def splitter(_text: str) -> AgendaDraftList:
+        return AgendaDraftList(
+            agendas=[
+                AgendaDraft(
+                    source_quote=quote,
+                    classification_context=quote,
+                    summary="Spica 전체 수율 유지",
+                    topic="yield",
+                    state="stable",
+                    item_kind="aggregate",
+                )
+            ]
+        )
+
+    result = extract_mail(mail, splitter, CanonicalResolver(taxonomy))
+
+    assert result.agendas[0].item_kind == "aggregate"
+    assert result.agendas[0].decision.status == "aggregate"
+    assert result.agendas[0].target_paths == []
 
 
 def test_knowledge_llm_configuration_overrides_openrouter(monkeypatch):

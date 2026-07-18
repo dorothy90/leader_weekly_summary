@@ -12,7 +12,14 @@ from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 from dotenv import load_dotenv
 
-from knowledge_models import CategoryPath, Mail, TaxonomyDocument
+from classification_workbench import classify_context
+from knowledge_models import (
+    AliasRecord,
+    CategoryPath,
+    ClassificationDecision,
+    Mail,
+    TaxonomyDocument,
+)
 from knowledge_store import DEFAULT_DB_PATH, SQLiteKnowledgeStore
 
 
@@ -37,6 +44,7 @@ class AgendaDraft(StrictModel):
     summary: str = Field(min_length=1, max_length=240)
     topic: str = Field(min_length=1, max_length=80)
     state: str = Field(min_length=1, max_length=80)
+    item_kind: Literal["lotcd_specific", "aggregate", "unknown"]
 
     @model_validator(mode="after")
     def quote_must_be_inside_context(self):
@@ -72,6 +80,8 @@ class ExtractedAgenda(StrictModel):
     candidate_paths: list[CategoryPath]
     topic: str
     state: str
+    item_kind: Literal["lotcd_specific", "aggregate", "unknown"]
+    decision: ClassificationDecision
     confidence: float
     review_required: bool
 
@@ -119,8 +129,13 @@ def _deduplicate_paths(paths: list[CategoryPath]) -> list[CategoryPath]:
 
 
 class CanonicalResolver:
-    def __init__(self, taxonomy: TaxonomyDocument) -> None:
+    def __init__(
+        self,
+        taxonomy: TaxonomyDocument,
+        aliases: list[AliasRecord] | None = None,
+    ) -> None:
         self.taxonomy = taxonomy
+        self.aliases = aliases or []
         self.lotcd_terms: list[tuple[str, list[CategoryPath]]] = []
         self.tech_terms: list[tuple[str, CategoryPath]] = []
         self.known_lotcds: set[str] = set()
@@ -313,6 +328,9 @@ def build_splitter(taxonomy: TaxonomyDocument):
 6. category를 새로 만들거나 추측하지 않습니다. summary만 간결히 재작성합니다.
 7. topic과 state는 짧은 영문 snake_case로 작성합니다.
 8. summary는 원문과 같은 언어로 작성합니다. 한국어 메일은 한국어로 요약합니다.
+9. LOTCD별 값이 나뉜 표나 목록은 LOTCD 행마다 별도 agenda로 분리합니다.
+10. 여러 LOTCD를 합친 하나의 수율·품질 지수는 item_kind=aggregate로 둡니다.
+11. 개별 LOTCD 사실은 item_kind=lotcd_specific, 불명확하면 item_kind=unknown입니다.
 """
 
     def split(mail_text: str) -> AgendaDraftList:
@@ -339,7 +357,18 @@ def extract_mail(
             raise ValueError(f"source_quote not found in mail {mail.id}")
         if draft.classification_context not in active_text:
             raise ValueError(f"classification_context not found in mail {mail.id}")
+        decision = classify_context(
+            draft.classification_context,
+            draft.item_kind,
+            resolver.taxonomy,
+            resolver.aliases,
+        )
         resolved = resolver.resolve(draft.classification_context, mail.sender_team)
+        target_paths = [decision.target_path] if decision.target_path else []
+        review_required = decision.status in {
+            "unclassified", "conflict", "review_required"
+        }
+        scope = "lotcd" if decision.target_path else "unknown"
         source_start = active_text.index(draft.source_quote)
         agenda_suffix = hashlib.sha256(draft.source_quote.encode("utf-8")).hexdigest()[:12]
         extracted.append(
@@ -351,13 +380,15 @@ def extract_mail(
                 source_end=source_start + len(draft.source_quote),
                 classification_context=draft.classification_context,
                 summary=draft.summary,
-                scope=resolved.scope,
-                target_paths=resolved.target_paths,
+                scope=scope,
+                target_paths=target_paths,
                 candidate_paths=resolved.candidate_paths,
                 topic=draft.topic,
                 state=draft.state,
-                confidence=resolved.confidence,
-                review_required=resolved.review_required,
+                item_kind=draft.item_kind,
+                decision=decision,
+                confidence=decision.confidence,
+                review_required=review_required,
             )
         )
     return MailExtractionResult(
@@ -368,4 +399,5 @@ def extract_mail(
 
 
 def default_resolver(db_path: Path = DEFAULT_DB_PATH) -> CanonicalResolver:
-    return CanonicalResolver(SQLiteKnowledgeStore(db_path).taxonomy)
+    store = SQLiteKnowledgeStore(db_path)
+    return CanonicalResolver(store.taxonomy, store.aliases())

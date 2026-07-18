@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 from knowledge_models import (
+    AliasRecord,
     CandidateMatch,
     CategoryPath,
     ClassificationDecision,
@@ -30,7 +31,12 @@ def lotcd_path(taxonomy: TaxonomyDocument, code: str) -> CategoryPath:
     raise ValueError(f"Unknown LOTCD: {code}")
 
 
-def classify_context(text, item_kind, taxonomy, aliases=None):
+def classify_context(
+    text: str,
+    item_kind: str,
+    taxonomy: TaxonomyDocument,
+    aliases: list[AliasRecord] | None = None,
+) -> ClassificationDecision:
     if item_kind == "aggregate":
         return ClassificationDecision(
             status="aggregate",
@@ -49,6 +55,28 @@ def classify_context(text, item_kind, taxonomy, aliases=None):
                         rule_id=f"canonical:{lotcd.code}",
                         score=1.0,
                     ))
+    for alias in aliases or []:
+        if not _contains(text, alias.value):
+            continue
+        target_lotcds = {
+            path.lotcd for path in alias.target_paths if path.lotcd is not None
+        }
+        if len(alias.target_paths) != 1 or len(target_lotcds) != 1:
+            return ClassificationDecision(
+                status="conflict",
+                matches=matches,
+                diagnostics=["ALIAS_COLLISION"],
+                confidence=0.0,
+            )
+        lotcd = target_lotcds.pop()
+        lotcd_path(taxonomy, lotcd)
+        matches.append(CandidateMatch(
+            phrase=alias.value,
+            lotcd=lotcd,
+            match_type="alias",
+            rule_id=f"alias:{alias.id}",
+            score=1.0,
+        ))
     codes = sorted({match.lotcd for match in matches})
     if len(codes) == 1:
         return ClassificationDecision(
