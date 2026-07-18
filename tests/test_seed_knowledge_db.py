@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -40,3 +41,26 @@ def test_seed_refuses_taxonomy_switch_without_reset(tmp_path):
 
     with pytest.raises(RuntimeError, match="cannot switch taxonomy"):
         seed_database(db_path, taxonomy_path=taxonomy_path)
+
+
+def test_seed_adds_classification_schema_and_versions(tmp_path):
+    db_path = tmp_path / "knowledge.db"
+
+    seed_database(db_path)
+
+    with sqlite3.connect(db_path) as connection:
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        metadata = dict(connection.execute("SELECT key, value FROM knowledge_meta"))
+
+    assert {
+        "classification_run",
+        "week_classification",
+        "classification_trace",
+    } <= tables
+    assert metadata["alias_version"] == "1"
+    assert metadata["classifier_schema_version"] == "1"

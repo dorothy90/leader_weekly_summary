@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -15,6 +16,10 @@ from knowledge_models import (
     AgendaView,
     AliasRecord,
     CategoryPath,
+    CandidateMatch,
+    ClassificationDecision,
+    ClassificationItem,
+    ClassificationRun,
     ClassificationRevision,
     Domain,
     GroupAlias,
@@ -24,6 +29,7 @@ from knowledge_models import (
     MappingRevision,
     TaxonomyDocument,
     Tech,
+    WeekClassificationSummary,
 )
 
 if TYPE_CHECKING:
@@ -139,6 +145,41 @@ class SQLiteKnowledgeStore:
                     mail_id TEXT PRIMARY KEY REFERENCES mail(id) ON DELETE CASCADE,
                     requested_at TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS classification_run (
+                    id TEXT PRIMARY KEY,
+                    week TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK(status IN ('processing', 'completed', 'failed')),
+                    prompt_version TEXT NOT NULL,
+                    classifier_version TEXT NOT NULL,
+                    taxonomy_version INTEGER NOT NULL,
+                    alias_version INTEGER NOT NULL,
+                    prior_run_id TEXT REFERENCES classification_run(id),
+                    started_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    error TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS week_classification (
+                    week TEXT PRIMARY KEY,
+                    active_run_id TEXT REFERENCES classification_run(id),
+                    workflow_state TEXT NOT NULL,
+                    approved_at TEXT,
+                    approved_by TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS classification_trace (
+                    agenda_id TEXT PRIMARY KEY REFERENCES agenda(id) ON DELETE CASCADE,
+                    run_id TEXT NOT NULL REFERENCES classification_run(id),
+                    item_kind TEXT NOT NULL,
+                    decision_status TEXT NOT NULL,
+                    target_path_json TEXT,
+                    matches_json TEXT NOT NULL,
+                    diagnostics_json TEXT NOT NULL,
+                    prompt_version TEXT NOT NULL,
+                    taxonomy_version INTEGER NOT NULL,
+                    alias_version INTEGER NOT NULL
+                );
                 """
             )
             agenda_columns = {
@@ -170,6 +211,13 @@ class SQLiteKnowledgeStore:
             ).fetchone()[0] == 0:
                 fixture = self._fixture("taxonomy.json", TaxonomyDocument)
                 self._save_taxonomy_meta(connection, fixture)
+            connection.executemany(
+                "INSERT OR IGNORE INTO knowledge_meta(key, value) VALUES (?, ?)",
+                [
+                    ("alias_version", "1"),
+                    ("classifier_schema_version", "1"),
+                ],
+            )
 
     @staticmethod
     def _fixture(filename: str, model_type):
@@ -854,129 +902,445 @@ class SQLiteKnowledgeStore:
             for row in rows
         ]
 
+    @staticmethod
+    def _classification_run_from_row(row: sqlite3.Row) -> ClassificationRun:
+        return ClassificationRun.model_validate(dict(row))
+
+    @staticmethod
+    def _active_processing_run(
+        connection: sqlite3.Connection, run_id: str
+    ) -> sqlite3.Row:
+        run = connection.execute(
+            "SELECT * FROM classification_run WHERE id = ?", (run_id,)
+        ).fetchone()
+        if run is None:
+            raise KeyError(run_id)
+        active = connection.execute(
+            "SELECT active_run_id FROM week_classification WHERE week = ?",
+            (run["week"],),
+        ).fetchone()
+        if (
+            run["status"] != "processing"
+            or active is None
+            or active["active_run_id"] != run_id
+        ):
+            raise ValueError(f"Classification run is not active processing: {run_id}")
+        return run
+
+    def start_classification_run(
+        self,
+        week: str,
+        prompt_version: str,
+        classifier_version: str,
+    ) -> ClassificationRun:
+        run_id = uuid.uuid4().hex
+        started_at = datetime.now(UTC).isoformat()
+        with self._connect() as connection:
+            metadata = {
+                row["key"]: row["value"]
+                for row in connection.execute(
+                    "SELECT key, value FROM knowledge_meta"
+                )
+            }
+            current = connection.execute(
+                "SELECT active_run_id FROM week_classification WHERE week = ?",
+                (week,),
+            ).fetchone()
+            prior_run_id = current["active_run_id"] if current else None
+            connection.execute(
+                """
+                INSERT INTO classification_run(
+                    id, week, status, prompt_version, classifier_version,
+                    taxonomy_version, alias_version, prior_run_id, started_at
+                ) VALUES (?, ?, 'processing', ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    week,
+                    prompt_version,
+                    classifier_version,
+                    int(metadata["version"]),
+                    int(metadata["alias_version"]),
+                    prior_run_id,
+                    started_at,
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO week_classification(
+                    week, active_run_id, workflow_state, approved_at, approved_by
+                ) VALUES (?, ?, 'processing', NULL, NULL)
+                ON CONFLICT(week) DO UPDATE SET
+                    active_run_id = excluded.active_run_id,
+                    workflow_state = excluded.workflow_state,
+                    approved_at = NULL,
+                    approved_by = NULL
+                """,
+                (week, run_id),
+            )
+            row = connection.execute(
+                "SELECT * FROM classification_run WHERE id = ?", (run_id,)
+            ).fetchone()
+        return self._classification_run_from_row(row)
+
+    def finish_classification_run(self, run_id: str) -> WeekClassificationSummary:
+        completed_at = datetime.now(UTC).isoformat()
+        with self._connect() as connection:
+            run = self._active_processing_run(connection, run_id)
+            unresolved = connection.execute(
+                """
+                SELECT COUNT(*) FROM classification_trace
+                WHERE run_id = ?
+                  AND decision_status IN ('unclassified', 'conflict', 'review_required')
+                """,
+                (run_id,),
+            ).fetchone()[0]
+            workflow_state = (
+                "review_in_progress" if unresolved else "ready_for_approval"
+            )
+            connection.execute(
+                """
+                UPDATE classification_run
+                SET status = 'completed', completed_at = ?, error = NULL
+                WHERE id = ?
+                """,
+                (completed_at, run_id),
+            )
+            connection.execute(
+                """
+                UPDATE week_classification SET workflow_state = ?
+                WHERE week = ? AND active_run_id = ?
+                """,
+                (workflow_state, run["week"], run_id),
+            )
+        return self.week_summary(run["week"])
+
+    def fail_classification_run(
+        self, run_id: str, error: str
+    ) -> WeekClassificationSummary:
+        completed_at = datetime.now(UTC).isoformat()
+        with self._connect() as connection:
+            run = self._active_processing_run(connection, run_id)
+            connection.execute(
+                """
+                UPDATE classification_run
+                SET status = 'failed', completed_at = ?, error = ?
+                WHERE id = ?
+                """,
+                (completed_at, error, run_id),
+            )
+            connection.execute(
+                """
+                UPDATE week_classification SET workflow_state = 'failed'
+                WHERE week = ? AND active_run_id = ?
+                """,
+                (run["week"], run_id),
+            )
+        return self.week_summary(run["week"])
+
+    def save_classified_extraction(
+        self,
+        run_id: str,
+        mail: Mail,
+        result: "MailExtractionResult",
+    ) -> dict[str, int]:
+        with self._connect() as connection:
+            run = connection.execute(
+                "SELECT * FROM classification_run WHERE id = ?", (run_id,)
+            ).fetchone()
+            if run is None:
+                raise ValueError(f"Unknown classification run: {run_id}")
+            if run["status"] != "processing":
+                raise ValueError(f"Classification run is not processing: {run_id}")
+
+            counts = self._save_extraction(connection, mail, result)
+            for agenda in result.agendas:
+                decision = agenda.decision
+                connection.execute(
+                    """
+                    INSERT INTO classification_trace(
+                        agenda_id, run_id, item_kind, decision_status,
+                        target_path_json, matches_json, diagnostics_json,
+                        prompt_version, taxonomy_version, alias_version
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(agenda_id) DO UPDATE SET
+                        run_id = excluded.run_id,
+                        item_kind = excluded.item_kind,
+                        decision_status = excluded.decision_status,
+                        target_path_json = excluded.target_path_json,
+                        matches_json = excluded.matches_json,
+                        diagnostics_json = excluded.diagnostics_json,
+                        prompt_version = excluded.prompt_version,
+                        taxonomy_version = excluded.taxonomy_version,
+                        alias_version = excluded.alias_version
+                    """,
+                    (
+                        agenda.id,
+                        run_id,
+                        agenda.item_kind,
+                        decision.status,
+                        (
+                            decision.target_path.model_dump_json()
+                            if decision.target_path
+                            else None
+                        ),
+                        json.dumps(
+                            [match.model_dump() for match in decision.matches],
+                            ensure_ascii=False,
+                        ),
+                        json.dumps(decision.diagnostics, ensure_ascii=False),
+                        run["prompt_version"],
+                        run["taxonomy_version"],
+                        run["alias_version"],
+                    ),
+                )
+            return counts
+
+    def classification_items(self, week: str) -> list[ClassificationItem]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                    a.id AS agenda_id, a.mail_id, a.summary, a.source_quote,
+                    a.classification_context, a.confidence, t.item_kind,
+                    t.decision_status, t.target_path_json, t.matches_json,
+                    t.diagnostics_json,
+                    (SELECT COUNT(*) FROM classification_revision revision
+                     WHERE revision.agenda_id = a.id) AS revision_count
+                FROM week_classification week
+                JOIN classification_trace t ON t.run_id = week.active_run_id
+                JOIN agenda a ON a.id = t.agenda_id
+                WHERE week.week = ?
+                ORDER BY a.id
+                """,
+                (week,),
+            ).fetchall()
+        return [
+            ClassificationItem(
+                agenda_id=row["agenda_id"],
+                mail_id=row["mail_id"],
+                summary=row["summary"],
+                source_quote=row["source_quote"],
+                classification_context=row["classification_context"],
+                item_kind=row["item_kind"],
+                decision=ClassificationDecision(
+                    status=row["decision_status"],
+                    target_path=(
+                        CategoryPath.model_validate_json(row["target_path_json"])
+                        if row["target_path_json"]
+                        else None
+                    ),
+                    matches=[
+                        CandidateMatch.model_validate(match)
+                        for match in json.loads(row["matches_json"])
+                    ],
+                    diagnostics=json.loads(row["diagnostics_json"]),
+                    confidence=row["confidence"],
+                ),
+                revision_count=row["revision_count"],
+            )
+            for row in rows
+        ]
+
+    def week_summary(self, week: str) -> WeekClassificationSummary:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM week_classification WHERE week = ?", (week,)
+            ).fetchone()
+            if row is None:
+                return WeekClassificationSummary(
+                    week=week, workflow_state="not_started"
+                )
+            count_rows = connection.execute(
+                """
+                SELECT decision_status, COUNT(*) AS total
+                FROM classification_trace
+                WHERE run_id = ?
+                GROUP BY decision_status
+                """,
+                (row["active_run_id"],),
+            ).fetchall()
+        return WeekClassificationSummary(
+            week=week,
+            workflow_state=row["workflow_state"],
+            active_run_id=row["active_run_id"],
+            counts={item["decision_status"]: item["total"] for item in count_rows},
+        )
+
+    def week_summaries(self) -> list[WeekClassificationSummary]:
+        with self._connect() as connection:
+            weeks = [
+                row["week"]
+                for row in connection.execute(
+                    "SELECT week FROM week_classification ORDER BY week DESC"
+                )
+            ]
+        return [self.week_summary(week) for week in weeks]
+
+    def approve_week(
+        self, week: str, approved_by: str
+    ) -> WeekClassificationSummary:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM week_classification WHERE week = ?", (week,)
+            ).fetchone()
+            if row is None:
+                raise KeyError(week)
+            unresolved = connection.execute(
+                """
+                SELECT COUNT(*) FROM classification_trace
+                WHERE run_id = ?
+                  AND decision_status IN ('unclassified', 'conflict', 'review_required')
+                """,
+                (row["active_run_id"],),
+            ).fetchone()[0]
+            if unresolved:
+                raise ValueError(
+                    f"Week {week} has {unresolved} unresolved classification items"
+                )
+            if row["workflow_state"] != "ready_for_approval":
+                raise ValueError(f"Week {week} is not ready for approval")
+            connection.execute(
+                """
+                UPDATE week_classification
+                SET workflow_state = 'approved', approved_at = ?, approved_by = ?
+                WHERE week = ?
+                """,
+                (datetime.now(UTC).isoformat(), approved_by, week),
+            )
+        return self.week_summary(week)
+
     def save_extraction(
         self, mail: Mail, result: "MailExtractionResult"
     ) -> dict[str, int]:
         """Upsert extracted agendas while preserving manually reviewed rows."""
+        with self._connect() as connection:
+            return self._save_extraction(connection, mail, result)
+
+    def _save_extraction(
+        self,
+        connection: sqlite3.Connection,
+        mail: Mail,
+        result: "MailExtractionResult",
+    ) -> dict[str, int]:
         lookups = self._lookups()
         counts = {"inserted": 0, "updated": 0, "preserved": 0, "removed": 0}
         current_ids = {agenda.id for agenda in result.agendas}
 
-        with self._connect() as connection:
+        connection.execute(
+            """
+            INSERT INTO mail(id, subject, sender_team, sender, received_at, body, reply_to)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                subject = excluded.subject,
+                sender_team = excluded.sender_team,
+                sender = excluded.sender,
+                received_at = excluded.received_at,
+                body = excluded.body,
+                reply_to = excluded.reply_to
+            """,
+            (
+                mail.id,
+                mail.subject,
+                mail.sender_team,
+                mail.sender,
+                mail.received_at.isoformat(),
+                mail.body,
+                mail.reply_to,
+            ),
+        )
+
+        old_rows = connection.execute(
+            "SELECT id FROM agenda WHERE mail_id = ?", (mail.id,)
+        ).fetchall()
+        for row in old_rows:
+            if row["id"] in current_ids:
+                continue
+            revision_count = connection.execute(
+                "SELECT COUNT(*) FROM classification_revision WHERE agenda_id = ?",
+                (row["id"],),
+            ).fetchone()[0]
+            if revision_count:
+                counts["preserved"] += 1
+            else:
+                connection.execute("DELETE FROM agenda WHERE id = ?", (row["id"],))
+                counts["removed"] += 1
+
+        for extracted in result.agendas:
+            exists = connection.execute(
+                "SELECT 1 FROM agenda WHERE id = ?", (extracted.id,)
+            ).fetchone()
+            revision_count = connection.execute(
+                "SELECT COUNT(*) FROM classification_revision WHERE agenda_id = ?",
+                (extracted.id,),
+            ).fetchone()[0]
+            if exists and revision_count:
+                counts["preserved"] += 1
+                continue
+
+            review_status = "pending" if extracted.review_required else "confirmed"
             connection.execute(
                 """
-                INSERT INTO mail(id, subject, sender_team, sender, received_at, body, reply_to)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO agenda(
+                    id, mail_id, source_quote, source_start, source_end,
+                    classification_context, summary, scope,
+                    candidate_paths_json, topic, state, confidence,
+                    review_required, review_status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
-                    subject = excluded.subject,
-                    sender_team = excluded.sender_team,
-                    sender = excluded.sender,
-                    received_at = excluded.received_at,
-                    body = excluded.body,
-                    reply_to = excluded.reply_to
+                    source_quote = excluded.source_quote,
+                    source_start = excluded.source_start,
+                    source_end = excluded.source_end,
+                    classification_context = excluded.classification_context,
+                    summary = excluded.summary,
+                    scope = excluded.scope,
+                    candidate_paths_json = excluded.candidate_paths_json,
+                    topic = excluded.topic,
+                    state = excluded.state,
+                    confidence = excluded.confidence,
+                    review_required = excluded.review_required,
+                    review_status = excluded.review_status
                 """,
                 (
+                    extracted.id,
                     mail.id,
-                    mail.subject,
-                    mail.sender_team,
-                    mail.sender,
-                    mail.received_at.isoformat(),
-                    mail.body,
-                    mail.reply_to,
+                    extracted.source_quote,
+                    extracted.source_start,
+                    extracted.source_end,
+                    extracted.classification_context,
+                    extracted.summary,
+                    extracted.scope,
+                    json.dumps(
+                        [path.model_dump() for path in extracted.candidate_paths],
+                        ensure_ascii=False,
+                    ),
+                    extracted.topic,
+                    extracted.state,
+                    extracted.confidence,
+                    int(extracted.review_required),
+                    review_status,
                 ),
             )
-
-            old_rows = connection.execute(
-                "SELECT id FROM agenda WHERE mail_id = ?", (mail.id,)
-            ).fetchall()
-            for row in old_rows:
-                if row["id"] in current_ids:
-                    continue
-                revision_count = connection.execute(
-                    "SELECT COUNT(*) FROM classification_revision WHERE agenda_id = ?",
-                    (row["id"],),
-                ).fetchone()[0]
-                if revision_count:
-                    counts["preserved"] += 1
-                else:
-                    connection.execute("DELETE FROM agenda WHERE id = ?", (row["id"],))
-                    counts["removed"] += 1
-
-            for extracted in result.agendas:
-                exists = connection.execute(
-                    "SELECT 1 FROM agenda WHERE id = ?", (extracted.id,)
-                ).fetchone()
-                revision_count = connection.execute(
-                    "SELECT COUNT(*) FROM classification_revision WHERE agenda_id = ?",
-                    (extracted.id,),
-                ).fetchone()[0]
-                if exists and revision_count:
-                    counts["preserved"] += 1
-                    continue
-
-                review_status = "pending" if extracted.review_required else "confirmed"
-                connection.execute(
-                    """
-                    INSERT INTO agenda(
-                        id, mail_id, source_quote, source_start, source_end,
-                        classification_context, summary, scope,
-                        candidate_paths_json, topic, state, confidence,
-                        review_required, review_status
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(id) DO UPDATE SET
-                        source_quote = excluded.source_quote,
-                        source_start = excluded.source_start,
-                        source_end = excluded.source_end,
-                        classification_context = excluded.classification_context,
-                        summary = excluded.summary,
-                        scope = excluded.scope,
-                        candidate_paths_json = excluded.candidate_paths_json,
-                        topic = excluded.topic,
-                        state = excluded.state,
-                        confidence = excluded.confidence,
-                        review_required = excluded.review_required,
-                        review_status = excluded.review_status
-                    """,
-                    (
-                        extracted.id,
-                        mail.id,
-                        extracted.source_quote,
-                        extracted.source_start,
-                        extracted.source_end,
-                        extracted.classification_context,
-                        extracted.summary,
-                        extracted.scope,
-                        json.dumps(
-                            [path.model_dump() for path in extracted.candidate_paths],
-                            ensure_ascii=False,
-                        ),
-                        extracted.topic,
-                        extracted.state,
-                        extracted.confidence,
-                        int(extracted.review_required),
-                        review_status,
-                    ),
-                )
-                connection.execute(
-                    "DELETE FROM agenda_target WHERE agenda_id = ?", (extracted.id,)
-                )
-                connection.executemany(
-                    "INSERT INTO agenda_target(agenda_id, category_id) VALUES (?, ?)",
-                    [
-                        (extracted.id, self._category_id(path, lookups))
-                        for path in extracted.target_paths
-                    ],
-                )
-                counts["updated" if exists else "inserted"] += 1
-
             connection.execute(
-                """
-                INSERT INTO search_sync_queue(mail_id, requested_at)
-                VALUES (?, ?)
-                ON CONFLICT(mail_id) DO UPDATE SET requested_at = excluded.requested_at
-                """,
-                (mail.id, datetime.now(UTC).isoformat()),
+                "DELETE FROM agenda_target WHERE agenda_id = ?", (extracted.id,)
             )
+            connection.executemany(
+                "INSERT INTO agenda_target(agenda_id, category_id) VALUES (?, ?)",
+                [
+                    (extracted.id, self._category_id(path, lookups))
+                    for path in extracted.target_paths
+                ],
+            )
+            counts["updated" if exists else "inserted"] += 1
+
+        connection.execute(
+            """
+            INSERT INTO search_sync_queue(mail_id, requested_at)
+            VALUES (?, ?)
+            ON CONFLICT(mail_id) DO UPDATE SET requested_at = excluded.requested_at
+            """,
+            (mail.id, datetime.now(UTC).isoformat()),
+        )
 
         return counts
 

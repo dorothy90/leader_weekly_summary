@@ -121,6 +121,17 @@ class WeekClassificationSummary(StrictModel):
     counts: dict[DecisionStatus, int] = Field(default_factory=dict)
 
 
+class ClassificationItem(StrictModel):
+    agenda_id: str
+    mail_id: str
+    summary: str
+    source_quote: str
+    classification_context: str
+    item_kind: ItemKind
+    decision: ClassificationDecision
+    revision_count: int
+
+
 class Agenda(StrictModel):
     id: str
     mail_id: str
