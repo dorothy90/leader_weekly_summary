@@ -68,6 +68,59 @@ class CategoryPath(StrictModel):
     lotcd: str | None
 
 
+ItemKind = Literal["lotcd_specific", "aggregate", "unknown"]
+DecisionStatus = Literal[
+    "confirmed", "aggregate", "unclassified", "conflict",
+    "review_required", "manually_corrected", "excluded",
+]
+DiagnosticCode = Literal[
+    "NO_LOTCD_MATCH", "MULTIPLE_LOTCD_CONFLICT",
+    "UNKNOWN_LOTCD_CODE", "AGGREGATE_METRIC",
+    "CONTEXT_MISSING", "ALIAS_COLLISION",
+]
+
+
+class CandidateMatch(StrictModel):
+    phrase: str
+    lotcd: str
+    match_type: Literal["canonical", "alias"]
+    rule_id: str
+    score: float = Field(ge=0, le=1)
+
+
+class ClassificationDecision(StrictModel):
+    status: DecisionStatus
+    target_path: CategoryPath | None = None
+    matches: list[CandidateMatch] = Field(default_factory=list)
+    diagnostics: list[DiagnosticCode] = Field(default_factory=list)
+    confidence: float = Field(ge=0, le=1)
+
+
+class ClassificationRun(StrictModel):
+    id: str
+    week: str
+    status: Literal["processing", "completed", "failed"]
+    prompt_version: str
+    classifier_version: str
+    taxonomy_version: int
+    alias_version: int
+    prior_run_id: str | None = None
+    started_at: datetime
+    completed_at: datetime | None = None
+    error: str | None = None
+
+
+class WeekClassificationSummary(StrictModel):
+    week: str
+    workflow_state: Literal[
+        "not_started", "processing", "review_in_progress",
+        "ready_for_approval", "approved",
+        "revalidation_required", "failed",
+    ]
+    active_run_id: str | None = None
+    counts: dict[DecisionStatus, int] = Field(default_factory=dict)
+
+
 class Agenda(StrictModel):
     id: str
     mail_id: str
