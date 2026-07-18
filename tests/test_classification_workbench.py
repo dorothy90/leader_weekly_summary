@@ -1,12 +1,22 @@
 from datetime import UTC, datetime
 import hashlib
+import json
 from pathlib import Path
 import sqlite3
 
 import pytest
 
-from agenda_extract import ExtractedAgenda, MailExtractionResult
-from classification_workbench import classify_context, lotcd_path
+from agenda_extract import (
+    AgendaDraft,
+    AgendaDraftList,
+    ExtractedAgenda,
+    MailExtractionResult,
+)
+from classification_workbench import (
+    classify_context,
+    lotcd_path,
+    run_week_classification,
+)
 from knowledge_models import (
     AliasRecord,
     CandidateMatch,
@@ -116,6 +126,186 @@ def protected_item_snapshot(store, agenda_id):
                 (agenda_id,),
             ).fetchone()[0],
         }
+
+
+def orchestration_mail_directory(tmp_path, monkeypatch):
+    import process_agendas
+
+    data_dir = tmp_path / "data"
+    mail_dir = data_dir / "2026-01" / "Spica" / "mail_001"
+    mail_dir.mkdir(parents=True)
+    (mail_dir / "combined.txt").write_text("4SA 수율 하락", encoding="utf-8")
+    (mail_dir / "meta.json").write_text(
+        json.dumps(
+            {
+                "week": "2026-01",
+                "team": "Spica",
+                "subject": "주간 수율",
+                "sender": "sender@example.com",
+                "received": "2026-01-05T09:00:00+09:00",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(process_agendas, "DATA_DIR", data_dir)
+    return mail_dir
+
+
+def successful_splitter(text):
+    return AgendaDraftList(
+        agendas=[
+            AgendaDraft(
+                source_quote=text,
+                classification_context=text,
+                summary="4SA 수율 하락",
+                topic="yield",
+                state="investigating",
+                item_kind="lotcd_specific",
+            )
+        ]
+    )
+
+
+def test_run_week_classification_persists_one_mail_trace(tmp_path, monkeypatch):
+    store = SQLiteKnowledgeStore(tmp_path / "knowledge.db")
+    mail_dir = orchestration_mail_directory(tmp_path, monkeypatch)
+
+    summary = run_week_classification(
+        week="2026-01",
+        store=store,
+        mail_directories=[mail_dir],
+        splitter=successful_splitter,
+    )
+
+    assert summary.workflow_state == "ready_for_approval"
+    assert summary.counts == {"confirmed": 1}
+    with store._connect() as connection:
+        trace = connection.execute(
+            "SELECT * FROM classification_trace WHERE run_id = ?",
+            (summary.active_run_id,),
+        ).fetchone()
+    assert trace["decision_status"] == "confirmed"
+    assert trace["prompt_version"] == "agenda-v2"
+
+
+def test_splitter_failure_records_structured_error_and_preserves_prior_run(
+    tmp_path, monkeypatch
+):
+    store = SQLiteKnowledgeStore(tmp_path / "knowledge.db")
+    mail_dir = orchestration_mail_directory(tmp_path, monkeypatch)
+    prior = run_week_classification(
+        week="2026-01",
+        store=store,
+        mail_directories=[mail_dir],
+        splitter=successful_splitter,
+    )
+
+    def failing_splitter(_text):
+        raise RuntimeError("structured output failed")
+
+    failed = run_week_classification(
+        week="2026-01",
+        store=store,
+        mail_directories=[mail_dir],
+        splitter=failing_splitter,
+    )
+
+    assert failed.workflow_state == "failed"
+    with store._connect() as connection:
+        failed_run = connection.execute(
+            "SELECT * FROM classification_run WHERE id = ?",
+            (failed.active_run_id,),
+        ).fetchone()
+        prior_run = connection.execute(
+            "SELECT * FROM classification_run WHERE id = ?",
+            (prior.active_run_id,),
+        ).fetchone()
+        prior_trace_count = connection.execute(
+            "SELECT COUNT(*) FROM classification_trace WHERE run_id = ?",
+            (prior.active_run_id,),
+        ).fetchone()[0]
+    assert failed_run["status"] == "failed"
+    assert failed_run["prior_run_id"] == prior.active_run_id
+    assert json.loads(failed_run["error"]) == {
+        "stage": "extract_mail",
+        "mail_directory": str(mail_dir),
+        "exception_type": "RuntimeError",
+        "message": "structured output failed",
+    }
+    assert prior_run["status"] == "completed"
+    assert prior_trace_count == 1
+
+
+def test_run_week_classification_rejects_ordinary_revalidation_run(
+    tmp_path, monkeypatch
+):
+    store = SQLiteKnowledgeStore(tmp_path / "knowledge.db")
+    mail_dir = orchestration_mail_directory(tmp_path, monkeypatch)
+    run_week_classification(
+        week="2026-01",
+        store=store,
+        mail_directories=[mail_dir],
+        splitter=successful_splitter,
+    )
+    store.approve_week("2026-01", "reviewer")
+    with store._connect() as connection:
+        connection.execute(
+            "UPDATE week_classification SET workflow_state = 'revalidation_required'"
+        )
+
+    with pytest.raises(ValueError, match="revalidation_required"):
+        run_week_classification(
+            week="2026-01",
+            store=store,
+            mail_directories=[mail_dir],
+            splitter=successful_splitter,
+        )
+
+
+def test_explicit_revalidation_rerun_links_prior_and_retains_traces(
+    tmp_path, monkeypatch
+):
+    store = SQLiteKnowledgeStore(tmp_path / "knowledge.db")
+    mail_dir = orchestration_mail_directory(tmp_path, monkeypatch)
+    prior = run_week_classification(
+        week="2026-01",
+        store=store,
+        mail_directories=[mail_dir],
+        splitter=successful_splitter,
+    )
+    store.approve_week("2026-01", "reviewer")
+    with store._connect() as connection:
+        connection.execute(
+            "UPDATE week_classification SET workflow_state = 'revalidation_required'"
+        )
+
+    rerun = run_week_classification(
+        week="2026-01",
+        store=store,
+        mail_directories=[mail_dir],
+        splitter=successful_splitter,
+        rerun=True,
+    )
+
+    with store._connect() as connection:
+        row = connection.execute(
+            "SELECT prior_run_id FROM classification_run WHERE id = ?",
+            (rerun.active_run_id,),
+        ).fetchone()
+        trace_runs = connection.execute(
+            "SELECT run_id FROM classification_trace ORDER BY run_id"
+        ).fetchall()
+        week = connection.execute(
+            "SELECT approved_at, approved_by FROM week_classification"
+        ).fetchone()
+    assert row["prior_run_id"] == prior.active_run_id
+    assert {trace["run_id"] for trace in trace_runs} == {
+        prior.active_run_id,
+        rerun.active_run_id,
+    }
+    assert week["approved_at"] is None
+    assert week["approved_by"] is None
 
 
 def test_run_and_trace_survive_reload(tmp_path):

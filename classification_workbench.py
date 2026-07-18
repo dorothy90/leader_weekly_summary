@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
+from typing import Iterable
 
 from knowledge_models import (
     AliasRecord,
@@ -8,9 +10,51 @@ from knowledge_models import (
     CategoryPath,
     ClassificationDecision,
     TaxonomyDocument,
+    WeekClassificationSummary,
 )
 
 CLASSIFIER_VERSION = "lotcd-v1"
+PROMPT_VERSION = "agenda-v2"
+
+
+def run_week_classification(
+    week: str,
+    store,
+    mail_directories: Iterable[Path],
+    splitter,
+    rerun: bool = False,
+) -> WeekClassificationSummary:
+    from agenda_extract import CanonicalResolver, extract_mail
+    import process_agendas
+
+    run = store.start_classification_run(
+        week=week,
+        prompt_version=PROMPT_VERSION,
+        classifier_version=CLASSIFIER_VERSION,
+        rerun=rerun,
+    )
+    mail_directory: Path | None = None
+    stage = "load_active_aliases"
+    try:
+        resolver = CanonicalResolver(store.taxonomy, store.aliases())
+        for mail_directory in mail_directories:
+            mail_directory = Path(mail_directory)
+            stage = "mail_from_directory"
+            mail = process_agendas.mail_from_directory(mail_directory)
+            stage = "extract_mail"
+            result = extract_mail(mail, splitter, resolver)
+            stage = "save_classified_extraction"
+            store.save_classified_extraction(run.id, mail, result)
+        stage = "finish_classification_run"
+        return store.finish_classification_run(run.id)
+    except Exception as exc:
+        return store.fail_classification_run(
+            run.id,
+            stage=stage,
+            mail_directory=(str(mail_directory) if mail_directory else None),
+            exception_type=type(exc).__name__,
+            message=str(exc),
+        )
 
 
 def _contains(text: str, phrase: str) -> bool:

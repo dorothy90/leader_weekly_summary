@@ -175,7 +175,7 @@ class SQLiteKnowledgeStore:
                 );
 
                 CREATE TABLE IF NOT EXISTS classification_trace (
-                    agenda_id TEXT PRIMARY KEY REFERENCES agenda(id) ON DELETE CASCADE,
+                    agenda_id TEXT NOT NULL REFERENCES agenda(id) ON DELETE CASCADE,
                     run_id TEXT NOT NULL REFERENCES classification_run(id),
                     item_kind TEXT NOT NULL,
                     decision_status TEXT NOT NULL,
@@ -184,10 +184,47 @@ class SQLiteKnowledgeStore:
                     diagnostics_json TEXT NOT NULL,
                     prompt_version TEXT NOT NULL,
                     taxonomy_version INTEGER NOT NULL,
-                    alias_version INTEGER NOT NULL
+                    alias_version INTEGER NOT NULL,
+                    PRIMARY KEY (agenda_id, run_id)
                 );
                 """
             )
+            trace_primary_key = [
+                row["name"]
+                for row in sorted(
+                    connection.execute(
+                        "PRAGMA table_info(classification_trace)"
+                    ).fetchall(),
+                    key=lambda row: row["pk"],
+                )
+                if row["pk"]
+            ]
+            if trace_primary_key == ["agenda_id"]:
+                connection.executescript(
+                    """
+                    ALTER TABLE classification_trace
+                    RENAME TO classification_trace_legacy;
+
+                    CREATE TABLE classification_trace (
+                        agenda_id TEXT NOT NULL REFERENCES agenda(id) ON DELETE CASCADE,
+                        run_id TEXT NOT NULL REFERENCES classification_run(id),
+                        item_kind TEXT NOT NULL,
+                        decision_status TEXT NOT NULL,
+                        target_path_json TEXT,
+                        matches_json TEXT NOT NULL,
+                        diagnostics_json TEXT NOT NULL,
+                        prompt_version TEXT NOT NULL,
+                        taxonomy_version INTEGER NOT NULL,
+                        alias_version INTEGER NOT NULL,
+                        PRIMARY KEY (agenda_id, run_id)
+                    );
+
+                    INSERT INTO classification_trace
+                    SELECT * FROM classification_trace_legacy;
+
+                    DROP TABLE classification_trace_legacy;
+                    """
+                )
             agenda_columns = {
                 row["name"]
                 for row in connection.execute("PRAGMA table_info(agenda)").fetchall()
@@ -770,6 +807,9 @@ class SQLiteKnowledgeStore:
                  WHERE revision.agenda_id = a.id) AS revision_count
             FROM agenda a
             JOIN classification_trace t ON t.agenda_id = a.id
+            JOIN classification_run run ON run.id = t.run_id
+            JOIN week_classification week
+              ON week.week = run.week AND week.active_run_id = t.run_id
             WHERE a.id = ?
             """,
             (agenda_id,),
@@ -820,6 +860,7 @@ class SQLiteKnowledgeStore:
             JOIN classification_run run ON run.id = trace.run_id
             JOIN week_classification week ON week.week = run.week
             WHERE trace.agenda_id = ?
+            ORDER BY trace.run_id = week.active_run_id DESC, run.started_at DESC
             """,
             (agenda_id,),
         ).fetchone()
@@ -922,9 +963,9 @@ class SQLiteKnowledgeStore:
                     decision_status = 'manually_corrected',
                     target_path_json = ?, matches_json = '[]',
                     diagnostics_json = '[]'
-                WHERE agenda_id = ?
+                WHERE agenda_id = ? AND run_id = ?
                 """,
-                (path.model_dump_json(), agenda_id),
+                (path.model_dump_json(), agenda_id, run_id),
             )
             after = self._classification_item_for_agenda(connection, agenda_id)
             self._record_classification_revision(
@@ -970,9 +1011,9 @@ class SQLiteKnowledgeStore:
                 UPDATE classification_trace
                 SET item_kind = ?, decision_status = ?, target_path_json = NULL,
                     matches_json = '[]', diagnostics_json = ?
-                WHERE agenda_id = ?
+                WHERE agenda_id = ? AND run_id = ?
                 """,
-                (item_kind, status, json.dumps(diagnostics), agenda_id),
+                (item_kind, status, json.dumps(diagnostics), agenda_id, run_id),
             )
             after = self._classification_item_for_agenda(connection, agenda_id)
             self._record_classification_revision(
@@ -1018,9 +1059,9 @@ class SQLiteKnowledgeStore:
                 FROM agenda a
                 JOIN mail m ON m.id = a.mail_id
                 JOIN classification_trace t ON t.agenda_id = a.id
-                WHERE a.id = ?
+                WHERE a.id = ? AND t.run_id = ?
                 """,
-                (agenda_id,),
+                (agenda_id, run_id),
             ).fetchone()
             if original is None:
                 raise KeyError(agenda_id)
@@ -1129,9 +1170,9 @@ class SQLiteKnowledgeStore:
                 UPDATE classification_trace
                 SET item_kind = 'unknown', decision_status = 'excluded',
                     target_path_json = NULL, matches_json = '[]', diagnostics_json = '[]'
-                WHERE agenda_id = ?
+                WHERE agenda_id = ? AND run_id = ?
                 """,
-                (agenda_id,),
+                (agenda_id, run_id),
             )
             after = self._classification_item_for_agenda(connection, agenda_id)
             after_payload = self._revision_snapshot(after)
@@ -1459,6 +1500,8 @@ class SQLiteKnowledgeStore:
         week: str,
         prompt_version: str,
         classifier_version: str,
+        *,
+        rerun: bool = False,
     ) -> ClassificationRun:
         run_id = uuid.uuid4().hex
         started_at = datetime.now(UTC).isoformat()
@@ -1474,10 +1517,13 @@ class SQLiteKnowledgeStore:
                 "SELECT * FROM week_classification WHERE week = ?",
                 (week,),
             ).fetchone()
-            if current and current["workflow_state"] in {
-                "approved",
-                "revalidation_required",
-            }:
+            if current and (
+                current["workflow_state"] == "approved"
+                or (
+                    current["workflow_state"] == "revalidation_required"
+                    and not rerun
+                )
+            ):
                 raise ValueError(
                     f"Week {week} cannot start a classification run while "
                     f"{current['workflow_state']}"
@@ -1570,8 +1616,27 @@ class SQLiteKnowledgeStore:
         return self.week_summary(run["week"])
 
     def fail_classification_run(
-        self, run_id: str, error: str
+        self,
+        run_id: str,
+        error: str | None = None,
+        *,
+        stage: str | None = None,
+        mail_directory: str | None = None,
+        exception_type: str | None = None,
+        message: str | None = None,
     ) -> WeekClassificationSummary:
+        if stage is not None:
+            error = json.dumps(
+                {
+                    "stage": stage,
+                    "mail_directory": mail_directory,
+                    "exception_type": exception_type,
+                    "message": message,
+                },
+                ensure_ascii=False,
+            )
+        if error is None:
+            raise ValueError("Classification failure requires error details")
         completed_at = datetime.now(UTC).isoformat()
         with self._connect() as connection:
             run = self._active_processing_run(connection, run_id)
@@ -1611,8 +1676,7 @@ class SQLiteKnowledgeStore:
                         target_path_json, matches_json, diagnostics_json,
                         prompt_version, taxonomy_version, alias_version
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(agenda_id) DO UPDATE SET
-                        run_id = excluded.run_id,
+                    ON CONFLICT(agenda_id, run_id) DO UPDATE SET
                         item_kind = excluded.item_kind,
                         decision_status = excluded.decision_status,
                         target_path_json = excluded.target_path_json,
@@ -1817,7 +1881,11 @@ class SQLiteKnowledgeStore:
                 "SELECT COUNT(*) FROM classification_revision WHERE agenda_id = ?",
                 (row["id"],),
             ).fetchone()[0]
-            if revision_count:
+            trace_count = connection.execute(
+                "SELECT COUNT(*) FROM classification_trace WHERE agenda_id = ?",
+                (row["id"],),
+            ).fetchone()[0]
+            if revision_count or trace_count:
                 counts["preserved"] += 1
             else:
                 connection.execute("DELETE FROM agenda WHERE id = ?", (row["id"],))
