@@ -308,6 +308,70 @@ def test_explicit_revalidation_rerun_links_prior_and_retains_traces(
     assert week["approved_by"] is None
 
 
+def test_compare_runs_reports_changed_added_removed_and_unchanged(tmp_path):
+    store = SQLiteKnowledgeStore(tmp_path / "knowledge.db")
+    old_run = store.start_classification_run(
+        week="2026-01",
+        prompt_version="agenda-v2",
+        classifier_version="lotcd-v1",
+    )
+    mail, result = classified_extraction("confirmed")
+    changed = result.agendas[0].model_copy(
+        update={
+            "id": "changed",
+            "decision": result.agendas[0].decision.model_copy(
+                update={
+                    "target_path": CategoryPath(
+                        domain="DRAM", tech="Spica", lotcd="6SA"
+                    )
+                }
+            ),
+            "target_paths": [
+                CategoryPath(domain="DRAM", tech="Spica", lotcd="6SA")
+            ],
+        }
+    )
+    unchanged = result.agendas[0].model_copy(update={"id": "unchanged"})
+    removed = result.agendas[0].model_copy(update={"id": "removed"})
+    store.save_classified_extraction(
+        old_run.id,
+        mail,
+        result.model_copy(update={"agendas": [changed, unchanged, removed]}),
+    )
+    store.finish_classification_run(old_run.id)
+
+    new_run = store.start_classification_run(
+        week="2026-01",
+        prompt_version="agenda-v2",
+        classifier_version="lotcd-v1",
+    )
+    changed = result.agendas[0].model_copy(update={"id": "changed"})
+    unchanged = result.agendas[0].model_copy(update={"id": "unchanged"})
+    added = result.agendas[0].model_copy(update={"id": "added"})
+    store.save_classified_extraction(
+        new_run.id,
+        mail,
+        result.model_copy(update={"agendas": [changed, unchanged, added]}),
+    )
+    store.finish_classification_run(new_run.id)
+
+    comparison = store.compare_runs(old_run.id, new_run.id)
+
+    assert comparison.unchanged_count == 1
+    assert [change.agenda_id for change in comparison.changed] == [
+        "added", "changed", "removed"
+    ]
+    changes = {change.agenda_id: change for change in comparison.changed}
+    assert changes["changed"].before_status == "confirmed"
+    assert changes["changed"].after_status == "confirmed"
+    assert changes["changed"].before_lotcd == "6SA"
+    assert changes["changed"].after_lotcd == "4SA"
+    assert changes["added"].before_status is None
+    assert changes["added"].before_lotcd is None
+    assert changes["removed"].after_status is None
+    assert changes["removed"].after_lotcd is None
+
+
 def test_run_and_trace_survive_reload(tmp_path):
     db_path = tmp_path / "knowledge.db"
     store = SQLiteKnowledgeStore(db_path)

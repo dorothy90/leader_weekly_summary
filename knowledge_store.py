@@ -29,6 +29,8 @@ from knowledge_models import (
     Mail,
     MailDocument,
     MappingRevision,
+    RunComparison,
+    RunItemChange,
     TaxonomyDocument,
     Tech,
     WeekClassificationSummary,
@@ -1753,6 +1755,67 @@ class SQLiteKnowledgeStore:
             )
             for row in rows
         ]
+
+    def compare_runs(self, old_run_id: str, new_run_id: str) -> RunComparison:
+        with self._connect() as connection:
+            known_run_ids = {
+                row["id"]
+                for row in connection.execute(
+                    "SELECT id FROM classification_run WHERE id IN (?, ?)",
+                    (old_run_id, new_run_id),
+                )
+            }
+            for run_id in (old_run_id, new_run_id):
+                if run_id not in known_run_ids:
+                    raise KeyError(run_id)
+
+            def decisions(run_id: str) -> dict[str, tuple[str, str | None]]:
+                rows = connection.execute(
+                    """
+                    SELECT agenda_id, decision_status, target_path_json
+                    FROM classification_trace
+                    WHERE run_id = ?
+                    """,
+                    (run_id,),
+                ).fetchall()
+                return {
+                    row["agenda_id"]: (
+                        row["decision_status"],
+                        (
+                            json.loads(row["target_path_json"]).get("lotcd")
+                            if row["target_path_json"]
+                            else None
+                        ),
+                    )
+                    for row in rows
+                }
+
+            old_items = decisions(old_run_id)
+            new_items = decisions(new_run_id)
+
+        changed: list[RunItemChange] = []
+        unchanged_count = 0
+        for agenda_id in sorted(old_items.keys() | new_items.keys()):
+            before = old_items.get(agenda_id)
+            after = new_items.get(agenda_id)
+            if before == after:
+                unchanged_count += 1
+                continue
+            changed.append(
+                RunItemChange(
+                    agenda_id=agenda_id,
+                    before_status=before[0] if before else None,
+                    after_status=after[0] if after else None,
+                    before_lotcd=before[1] if before else None,
+                    after_lotcd=after[1] if after else None,
+                )
+            )
+        return RunComparison(
+            old_run_id=old_run_id,
+            new_run_id=new_run_id,
+            changed=changed,
+            unchanged_count=unchanged_count,
+        )
 
     def week_summary(self, week: str) -> WeekClassificationSummary:
         with self._connect() as connection:

@@ -15,6 +15,7 @@ from pathlib import Path
 
 from agenda_extract import CanonicalResolver, build_splitter, extract_mail
 from agenda_opensearch import sync_mail
+from classification_workbench import run_week_classification
 from knowledge_models import Mail
 from knowledge_store import DEFAULT_DB_PATH, SQLiteKnowledgeStore
 
@@ -121,22 +122,54 @@ def main() -> int:
     parser.add_argument("--allow-dummy-taxonomy", action="store_true")
     parser.add_argument("--db-path", type=Path)
     parser.add_argument("--index-opensearch", action="store_true")
+    parser.add_argument("--rerun", action="store_true")
     args = parser.parse_args()
+    if not args.dry_run and not args.week:
+        parser.error("--week is required for a persisted Workbench run")
     try:
-        opensearch_client = None
-        if args.index_opensearch:
-            from embed_vectordb import get_opensearch_client
-
-            opensearch_client = get_opensearch_client()
-        stats = process_all(
-            week=args.week,
-            allow_external_llm=args.allow_external_llm,
-            allow_dummy_taxonomy=args.allow_dummy_taxonomy,
-            dry_run=args.dry_run,
-            limit=args.limit,
-            db_path=args.db_path,
-            opensearch_client=opensearch_client,
-        )
+        if args.dry_run:
+            stats = process_all(
+                week=args.week,
+                allow_external_llm=args.allow_external_llm,
+                allow_dummy_taxonomy=args.allow_dummy_taxonomy,
+                dry_run=True,
+                limit=args.limit,
+                db_path=args.db_path,
+                opensearch_client=None,
+            )
+        else:
+            if not args.allow_external_llm:
+                raise RuntimeError(
+                    "External LLM use requires explicit allow_external_llm=True"
+                )
+            if args.index_opensearch:
+                raise RuntimeError(
+                    "OpenSearch indexing is disabled for persisted Workbench runs"
+                )
+            configured_db_path = args.db_path or Path(
+                os.getenv("KNOWLEDGE_DB_PATH", str(DEFAULT_DB_PATH))
+            )
+            store = SQLiteKnowledgeStore(configured_db_path)
+            taxonomy = store.taxonomy
+            if taxonomy.is_dummy and not args.allow_dummy_taxonomy:
+                raise RuntimeError(
+                    "Dummy taxonomy is active. Import real mapping or explicitly "
+                    "allow dummy taxonomy."
+                )
+            combined_files = sorted(
+                (DATA_DIR / args.week).glob("**/combined.txt")
+            )
+            if args.limit is not None:
+                combined_files = combined_files[:args.limit]
+            summary = run_week_classification(
+                week=args.week,
+                store=store,
+                mail_directories=[path.parent for path in combined_files],
+                splitter=build_splitter(taxonomy),
+                rerun=args.rerun,
+            )
+            print(json.dumps(summary.model_dump(mode="json"), ensure_ascii=False))
+            return 1 if summary.workflow_state == "failed" else 0
     except RuntimeError as exc:
         print(str(exc))
         return 2

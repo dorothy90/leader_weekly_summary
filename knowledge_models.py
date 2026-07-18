@@ -121,6 +121,21 @@ class WeekClassificationSummary(StrictModel):
     counts: dict[DecisionStatus, int] = Field(default_factory=dict)
 
 
+class RunItemChange(StrictModel):
+    agenda_id: str
+    before_status: DecisionStatus | None
+    after_status: DecisionStatus | None
+    before_lotcd: str | None
+    after_lotcd: str | None
+
+
+class RunComparison(StrictModel):
+    old_run_id: str
+    new_run_id: str
+    changed: list[RunItemChange]
+    unchanged_count: int
+
+
 class ClassificationItem(StrictModel):
     agenda_id: str
     mail_id: str
