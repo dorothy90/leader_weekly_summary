@@ -2,6 +2,28 @@
 
 `category_wiki_builder.py`는 기존 주간·월간 `wiki_builder.py`와 분리된 분류축 Wiki 생성기다.
 
+## 분류 우선 운영 절차
+
+먼저 한 주차의 메일을 LOTCD Workbench에 적재한다. 외부 LLM을 사용하므로
+데이터 전송 정책을 명시적으로 승인해야 하며, 별도 설정이 없으면
+`z-ai/glm-4.7-flash` 모델을 사용한다.
+
+```bash
+KNOWLEDGE_LLM_DATA_POLICY_ACK=true python process_agendas.py \
+  --week 2026-01 \
+  --allow-external-llm
+```
+
+이어서 로컬 Workbench API와 화면을 실행한다.
+
+```bash
+python -m uvicorn knowledge_preview:app --host 127.0.0.1 --port 8002
+```
+
+위 두 명령은 분류 실행과 검토 화면만 준비한다. Wiki 생성과 embedding은
+실행하지 않는다. 분류 결과를 검토·수정하고 주차를 승인한 뒤에만 아래의
+Category Wiki Builder 절차를 별도로 실행한다.
+
 ## 데이터 흐름
 
 ```text

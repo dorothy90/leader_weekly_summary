@@ -55,6 +55,7 @@ def index_definition() -> dict:
                 "state": {"type": "keyword"},
                 "confidence": {"type": "float"},
                 "review_status": {"type": "keyword"},
+                "decision_status": {"type": "keyword"},
                 "domains": {"type": "keyword"},
                 "techs": {"type": "keyword"},
                 "lotcds": {"type": "keyword"},
@@ -74,18 +75,53 @@ def index_definition() -> dict:
 def ensure_index(
     client: OpenSearch, index_name: str = AGENDA_INDEX_NAME
 ) -> None:
-    if not client.indices.exists(index=index_name):
+    if client.indices.exists(index=index_name):
+        client.indices.put_mapping(
+            index=index_name,
+            body={"properties": {"decision_status": {"type": "keyword"}}},
+        )
+    else:
         client.indices.create(index=index_name, body=index_definition())
 
 
 def build_documents(store: SQLiteKnowledgeStore, mail_id: str) -> list[dict]:
+    with store._connect() as connection:
+        trace_rows = connection.execute(
+            """
+            SELECT
+                trace.agenda_id,
+                trace.decision_status,
+                trace.run_id = week.active_run_id AS is_active
+            FROM classification_trace trace
+            JOIN classification_run run ON run.id = trace.run_id
+            LEFT JOIN week_classification week ON week.week = run.week
+            JOIN agenda ON agenda.id = trace.agenda_id
+            WHERE agenda.mail_id = ?
+            """,
+            (mail_id,),
+        ).fetchall()
+    traced_agendas = {row["agenda_id"] for row in trace_rows}
+    active_decisions = {
+        row["agenda_id"]: row["decision_status"]
+        for row in trace_rows
+        if row["is_active"]
+    }
+
     documents = []
     for agenda in store.agendas:
         if agenda.mail_id != mail_id:
             continue
         view = store.agenda_view(agenda)
-        if view.review_status != "confirmed":
-            continue
+        if view.id in traced_agendas:
+            decision_status = active_decisions.get(view.id)
+            if decision_status not in {"confirmed", "manually_corrected"}:
+                continue
+            if len(view.target_paths) != 1 or not view.target_paths[0].lotcd:
+                continue
+        else:
+            if view.review_status != "confirmed":
+                continue
+            decision_status = "confirmed"
         paths = [path.model_dump() for path in view.target_paths]
         documents.append(
             {
@@ -102,6 +138,7 @@ def build_documents(store: SQLiteKnowledgeStore, mail_id: str) -> list[dict]:
                 "state": view.state,
                 "confidence": view.confidence,
                 "review_status": view.review_status,
+                "decision_status": decision_status,
                 "domains": sorted({path.domain for path in view.target_paths}),
                 "techs": sorted(
                     {path.tech for path in view.target_paths if path.tech}
