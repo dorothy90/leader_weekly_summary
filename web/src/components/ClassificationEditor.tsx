@@ -7,6 +7,7 @@ interface ClassificationEditorProps {
   candidate: CategoryPath | null
   initialPaths: CategoryPath[]
   allowHold: boolean
+  singleLotcdOnly?: boolean
   onConfirm: (paths: CategoryPath[]) => Promise<void>
   onHold: () => Promise<void>
   onCancel: () => void
@@ -25,6 +26,7 @@ export function ClassificationEditor({
   candidate,
   initialPaths,
   allowHold,
+  singleLotcdOnly = false,
   onConfirm,
   onHold,
   onCancel,
@@ -44,7 +46,9 @@ export function ClassificationEditor({
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    let paths = selectedPaths
+    let paths = singleLotcdOnly && tech && lotcd
+      ? [{ domain, tech, lotcd }]
+      : selectedPaths
     if (paths.length === 0 && tech && lotcd) {
       paths = [{ domain, tech, lotcd }]
     }
@@ -147,10 +151,12 @@ export function ClassificationEditor({
           ))}
         </select>
       </label>
-      <button className="classification-editor__add" type="button" onClick={addPath}>
-        경로 추가
-      </button>
-      {selectedPaths.length > 0 ? (
+      {!singleLotcdOnly ? (
+        <button className="classification-editor__add" type="button" onClick={addPath}>
+          경로 추가
+        </button>
+      ) : null}
+      {!singleLotcdOnly && selectedPaths.length > 0 ? (
         <div className="classification-editor__paths">
           {selectedPaths.map((path) => (
             <span key={pathKey(path)}>

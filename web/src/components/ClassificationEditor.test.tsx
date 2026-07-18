@@ -116,4 +116,28 @@ describe('ClassificationEditor', () => {
       ]),
     )
   })
+
+  it('submits exactly one LOTCD when single-path mode is enabled', async () => {
+    const onConfirm = vi.fn().mockResolvedValue(undefined)
+    render(
+      <ClassificationEditor
+        taxonomy={taxonomy}
+        candidate={null}
+        initialPaths={[{ domain: 'DRAM', tech: 'Spica', lotcd: '4SA' }]}
+        allowHold={false}
+        singleLotcdOnly
+        onConfirm={onConfirm}
+        onHold={async () => undefined}
+        onCancel={() => undefined}
+      />,
+    )
+
+    expect(screen.queryByRole('button', { name: '경로 추가' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '분류 확정' }))
+    await waitFor(() =>
+      expect(onConfirm).toHaveBeenCalledWith([
+        { domain: 'DRAM', tech: 'Spica', lotcd: '4SA' },
+      ]),
+    )
+  })
 })
