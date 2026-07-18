@@ -49,3 +49,18 @@ All Task 4 review findings were addressed with regression tests:
 - Review RED: focused command produced 11 failures and 72 passes. Nine failures reproduced the product findings; two exposed a test-only row-factory mismatch in the direct private-helper test, which was corrected before evaluating behavior.
 - Review GREEN: `python -m pytest tests/test_classification_workbench.py tests/test_agenda_extract.py tests/test_knowledge_api.py -q` -> 83 passed, 8 warnings.
 - Review full suite: `python -m pytest -q` -> 102 passed, 8 warnings.
+
+## Final Review Fix
+
+The shared mutation guard now requires both:
+
+- the item's `classification_trace.run_id` equals the week's `active_run_id`; and
+- the workflow state is exactly `review_in_progress` or `ready_for_approval`.
+
+This rejects obsolete-run items and active processing-run items before correction, disposition, or split can mutate stored data. Regression snapshots confirm agenda, targets, trace, week state/active run, approval provenance, and revision count remain unchanged.
+
+### Final Review TDD Evidence
+
+- RED: `python -m pytest tests/test_classification_workbench.py tests/test_knowledge_api.py -q` -> 2 failed, 69 passed. The failures reproduced obsolete-run correction and processing-run disposition mutation.
+- GREEN: the same focused command -> 71 passed, 8 warnings.
+- Full suite: `python -m pytest -q` -> 104 passed, 8 warnings.

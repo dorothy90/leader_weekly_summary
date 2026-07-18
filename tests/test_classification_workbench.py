@@ -549,6 +549,40 @@ def test_protected_week_rejects_item_mutations_without_changing_data(
     assert protected_item_snapshot(store, agenda.id) == before
 
 
+def test_obsolete_run_item_rejects_correction_without_changing_data(tmp_path):
+    store, _, agenda = store_with_completed_run(tmp_path, "confirmed")
+    replacement = store.start_classification_run(
+        week="2026-01",
+        prompt_version="agenda-v2",
+        classifier_version="lotcd-v1",
+    )
+    before = protected_item_snapshot(store, agenda.id)
+
+    with pytest.raises(ValueError, match="active run"):
+        store.correct_classification(agenda.id, "6SA", "reviewer", "reason")
+
+    assert store.week_summary("2026-01").active_run_id == replacement.id
+    assert protected_item_snapshot(store, agenda.id) == before
+
+
+def test_processing_run_item_rejects_disposition_without_changing_data(tmp_path):
+    store = SQLiteKnowledgeStore(tmp_path / "knowledge.db")
+    run = store.start_classification_run(
+        week="2026-01",
+        prompt_version="agenda-v2",
+        classifier_version="lotcd-v1",
+    )
+    mail, result = classified_extraction("confirmed")
+    store.save_classified_extraction(run.id, mail, result)
+    agenda = result.agendas[0]
+    before = protected_item_snapshot(store, agenda.id)
+
+    with pytest.raises(ValueError, match="processing"):
+        store.set_item_disposition(agenda.id, "excluded", "reviewer", "reason")
+
+    assert protected_item_snapshot(store, agenda.id) == before
+
+
 @pytest.mark.parametrize("workflow_state", ["approved", "revalidation_required"])
 def test_readiness_recalculation_does_not_overwrite_protected_state(
     tmp_path, workflow_state

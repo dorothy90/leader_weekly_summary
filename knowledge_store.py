@@ -815,7 +815,7 @@ class SQLiteKnowledgeStore:
     ) -> str:
         row = connection.execute(
             """
-            SELECT trace.run_id, week.workflow_state
+            SELECT trace.run_id, week.active_run_id, week.workflow_state
             FROM classification_trace trace
             JOIN classification_run run ON run.id = trace.run_id
             JOIN week_classification week ON week.week = run.week
@@ -825,7 +825,14 @@ class SQLiteKnowledgeStore:
         ).fetchone()
         if row is None:
             raise KeyError(agenda_id)
-        if row["workflow_state"] in {"approved", "revalidation_required"}:
+        if row["run_id"] != row["active_run_id"]:
+            raise ValueError(
+                f"Cannot modify item outside the active run: {agenda_id}"
+            )
+        if row["workflow_state"] not in {
+            "review_in_progress",
+            "ready_for_approval",
+        }:
             raise ValueError(
                 f"Cannot modify item in {row['workflow_state']} week: {agenda_id}"
             )
