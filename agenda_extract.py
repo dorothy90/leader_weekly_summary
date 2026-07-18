@@ -275,12 +275,18 @@ def prior_sentence_context(body: str, quote: str) -> str:
 
 
 def llm_connection() -> LLMConnection:
-    base_url = os.getenv("KNOWLEDGE_LLM_BASE_URL") or os.getenv(
-        "OPENROUTER_BASE_URL"
-    )
+    knowledge_base_url = os.getenv("KNOWLEDGE_LLM_BASE_URL")
+    base_url = knowledge_base_url or os.getenv("OPENROUTER_BASE_URL")
     if not base_url:
         raise RuntimeError(
             "KNOWLEDGE_LLM_BASE_URL or OPENROUTER_BASE_URL is required"
+        )
+    if (
+        knowledge_base_url is None
+        and os.getenv("KNOWLEDGE_LLM_DATA_POLICY_ACK", "").casefold() != "true"
+    ):
+        raise RuntimeError(
+            "External LLM use requires KNOWLEDGE_LLM_DATA_POLICY_ACK=true"
         )
     api_key = (
         os.getenv("KNOWLEDGE_LLM_API_KEY")

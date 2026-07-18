@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 import process_agendas
+from knowledge_models import AliasRecord, CategoryPath, TaxonomyDocument
+
+
+FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "knowledge"
 
 
 def test_mail_from_directory_builds_stable_unique_id(tmp_path, monkeypatch):
@@ -36,3 +42,38 @@ def test_mail_from_directory_builds_stable_unique_id(tmp_path, monkeypatch):
 def test_process_all_requires_explicit_external_llm_opt_in():
     with pytest.raises(RuntimeError, match="explicit"):
         process_agendas.process_all()
+
+
+def test_process_all_supplies_active_aliases_to_extraction(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    mail_dir = data_dir / "2026-28" / "Spica수율" / "mail_001"
+    mail_dir.mkdir(parents=True)
+    (mail_dir / "combined.txt").write_text("SP 24G 수율 하락", encoding="utf-8")
+    taxonomy = TaxonomyDocument.model_validate_json(
+        (FIXTURES / "taxonomy.json").read_text(encoding="utf-8")
+    )
+    alias = AliasRecord(
+        id=7,
+        value="SP 24G",
+        target_paths=[CategoryPath(domain="DRAM", tech="Spica", lotcd="4SA")],
+    )
+    store = SimpleNamespace(taxonomy=taxonomy, aliases=lambda: [alias])
+    captured = {}
+
+    def capture_extraction(_mail, _splitter, resolver):
+        captured["aliases"] = resolver.aliases
+        return SimpleNamespace(agendas=[])
+
+    monkeypatch.setattr(process_agendas, "DATA_DIR", data_dir)
+    monkeypatch.setattr(process_agendas, "SQLiteKnowledgeStore", lambda _path: store)
+    monkeypatch.setattr(process_agendas, "build_splitter", lambda _taxonomy: object())
+    monkeypatch.setattr(process_agendas, "extract_mail", capture_extraction)
+
+    process_agendas.process_all(
+        allow_external_llm=True,
+        allow_dummy_taxonomy=True,
+        dry_run=True,
+        db_path=tmp_path / "knowledge.db",
+    )
+
+    assert captured["aliases"] == [alias]

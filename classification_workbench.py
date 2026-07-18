@@ -55,28 +55,47 @@ def classify_context(
                         rule_id=f"canonical:{lotcd.code}",
                         score=1.0,
                     ))
+    alias_collision = False
+    unknown_alias_target = False
     for alias in aliases or []:
         if not _contains(text, alias.value):
             continue
-        target_lotcds = {
+        target_lotcds = list(dict.fromkeys(
             path.lotcd for path in alias.target_paths if path.lotcd is not None
-        }
-        if len(alias.target_paths) != 1 or len(target_lotcds) != 1:
-            return ClassificationDecision(
-                status="conflict",
-                matches=matches,
-                diagnostics=["ALIAS_COLLISION"],
-                confidence=0.0,
-            )
-        lotcd = target_lotcds.pop()
-        lotcd_path(taxonomy, lotcd)
-        matches.append(CandidateMatch(
-            phrase=alias.value,
-            lotcd=lotcd,
-            match_type="alias",
-            rule_id=f"alias:{alias.id}",
-            score=1.0,
         ))
+        for lotcd in target_lotcds:
+            matches.append(CandidateMatch(
+                phrase=alias.value,
+                lotcd=lotcd,
+                match_type="alias",
+                rule_id=f"alias:{alias.id}",
+                score=1.0,
+            ))
+            try:
+                lotcd_path(taxonomy, lotcd)
+            except ValueError:
+                unknown_alias_target = True
+        if len(alias.target_paths) != 1 or len(target_lotcds) != 1:
+            alias_collision = True
+    diagnostics = []
+    if alias_collision:
+        diagnostics.append("ALIAS_COLLISION")
+    if unknown_alias_target:
+        diagnostics.append("UNKNOWN_LOTCD_CODE")
+    if alias_collision:
+        return ClassificationDecision(
+            status="conflict",
+            matches=matches,
+            diagnostics=diagnostics,
+            confidence=0.0,
+        )
+    if unknown_alias_target:
+        return ClassificationDecision(
+            status="review_required",
+            matches=matches,
+            diagnostics=diagnostics,
+            confidence=0.0,
+        )
     codes = sorted({match.lotcd for match in matches})
     if len(codes) == 1:
         return ClassificationDecision(

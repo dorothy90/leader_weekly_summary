@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from agenda_extract import (
     AgendaDraft,
     AgendaDraftList,
@@ -147,3 +149,12 @@ def test_knowledge_llm_configuration_overrides_openrouter(monkeypatch):
     assert connection.model == "internal-model"
     assert connection.api_key.get_secret_value() == "internal-secret"
     assert "internal-secret" not in repr(connection)
+
+
+def test_openrouter_llm_configuration_requires_data_policy_ack(monkeypatch):
+    monkeypatch.delenv("KNOWLEDGE_LLM_BASE_URL", raising=False)
+    monkeypatch.delenv("KNOWLEDGE_LLM_DATA_POLICY_ACK", raising=False)
+    monkeypatch.setenv("OPENROUTER_BASE_URL", "https://openrouter.example/v1")
+
+    with pytest.raises(RuntimeError, match="KNOWLEDGE_LLM_DATA_POLICY_ACK=true"):
+        llm_connection()

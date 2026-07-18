@@ -86,3 +86,53 @@ def test_alias_with_multiple_target_paths_is_a_conflict():
 
     assert result.status == "conflict"
     assert result.diagnostics == ["ALIAS_COLLISION"]
+
+
+def test_mixed_valid_and_colliding_aliases_retain_all_matching_phrases():
+    aliases = [
+        AliasRecord(
+            id=10,
+            value="SP family",
+            target_paths=[
+                CategoryPath(domain="DRAM", tech="Spica", lotcd="4SA"),
+                CategoryPath(domain="DRAM", tech="Spica", lotcd="6SA"),
+            ],
+        ),
+        AliasRecord(
+            id=11,
+            value="Edge family",
+            target_paths=[
+                CategoryPath(domain="DRAM", tech="Spica", lotcd="4SA")
+            ],
+        ),
+    ]
+
+    result = classify_context(
+        "SP family 및 Edge family 품질지수", "unknown", taxonomy(), aliases
+    )
+
+    assert result.status == "conflict"
+    assert result.diagnostics == ["ALIAS_COLLISION"]
+    assert {match.phrase for match in result.matches} == {
+        "SP family", "Edge family"
+    }
+
+
+def test_alias_with_unknown_lotcd_target_requires_review_with_trace():
+    alias = AliasRecord(
+        id=12,
+        value="legacy code",
+        target_paths=[
+            CategoryPath(domain="DRAM", tech="Spica", lotcd="9ZZ")
+        ],
+    )
+
+    result = classify_context(
+        "legacy code 수율 하락", "lotcd_specific", taxonomy(), [alias]
+    )
+
+    assert result.status == "review_required"
+    assert result.target_path is None
+    assert result.diagnostics == ["UNKNOWN_LOTCD_CODE"]
+    assert result.matches[0].rule_id == "alias:12"
+    assert result.matches[0].lotcd == "9ZZ"

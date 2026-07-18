@@ -88,7 +88,7 @@ def process_all(
         combined_files = combined_files[:limit]
 
     splitter = build_splitter(taxonomy)
-    resolver = CanonicalResolver(taxonomy)
+    resolver = CanonicalResolver(taxonomy, store.aliases())
     stats = {"processed": 0, "failed": 0, "agendas": 0}
     for combined_path in combined_files:
         mail_dir = combined_path.parent
