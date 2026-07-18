@@ -6,6 +6,14 @@ import type {
   CategoryCount,
   CategoryPath,
   CategoryWikiPage,
+  ClassificationAliasRequest,
+  ClassificationAliasResponse,
+  ClassificationFilters,
+  ClassificationItem,
+  ClassificationItemList,
+  ClassificationRunComparison,
+  ClassificationSplitPart,
+  ClassificationWeek,
   ClassificationRevision,
   MappingRevision,
   KnowledgeFacets,
@@ -22,6 +30,135 @@ async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
     throw new Error(message || `HTTP ${response.status}`)
   }
   return response.json() as Promise<T>
+}
+
+async function classificationMutation<T>(
+  url: string,
+  method: 'POST' | 'PATCH',
+  body?: object,
+): Promise<T> {
+  const response = await fetch(url, {
+    method,
+    headers: body ? { 'Content-Type': 'application/json' } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  })
+  if (!response.ok) {
+    const message = await response.text()
+    throw new Error(message || `HTTP ${response.status}`)
+  }
+  return response.json() as Promise<T>
+}
+
+export function fetchClassificationWeeks(
+  signal?: AbortSignal,
+): Promise<ClassificationWeek[]> {
+  return getJson<ClassificationWeek[]>(
+    '/api/knowledge/classification/weeks',
+    signal,
+  )
+}
+
+export function fetchClassificationItems(
+  week: string,
+  filters: ClassificationFilters = {},
+  signal?: AbortSignal,
+): Promise<ClassificationItemList> {
+  const params = new URLSearchParams()
+  if (filters.lotcd) params.set('lotcd', filters.lotcd)
+  if (filters.status) params.set('status', filters.status)
+  if (filters.q) params.set('q', filters.q)
+  const query = params.toString()
+  return getJson<ClassificationItemList>(
+    `/api/knowledge/classification/weeks/${encodeURIComponent(week)}/items${query ? `?${query}` : ''}`,
+    signal,
+  )
+}
+
+export function fetchClassificationItem(
+  agendaId: string,
+  signal?: AbortSignal,
+): Promise<ClassificationItem> {
+  return getJson<ClassificationItem>(
+    `/api/knowledge/classification/items/${encodeURIComponent(agendaId)}`,
+    signal,
+  )
+}
+
+export function fetchClassificationRunComparison(
+  oldRunId: string,
+  newRunId: string,
+  signal?: AbortSignal,
+): Promise<ClassificationRunComparison> {
+  return getJson<ClassificationRunComparison>(
+    `/api/knowledge/classification/runs/${encodeURIComponent(oldRunId)}/comparison/${encodeURIComponent(newRunId)}`,
+    signal,
+  )
+}
+
+export function runClassificationWeek(
+  week: string,
+  rerun = false,
+): Promise<ClassificationWeek> {
+  return classificationMutation<ClassificationWeek>(
+    `/api/knowledge/classification/weeks/${encodeURIComponent(week)}/run`,
+    'POST',
+    { rerun },
+  )
+}
+
+export function approveClassificationWeek(
+  week: string,
+): Promise<ClassificationWeek> {
+  return classificationMutation<ClassificationWeek>(
+    `/api/knowledge/classification/weeks/${encodeURIComponent(week)}/approve`,
+    'POST',
+  )
+}
+
+export function correctClassificationItem(
+  agendaId: string,
+  lotcd: string,
+  reason: string,
+): Promise<ClassificationItem> {
+  return classificationMutation<ClassificationItem>(
+    `/api/knowledge/classification/items/${encodeURIComponent(agendaId)}`,
+    'PATCH',
+    { lotcd, reason },
+  )
+}
+
+export function setClassificationDisposition(
+  agendaId: string,
+  status: 'aggregate' | 'excluded',
+  reason: string,
+): Promise<ClassificationItem> {
+  return classificationMutation<ClassificationItem>(
+    `/api/knowledge/classification/items/${encodeURIComponent(agendaId)}/disposition`,
+    'PATCH',
+    { status, reason },
+  )
+}
+
+export function splitClassificationItem(
+  agendaId: string,
+  parts: ClassificationSplitPart[],
+  reason: string,
+): Promise<ClassificationItem[]> {
+  return classificationMutation<ClassificationItem[]>(
+    `/api/knowledge/classification/items/${encodeURIComponent(agendaId)}/split`,
+    'POST',
+    { parts, reason },
+  )
+}
+
+export function createClassificationAlias(
+  input: ClassificationAliasRequest,
+): Promise<ClassificationAliasResponse> {
+  return classificationMutation<ClassificationAliasResponse>(
+    '/api/knowledge/classification/aliases',
+    'POST',
+    input,
+  )
 }
 
 export function fetchTaxonomy(signal?: AbortSignal): Promise<Taxonomy> {
