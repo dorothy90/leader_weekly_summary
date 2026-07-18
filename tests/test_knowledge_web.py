@@ -35,6 +35,7 @@ def test_mount_knowledge_web_serves_spa_routes_and_assets(tmp_path):
     assert "Knowledge Web" in get(app, "/wiki/docs/dram/spica/4sa").text
     assert "Knowledge Web" in get(app, "/wiki/graph").text
     assert "Knowledge Web" in get(app, "/mappings").text
+    assert "Knowledge Web" in get(app, "/classification").text
     assert get(app, "/assets/app.js").status_code == 200
 
 

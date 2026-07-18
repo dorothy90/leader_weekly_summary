@@ -4,6 +4,7 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 
 import { ExplorerPage } from './pages/ExplorerPage'
 import { MappingPage } from './pages/MappingPage'
+import { ClassificationWorkbenchPage } from './pages/ClassificationWorkbenchPage'
 import './styles/tokens.css'
 import './styles/app.css'
 import './styles/wiki.css'
@@ -33,6 +34,7 @@ createRoot(root).render(
         />
         <Route path="/review" element={<Navigate to="/wiki/docs?review=pending" replace />} />
         <Route path="/mappings" element={<MappingPage />} />
+        <Route path="/classification" element={<ClassificationWorkbenchPage />} />
         <Route path="*" element={<Navigate to="/wiki/docs" replace />} />
       </Routes>
     </BrowserRouter>

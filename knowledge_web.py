@@ -67,6 +67,13 @@ def mount_knowledge_web(app: FastAPI, dist_path: Path | None = None) -> bool:
         name="knowledge-review",
     )
     app.add_api_route(
+        "/classification",
+        serve_index,
+        methods=["GET"],
+        include_in_schema=False,
+        name="knowledge-classification",
+    )
+    app.add_api_route(
         "/wiki/{wiki_path:path}",
         serve_index,
         methods=["GET"],

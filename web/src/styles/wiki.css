@@ -1,5 +1,6 @@
 .wiki-docs-shell,
 .wiki-graph-page,
+.classification-workbench,
 .wiki-route-loading {
   --wiki-bg-0: #1e1e1e;
   --wiki-bg-1: #252525;
@@ -22,6 +23,71 @@
   color: var(--wiki-text);
   background: var(--wiki-bg-0);
   font-family: Pretendard, Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.classification-workbench {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr) 320px;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: 100%;
+  height: 100vh;
+  min-height: 620px;
+  overflow: hidden;
+}
+.classification-workbench--state { place-items: center; color: var(--wiki-muted); }
+.classification-workbench__header { grid-column: 1 / -1; display: flex; align-items: center; gap: 18px; border-bottom: 1px solid var(--wiki-border); padding: 12px 16px; background: var(--wiki-bg-1); }
+.classification-workbench__header h1 { margin: 0; color: var(--wiki-text-strong); font-size: 17px; }
+.classification-workbench__header p { margin: 3px 0 0; color: var(--wiki-dim); font-size: 11px; }
+.classification-workbench__actions { display: flex; gap: 7px; margin-left: auto; }
+.classification-workbench button { border: 1px solid var(--wiki-border); border-radius: 4px; padding: 6px 9px; color: var(--wiki-text); background: var(--wiki-bg-2); cursor: pointer; }
+.classification-workbench button:disabled { color: var(--wiki-dim); cursor: not-allowed; opacity: .65; }
+.classification-workbench__message { max-width: 280px; color: var(--wiki-accent-soft) !important; }
+.classification-nav { min-height: 0; overflow: auto; border-right: 1px solid var(--wiki-border); background: var(--wiki-bg-1); }
+.classification-nav h2 { margin: 0 0 7px; color: var(--wiki-muted); font-size: 10px; text-transform: uppercase; }
+.classification-nav__weeks, .classification-nav__filters { display: grid; gap: 4px; padding: 12px; border-bottom: 1px solid var(--wiki-border); }
+.classification-nav button { display: grid; grid-template-columns: 1fr auto; text-align: left; }
+.classification-nav button strong, .classification-nav button > span { overflow: hidden; text-overflow: ellipsis; }
+.classification-nav button small { color: var(--wiki-dim); font-size: 9px; }
+.classification-nav button.is-selected, .classification-nav button[aria-pressed="true"] { border-color: var(--wiki-accent); background: var(--wiki-active); }
+.classification-list { min-width: 0; min-height: 0; overflow: auto; background: var(--wiki-bg-0); }
+.classification-list__header { position: sticky; z-index: 1; top: 0; display: flex; align-items: end; justify-content: space-between; gap: 12px; padding: 12px 14px; border-bottom: 1px solid var(--wiki-border); background: var(--wiki-bg-1); }
+.classification-list__header h2 { margin: 0; color: var(--wiki-text-strong); font-size: 14px; }
+.classification-list__header label { color: var(--wiki-dim); font-size: 10px; }
+.classification-list__header label span { margin-right: 6px; }
+.classification-workbench input, .classification-workbench select { min-width: 0; border: 1px solid var(--wiki-border); border-radius: 4px; padding: 5px 7px; color: var(--wiki-text); background: var(--wiki-bg-0); }
+.classification-list__table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.classification-list__table th { position: sticky; top: 61px; padding: 7px 9px; color: var(--wiki-dim); background: var(--wiki-bg-1); text-align: left; }
+.classification-list__table td { border-top: 1px solid var(--wiki-border); padding: 8px 9px; color: var(--wiki-text); }
+.classification-list__table tr { cursor: pointer; }
+.classification-list__table tr.is-selected { background: var(--wiki-active); }
+.classification-workbench__detail { min-width: 0; min-height: 0; overflow: auto; border-left: 1px solid var(--wiki-border); background: var(--wiki-bg-1); }
+.classification-workbench__empty { padding: 18px; color: var(--wiki-dim); }
+.classification-detail { padding: 14px; }
+.classification-detail header { display: flex; justify-content: space-between; gap: 8px; }
+.classification-detail h2 { margin: 0; color: var(--wiki-text-strong); font-size: 16px; }
+.classification-detail h3 { margin: 0 0 7px; color: var(--wiki-muted); font-size: 10px; text-transform: uppercase; }
+.classification-detail section, .classification-detail form { display: grid; gap: 7px; margin: 0; padding: 13px 0; border-bottom: 1px solid var(--wiki-border); }
+.classification-detail blockquote { margin: 0; border-left: 2px solid var(--wiki-accent); padding-left: 9px; color: var(--wiki-text); font-size: 12px; line-height: 1.6; }
+.classification-detail p, .classification-detail li { margin: 0; color: var(--wiki-muted); font-size: 11px; overflow-wrap: anywhere; }
+.classification-detail ul { display: grid; gap: 4px; margin: 0; padding-left: 17px; }
+.classification-detail label { display: grid; gap: 3px; color: var(--wiki-muted); font-size: 10px; }
+.classification-detail fieldset { display: grid; gap: 6px; border: 1px solid var(--wiki-border); padding: 8px; }
+.classification-detail legend { color: var(--wiki-dim); font-size: 10px; }
+
+@media (max-width: 1100px) {
+  .classification-workbench { grid-template-columns: 180px minmax(0, 1fr); height: auto; min-height: 100vh; overflow: visible; }
+  .classification-nav, .classification-list { min-height: 560px; max-height: calc(100vh - 70px); }
+  .classification-workbench__detail { grid-column: 1 / -1; border-top: 1px solid var(--wiki-border); border-left: 0; }
+}
+
+@media (max-width: 720px) {
+  .classification-workbench { display: block; }
+  .classification-workbench__header { align-items: flex-start; flex-wrap: wrap; }
+  .classification-workbench__actions { margin-left: 0; }
+  .classification-nav, .classification-list { min-height: 0; max-height: none; border-right: 0; }
+  .classification-nav__weeks, .classification-nav__filters { display: flex; flex-wrap: wrap; }
+  .classification-nav h2 { width: 100%; }
+  .classification-list { overflow-x: auto; }
 }
 
 .wiki-docs-shell * {
