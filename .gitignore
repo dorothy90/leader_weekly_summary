@@ -269,6 +269,8 @@ mail
 
 # pptxgenjs 렌더러 의존성
 ppt_render/node_modules/
+web/node_modules/
+web/dist/
 exports/deep_mining/*_qa/
 
 # 생성 산출물(데모/작업물)

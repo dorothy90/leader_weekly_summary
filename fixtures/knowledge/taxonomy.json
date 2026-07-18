@@ -1,0 +1,184 @@
+{
+  "version": 1,
+  "is_dummy": true,
+  "notice": "UI와 분류 파이프라인 검증용 가상 기준정보입니다. 운영 mapping으로 사용하지 마세요.",
+  "domains": [
+    {
+      "id": "dram",
+      "name": "DRAM",
+      "techs": [
+        {
+          "id": "spica",
+          "name": "Spica",
+          "aliases": ["SP", "Spica Tech"],
+          "lotcds": [
+            {
+              "code": "4SA",
+              "fab_id": "4",
+              "product_code": "SA",
+              "product": "LPDDR5 24G",
+              "aliases": ["SP LPDDR5 24G Fab4"]
+            },
+            {
+              "code": "6SA",
+              "fab_id": "6",
+              "product_code": "SA",
+              "product": "LPDDR5 24G",
+              "aliases": ["SP LPDDR5 24G Fab6"]
+            }
+          ]
+        },
+        {
+          "id": "canopus",
+          "name": "Canopus",
+          "aliases": ["CA", "Canopus Tech"],
+          "lotcds": [
+            {
+              "code": "4SS",
+              "fab_id": "4",
+              "product_code": "SS",
+              "product": "DDR5 16G",
+              "aliases": ["CA DDR5 16G Fab4"]
+            },
+            {
+              "code": "6SS",
+              "fab_id": "6",
+              "product_code": "SS",
+              "product": "DDR5 16G",
+              "aliases": ["CA DDR5 16G Fab6"]
+            }
+          ]
+        },
+        {
+          "id": "lucy",
+          "name": "Lucy",
+          "aliases": ["LC", "Lucy Tech"],
+          "lotcds": [
+            {
+              "code": "4E2",
+              "fab_id": "4",
+              "product_code": "E2",
+              "product": "DDR4 8G",
+              "aliases": ["LC DDR4 8G Fab4"]
+            },
+            {
+              "code": "6E2",
+              "fab_id": "6",
+              "product_code": "E2",
+              "product": "DDR4 8G",
+              "aliases": ["LC DDR4 8G Fab6"]
+            }
+          ]
+        },
+        {
+          "id": "procyon",
+          "name": "Procyon",
+          "aliases": ["PR", "Procyon Tech"],
+          "lotcds": [
+            {
+              "code": "4EN",
+              "fab_id": "4",
+              "product_code": "EN",
+              "product": "LPDDR5 16G",
+              "aliases": ["PR LPDDR5 16G Fab4"]
+            },
+            {
+              "code": "6EN",
+              "fab_id": "6",
+              "product_code": "EN",
+              "product": "LPDDR5 16G",
+              "aliases": ["PR LPDDR5 16G Fab6"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "nand",
+      "name": "NAND",
+      "techs": [
+        {
+          "id": "heraion",
+          "name": "Heraion",
+          "aliases": ["HR", "Heraion Tech"],
+          "lotcds": [
+            {
+              "code": "4H1",
+              "fab_id": "4",
+              "product_code": "H1",
+              "product": "TLC 512G",
+              "aliases": ["HR TLC 512G Fab4"]
+            },
+            {
+              "code": "6H1",
+              "fab_id": "6",
+              "product_code": "H1",
+              "product": "TLC 512G",
+              "aliases": ["HR TLC 512G Fab6"]
+            }
+          ]
+        },
+        {
+          "id": "colosseum",
+          "name": "Colosseum",
+          "aliases": ["CO", "Colosseum Tech"],
+          "lotcds": [
+            {
+              "code": "4C1",
+              "fab_id": "4",
+              "product_code": "C1",
+              "product": "QLC 1T",
+              "aliases": ["CO QLC 1T Fab4"]
+            },
+            {
+              "code": "6C1",
+              "fab_id": "6",
+              "product_code": "C1",
+              "product": "QLC 1T",
+              "aliases": ["CO QLC 1T Fab6"]
+            }
+          ]
+        },
+        {
+          "id": "petra",
+          "name": "Petra",
+          "aliases": ["PT", "Petra Tech"],
+          "lotcds": [
+            {
+              "code": "4P1",
+              "fab_id": "4",
+              "product_code": "P1",
+              "product": "TLC 1T Performance",
+              "aliases": ["PT TLC 1T Fab4"]
+            },
+            {
+              "code": "6P1",
+              "fab_id": "6",
+              "product_code": "P1",
+              "product": "TLC 1T Performance",
+              "aliases": ["PT TLC 1T Fab6"]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "group_aliases": [
+    {
+      "alias": "SP LPDDR5 24G",
+      "target_lotcds": ["4SA", "6SA"]
+    },
+    {
+      "alias": "Canopus DDR5 16G",
+      "target_lotcds": ["4SS", "6SS"]
+    },
+    {
+      "alias": "Heraion TLC 512G",
+      "target_lotcds": ["4H1", "6H1"]
+    },
+    {
+      "alias": "Colosseum QLC 1T",
+      "target_lotcds": ["4C1", "6C1"]
+    }
+  ]
+}
