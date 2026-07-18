@@ -138,23 +138,143 @@ def test_failed_run_survives_reload(tmp_path):
 
 def test_only_active_processing_run_can_finish(tmp_path):
     store = SQLiteKnowledgeStore(tmp_path / "knowledge.db")
-    old_run = store.start_classification_run(
-        week="2026-01",
-        prompt_version="agenda-v2",
-        classifier_version="lotcd-v1",
-    )
-    active_run = store.start_classification_run(
+    run = store.start_classification_run(
         week="2026-01",
         prompt_version="agenda-v2",
         classifier_version="lotcd-v1",
     )
 
+    store.fail_classification_run(run.id, "splitter failed")
     with pytest.raises(ValueError, match="active processing"):
-        store.finish_classification_run(old_run.id)
+        store.finish_classification_run(run.id)
 
-    store.fail_classification_run(active_run.id, "splitter failed")
+
+def test_concurrent_run_start_is_rejected_without_stranding_first_run(tmp_path):
+    db_path = tmp_path / "knowledge.db"
+    store = SQLiteKnowledgeStore(db_path)
+    first = store.start_classification_run(
+        week="2026-01",
+        prompt_version="agenda-v2",
+        classifier_version="lotcd-v1",
+    )
+
+    with pytest.raises(ValueError, match="already processing"):
+        store.start_classification_run(
+            week="2026-01",
+            prompt_version="agenda-v2",
+            classifier_version="lotcd-v1",
+        )
+
+    with sqlite3.connect(db_path) as connection:
+        runs = connection.execute(
+            "SELECT id, status FROM classification_run ORDER BY started_at"
+        ).fetchall()
+    assert runs == [(first.id, "processing")]
+    assert store.week_summary("2026-01").active_run_id == first.id
+
+
+def test_inactive_processing_run_cannot_save_or_move_trace(tmp_path):
+    db_path = tmp_path / "knowledge.db"
+    store = SQLiteKnowledgeStore(db_path)
+    inactive = store.start_classification_run(
+        week="2026-01",
+        prompt_version="agenda-v2",
+        classifier_version="lotcd-v1",
+    )
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO classification_run(
+                id, week, status, prompt_version, classifier_version,
+                taxonomy_version, alias_version, prior_run_id, started_at
+            ) VALUES (?, ?, 'processing', ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "active-run",
+                inactive.week,
+                inactive.prompt_version,
+                inactive.classifier_version,
+                inactive.taxonomy_version,
+                inactive.alias_version,
+                inactive.id,
+                datetime.now(UTC).isoformat(),
+            ),
+        )
+        connection.execute(
+            "UPDATE week_classification SET active_run_id = ? WHERE week = ?",
+            ("active-run", inactive.week),
+        )
+    mail, result = classified_extraction()
+
     with pytest.raises(ValueError, match="active processing"):
-        store.finish_classification_run(active_run.id)
+        store.save_classified_extraction(inactive.id, mail, result)
+
+    assert store.week_summary("2026-01").active_run_id == "active-run"
+    assert store.classification_items("2026-01") == []
+    assert mail.id not in store.mails
+
+
+@pytest.mark.parametrize("workflow_state", ["approved", "revalidation_required"])
+def test_protected_week_rejects_rerun_without_losing_provenance(
+    tmp_path, workflow_state
+):
+    db_path = tmp_path / "knowledge.db"
+    store = SQLiteKnowledgeStore(db_path)
+    run = store.start_classification_run(
+        week="2026-01",
+        prompt_version="agenda-v2",
+        classifier_version="lotcd-v1",
+    )
+    mail, result = classified_extraction()
+    store.save_classified_extraction(run.id, mail, result)
+    store.finish_classification_run(run.id)
+    store.approve_week("2026-01", "reviewer")
+    with sqlite3.connect(db_path) as connection:
+        if workflow_state == "revalidation_required":
+            connection.execute(
+                "UPDATE week_classification SET workflow_state = ? WHERE week = ?",
+                (workflow_state, "2026-01"),
+            )
+        before = connection.execute(
+            """
+            SELECT active_run_id, workflow_state, approved_at, approved_by
+            FROM week_classification WHERE week = ?
+            """,
+            ("2026-01",),
+        ).fetchone()
+
+    with pytest.raises(ValueError, match="cannot start"):
+        store.start_classification_run(
+            week="2026-01",
+            prompt_version="agenda-v2",
+            classifier_version="lotcd-v1",
+        )
+
+    with sqlite3.connect(db_path) as connection:
+        after = connection.execute(
+            """
+            SELECT active_run_id, workflow_state, approved_at, approved_by
+            FROM week_classification WHERE week = ?
+            """,
+            ("2026-01",),
+        ).fetchone()
+    assert after == before
+
+
+def test_empty_run_stays_in_review_and_cannot_be_approved(tmp_path):
+    store = SQLiteKnowledgeStore(tmp_path / "knowledge.db")
+    run = store.start_classification_run(
+        week="2026-01",
+        prompt_version="agenda-v2",
+        classifier_version="lotcd-v1",
+    )
+
+    summary = store.finish_classification_run(run.id)
+
+    assert summary.workflow_state == "review_in_progress"
+    assert summary.counts == {}
+    with pytest.raises(ValueError, match="no classification items"):
+        store.approve_week("2026-01", "reviewer")
 
 
 def test_classified_save_is_atomic(tmp_path):

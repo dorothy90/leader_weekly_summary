@@ -936,6 +936,7 @@ class SQLiteKnowledgeStore:
         run_id = uuid.uuid4().hex
         started_at = datetime.now(UTC).isoformat()
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
             metadata = {
                 row["key"]: row["value"]
                 for row in connection.execute(
@@ -943,9 +944,27 @@ class SQLiteKnowledgeStore:
                 )
             }
             current = connection.execute(
-                "SELECT active_run_id FROM week_classification WHERE week = ?",
+                "SELECT * FROM week_classification WHERE week = ?",
                 (week,),
             ).fetchone()
+            if current and current["workflow_state"] in {
+                "approved",
+                "revalidation_required",
+            }:
+                raise ValueError(
+                    f"Week {week} cannot start a classification run while "
+                    f"{current['workflow_state']}"
+                )
+            if current and current["active_run_id"]:
+                active_status = connection.execute(
+                    "SELECT status FROM classification_run WHERE id = ?",
+                    (current["active_run_id"],),
+                ).fetchone()
+                if active_status and active_status["status"] == "processing":
+                    raise ValueError(
+                        f"Week {week} is already processing run "
+                        f"{current['active_run_id']}"
+                    )
             prior_run_id = current["active_run_id"] if current else None
             connection.execute(
                 """
@@ -987,16 +1006,24 @@ class SQLiteKnowledgeStore:
         completed_at = datetime.now(UTC).isoformat()
         with self._connect() as connection:
             run = self._active_processing_run(connection, run_id)
-            unresolved = connection.execute(
+            trace_counts = connection.execute(
                 """
-                SELECT COUNT(*) FROM classification_trace
+                SELECT
+                    COUNT(*) AS total,
+                    COALESCE(SUM(
+                        decision_status IN (
+                            'unclassified', 'conflict', 'review_required'
+                        )
+                    ), 0) AS unresolved
+                FROM classification_trace
                 WHERE run_id = ?
-                  AND decision_status IN ('unclassified', 'conflict', 'review_required')
                 """,
                 (run_id,),
-            ).fetchone()[0]
+            ).fetchone()
             workflow_state = (
-                "review_in_progress" if unresolved else "ready_for_approval"
+                "review_in_progress"
+                if trace_counts["total"] == 0 or trace_counts["unresolved"]
+                else "ready_for_approval"
             )
             connection.execute(
                 """
@@ -1045,13 +1072,7 @@ class SQLiteKnowledgeStore:
         result: "MailExtractionResult",
     ) -> dict[str, int]:
         with self._connect() as connection:
-            run = connection.execute(
-                "SELECT * FROM classification_run WHERE id = ?", (run_id,)
-            ).fetchone()
-            if run is None:
-                raise ValueError(f"Unknown classification run: {run_id}")
-            if run["status"] != "processing":
-                raise ValueError(f"Classification run is not processing: {run_id}")
+            run = self._active_processing_run(connection, run_id)
 
             counts = self._save_extraction(connection, mail, result)
             for agenda in result.agendas:
@@ -1186,17 +1207,26 @@ class SQLiteKnowledgeStore:
             ).fetchone()
             if row is None:
                 raise KeyError(week)
-            unresolved = connection.execute(
+            trace_counts = connection.execute(
                 """
-                SELECT COUNT(*) FROM classification_trace
+                SELECT
+                    COUNT(*) AS total,
+                    COALESCE(SUM(
+                        decision_status IN (
+                            'unclassified', 'conflict', 'review_required'
+                        )
+                    ), 0) AS unresolved
+                FROM classification_trace
                 WHERE run_id = ?
-                  AND decision_status IN ('unclassified', 'conflict', 'review_required')
                 """,
                 (row["active_run_id"],),
-            ).fetchone()[0]
-            if unresolved:
+            ).fetchone()
+            if trace_counts["total"] == 0:
+                raise ValueError(f"Week {week} has no classification items")
+            if trace_counts["unresolved"]:
                 raise ValueError(
-                    f"Week {week} has {unresolved} unresolved classification items"
+                    f"Week {week} has {trace_counts['unresolved']} "
+                    "unresolved classification items"
                 )
             if row["workflow_state"] != "ready_for_approval":
                 raise ValueError(f"Week {week} is not ready for approval")
