@@ -28,7 +28,14 @@ from knowledge_models import (
     CategoryCount,
     CategoryCountResponse,
     CategoryWikiPage,
+    ClassificationItem,
+    ClassificationItemListResponse,
+    ClassificationRunRequest,
     ClassificationUpdate,
+    DecisionStatus,
+    ItemDispositionUpdate,
+    ItemSplitRequest,
+    LearnedAliasCreate,
     Mail,
     KnowledgeFacets,
     KnowledgeSession,
@@ -36,10 +43,13 @@ from knowledge_models import (
     LotcdUpdate,
     MappingRevisionListResponse,
     RevisionListResponse,
+    RunComparison,
     SearchSyncResponse,
     TechCreate,
     TechUpdate,
     TaxonomyDocument,
+    WeekClassificationSummary,
+    WorkbenchCorrection,
 )
 from knowledge_store import DEFAULT_DB_PATH, SQLiteKnowledgeStore
 
@@ -153,6 +163,56 @@ def _get_opensearch_agenda(agenda_id: str) -> AgendaDetailResponse:
 def get_store() -> SQLiteKnowledgeStore:
     db_path = Path(os.getenv("KNOWLEDGE_DB_PATH", str(DEFAULT_DB_PATH)))
     return SQLiteKnowledgeStore(db_path)
+
+
+def _classification_mail_directories(week: str) -> list[Path]:
+    return [
+        path.parent
+        for path in sorted((Path("data") / week).glob("**/combined.txt"))
+    ]
+
+
+def _build_classification_splitter(taxonomy: TaxonomyDocument):
+    from agenda_extract import build_splitter
+
+    return build_splitter(taxonomy)
+
+
+def _run_week_classification(**kwargs) -> WeekClassificationSummary:
+    from classification_workbench import run_week_classification
+
+    return run_week_classification(**kwargs)
+
+
+def _classification_week_exists(store: SQLiteKnowledgeStore, week: str) -> bool:
+    return any(summary.week == week for summary in store.week_summaries())
+
+
+def _classification_lotcd_exists(taxonomy: TaxonomyDocument, lotcd: str) -> bool:
+    return any(
+        item.code == lotcd
+        for domain in taxonomy.domains
+        for tech in domain.techs
+        for item in tech.lotcds
+    )
+
+
+def _classification_item_or_404(
+    store: SQLiteKnowledgeStore, agenda_id: str
+) -> ClassificationItem:
+    for summary in store.week_summaries():
+        for item in store.classification_items(summary.week):
+            if item.agenda_id == agenda_id:
+                return item
+    raise HTTPException(status_code=404, detail=f"Unknown item: {agenda_id}")
+
+
+def _classification_value_error(
+    exc: ValueError, *, invalid: bool = False
+) -> HTTPException:
+    message = str(exc)
+    status = 422 if invalid or "Unknown LOTCD" in message else 409
+    return HTTPException(status_code=status, detail=message)
 
 
 def _path_matches(
@@ -638,3 +698,189 @@ def delete_lotcd(
         raise HTTPException(status_code=404, detail=f"Unknown LOTCD: {code}") from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get(
+    "/classification/weeks",
+    response_model=list[WeekClassificationSummary],
+)
+def get_classification_weeks() -> list[WeekClassificationSummary]:
+    return get_store().week_summaries()
+
+
+@router.get(
+    "/classification/weeks/{week}/items",
+    response_model=ClassificationItemListResponse,
+)
+def get_classification_items(
+    week: str,
+    lotcd: str | None = None,
+    status: DecisionStatus | None = None,
+    q: str | None = Query(default=None, max_length=200),
+) -> ClassificationItemListResponse:
+    store = get_store()
+    if not _classification_week_exists(store, week):
+        raise HTTPException(status_code=404, detail=f"Unknown week: {week}")
+    if lotcd is not None and not _classification_lotcd_exists(store.taxonomy, lotcd):
+        raise HTTPException(status_code=422, detail=f"Unknown LOTCD: {lotcd}")
+    normalized_query = q.strip().casefold() if q else None
+    items = []
+    for item in store.classification_items(week):
+        if lotcd is not None and (
+            item.decision.target_path is None
+            or item.decision.target_path.lotcd != lotcd
+        ):
+            continue
+        if status is not None and item.decision.status != status:
+            continue
+        if normalized_query and normalized_query not in (
+            f"{item.summary} {item.source_quote} {item.classification_context}"
+        ).casefold():
+            continue
+        items.append(item)
+    return ClassificationItemListResponse(items=items, total=len(items))
+
+
+@router.get(
+    "/classification/items/{agenda_id}", response_model=ClassificationItem
+)
+def get_classification_item(agenda_id: str) -> ClassificationItem:
+    return _classification_item_or_404(get_store(), agenda_id)
+
+
+@router.get(
+    "/classification/runs/{old_run_id}/comparison/{new_run_id}",
+    response_model=RunComparison,
+)
+def get_classification_run_comparison(
+    old_run_id: str, new_run_id: str
+) -> RunComparison:
+    try:
+        return get_store().compare_runs(old_run_id, new_run_id)
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404, detail=f"Unknown run: {exc.args[0]}"
+        ) from exc
+
+
+@router.post(
+    "/classification/weeks/{week}/run",
+    response_model=WeekClassificationSummary,
+)
+def run_classification_week(
+    week: str,
+    request: ClassificationRunRequest | None = None,
+    _user: UserContext = Depends(require_editor),
+) -> WeekClassificationSummary:
+    mail_directories = _classification_mail_directories(week)
+    if not mail_directories:
+        raise HTTPException(status_code=404, detail=f"Unknown week: {week}")
+    store = get_store()
+    try:
+        splitter = _build_classification_splitter(store.taxonomy)
+        return _run_week_classification(
+            week=week,
+            store=store,
+            mail_directories=mail_directories,
+            splitter=splitter,
+            rerun=request.rerun if request else False,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise _classification_value_error(exc) from exc
+
+
+@router.post(
+    "/classification/weeks/{week}/approve",
+    response_model=WeekClassificationSummary,
+)
+def approve_classification_week(
+    week: str, user: UserContext = Depends(require_editor)
+) -> WeekClassificationSummary:
+    try:
+        return get_store().approve_week(week, user.user_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Unknown week: {week}") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.patch(
+    "/classification/items/{agenda_id}", response_model=ClassificationItem
+)
+def correct_classification_item(
+    agenda_id: str,
+    update: WorkbenchCorrection,
+    user: UserContext = Depends(require_editor),
+) -> ClassificationItem:
+    try:
+        return get_store().correct_classification(
+            agenda_id, update.lotcd, user.user_id, update.reason
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Unknown item: {agenda_id}") from exc
+    except ValueError as exc:
+        raise _classification_value_error(exc) from exc
+
+
+@router.patch(
+    "/classification/items/{agenda_id}/disposition",
+    response_model=ClassificationItem,
+)
+def set_classification_item_disposition(
+    agenda_id: str,
+    update: ItemDispositionUpdate,
+    user: UserContext = Depends(require_editor),
+) -> ClassificationItem:
+    try:
+        return get_store().set_item_disposition(
+            agenda_id, update.status, user.user_id, update.reason
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Unknown item: {agenda_id}") from exc
+    except ValueError as exc:
+        raise _classification_value_error(exc) from exc
+
+
+@router.post(
+    "/classification/items/{agenda_id}/split",
+    response_model=list[ClassificationItem],
+)
+def split_classification_item(
+    agenda_id: str,
+    request: ItemSplitRequest,
+    user: UserContext = Depends(require_editor),
+) -> list[ClassificationItem]:
+    try:
+        return get_store().split_classification_item(
+            agenda_id, request.parts, user.user_id, request.reason
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Unknown item: {agenda_id}") from exc
+    except ValueError as exc:
+        message = str(exc)
+        state_error = "Cannot modify item" in message
+        raise _classification_value_error(exc, invalid=not state_error) from exc
+
+
+@router.post(
+    "/classification/aliases", response_model=AliasRecord, status_code=201
+)
+def create_classification_alias(
+    create: LearnedAliasCreate,
+    user: UserContext = Depends(require_editor),
+) -> AliasRecord:
+    store = get_store()
+    _classification_item_or_404(store, create.origin_agenda_id)
+    try:
+        return store.create_learned_alias(
+            value=create.value,
+            lotcd=create.lotcd,
+            origin_agenda_id=create.origin_agenda_id,
+            changed_by=user.user_id,
+            context_domain=create.context_domain,
+            context_tech=create.context_tech,
+        )
+    except ValueError as exc:
+        raise _classification_value_error(exc) from exc

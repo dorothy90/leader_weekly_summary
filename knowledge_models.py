@@ -147,6 +147,15 @@ class ClassificationItem(StrictModel):
     revision_count: int
 
 
+class ClassificationItemListResponse(StrictModel):
+    items: list[ClassificationItem]
+    total: int
+
+
+class ClassificationRunRequest(StrictModel):
+    rerun: bool = False
+
+
 class Agenda(StrictModel):
     id: str
     mail_id: str

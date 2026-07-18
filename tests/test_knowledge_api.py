@@ -2,14 +2,21 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
 from fastapi import FastAPI
 
 import knowledge_api
+from agenda_extract import ExtractedAgenda, MailExtractionResult
 from knowledge_api import get_store, router
-from knowledge_models import CategoryPath
+from knowledge_models import (
+    CandidateMatch,
+    CategoryPath,
+    ClassificationDecision,
+    Mail,
+)
 from knowledge_store import SQLiteKnowledgeStore
 
 
@@ -584,3 +591,284 @@ def test_tech_and_lotcd_crud_with_linked_delete_guard(tmp_path, monkeypatch):
         for domain in tech_deleted.json()["domains"]
         for tech in domain["techs"]
     )
+
+
+def classification_store(tmp_path, status="confirmed"):
+    store = SQLiteKnowledgeStore(tmp_path / "classification.db")
+    run = store.start_classification_run(
+        "2026-01", "agenda-v2", "lotcd-v1"
+    )
+    target = (
+        CategoryPath(domain="DRAM", tech="Spica", lotcd="4SA")
+        if status == "confirmed"
+        else None
+    )
+    decision = ClassificationDecision(
+        status=status,
+        target_path=target,
+        matches=(
+            [CandidateMatch(
+                phrase="4SA",
+                lotcd="4SA",
+                match_type="canonical",
+                rule_id="canonical:4SA",
+                score=1.0,
+            )]
+            if target else []
+        ),
+        diagnostics=[] if target else ["NO_LOTCD_MATCH"],
+        confidence=1.0 if target else 0.0,
+    )
+    mail = Mail(
+        id="classification-mail",
+        subject="classification",
+        sender_team="Spica",
+        sender="sender@example.com",
+        received_at=datetime(2026, 1, 5, tzinfo=UTC),
+        body="4SA 수율 하락",
+    )
+    agenda = ExtractedAgenda(
+        id="classification-agenda",
+        mail_id=mail.id,
+        source_quote=mail.body,
+        source_start=0,
+        source_end=len(mail.body),
+        classification_context=mail.body,
+        summary="4SA 수율 하락",
+        scope="lotcd" if target else "unknown",
+        target_paths=[target] if target else [],
+        candidate_paths=[],
+        topic="yield",
+        state="investigating",
+        item_kind="lotcd_specific",
+        decision=decision,
+        confidence=decision.confidence,
+        review_required=target is None,
+    )
+    store.save_classified_extraction(
+        run.id, mail, MailExtractionResult(mail_id=mail.id, agendas=[agenda])
+    )
+    store.finish_classification_run(run.id)
+    return store, run
+
+
+def test_classification_reads_expose_trace_hierarchy_and_filters(tmp_path, monkeypatch):
+    store, run = classification_store(tmp_path)
+    monkeypatch.setattr(knowledge_api, "get_store", lambda: store)
+
+    weeks = request("GET", "/api/knowledge/classification/weeks")
+    items = request(
+        "GET",
+        "/api/knowledge/classification/weeks/2026-01/items",
+        params={"lotcd": "4SA", "status": "confirmed", "q": "수율"},
+    )
+    detail = request(
+        "GET", "/api/knowledge/classification/items/classification-agenda"
+    )
+    comparison = request(
+        "GET",
+        f"/api/knowledge/classification/runs/{run.id}/comparison/{run.id}",
+    )
+
+    assert weeks.status_code == 200
+    assert weeks.json()[0]["week"] == "2026-01"
+    assert items.status_code == 200
+    assert items.json()["total"] == 1
+    item = detail.json()
+    assert item["classification_context"] == "4SA 수율 하락"
+    assert item["decision"]["target_path"] == {
+        "domain": "DRAM", "tech": "Spica", "lotcd": "4SA"
+    }
+    assert item["decision"]["matches"][0]["phrase"] == "4SA"
+    assert comparison.json()["unchanged_count"] == 1
+
+
+def test_classification_reads_return_404_for_unknown_resources(tmp_path, monkeypatch):
+    store, _run = classification_store(tmp_path)
+    monkeypatch.setattr(knowledge_api, "get_store", lambda: store)
+
+    unknown_week = request(
+        "GET", "/api/knowledge/classification/weeks/2099-01/items"
+    )
+    unknown_item = request(
+        "GET", "/api/knowledge/classification/items/missing"
+    )
+    unknown_run = request(
+        "GET", "/api/knowledge/classification/runs/missing/comparison/also-missing"
+    )
+
+    assert unknown_week.status_code == 404
+    assert unknown_item.status_code == 404
+    assert unknown_run.status_code == 404
+
+
+def test_classification_list_rejects_unknown_lotcd(tmp_path, monkeypatch):
+    store, _run = classification_store(tmp_path)
+    monkeypatch.setattr(knowledge_api, "get_store", lambda: store)
+
+    response = request(
+        "GET",
+        "/api/knowledge/classification/weeks/2026-01/items",
+        params={"lotcd": "4ZZ"},
+    )
+
+    assert response.status_code == 422
+
+
+def test_classification_correction_disposition_and_alias(tmp_path, monkeypatch):
+    store, _run = classification_store(tmp_path, "unclassified")
+    monkeypatch.setattr(knowledge_api, "get_store", lambda: store)
+
+    corrected = request(
+        "PATCH",
+        "/api/knowledge/classification/items/classification-agenda",
+        json={"lotcd": "4SA", "reason": "원문 확인"},
+    )
+    alias = request(
+        "POST",
+        "/api/knowledge/classification/aliases",
+        json={
+            "value": "SP 24G",
+            "lotcd": "4SA",
+            "origin_agenda_id": "classification-agenda",
+            "context_domain": "DRAM",
+            "context_tech": "Spica",
+        },
+    )
+    disposition = request(
+        "PATCH",
+        "/api/knowledge/classification/items/classification-agenda/disposition",
+        json={"status": "aggregate", "reason": "종합 지표"},
+    )
+
+    assert corrected.status_code == 200
+    assert corrected.json()["decision"]["status"] == "manually_corrected"
+    assert alias.status_code == 201
+    assert alias.json()["target_paths"][0]["lotcd"] == "4SA"
+    assert disposition.status_code == 200
+    assert disposition.json()["decision"]["status"] == "aggregate"
+
+
+def test_classification_split_returns_child_items(tmp_path, monkeypatch):
+    store, _run = classification_store(tmp_path, "unclassified")
+    monkeypatch.setattr(knowledge_api, "get_store", lambda: store)
+
+    response = request(
+        "POST",
+        "/api/knowledge/classification/items/classification-agenda/split",
+        json={
+            "parts": [
+                {"source_quote": "4SA", "summary": "4SA", "lotcd": "4SA"},
+                {
+                    "source_quote": "수율 하락",
+                    "summary": "6SA 수율",
+                    "lotcd": "6SA",
+                },
+            ],
+            "reason": "두 LOT 분리",
+        },
+    )
+
+    assert response.status_code == 200
+    assert {item["decision"]["target_path"]["lotcd"] for item in response.json()} == {
+        "4SA",
+        "6SA",
+    }
+
+
+def test_classification_mutations_map_domain_errors(tmp_path, monkeypatch):
+    store, _run = classification_store(tmp_path, "unclassified")
+    monkeypatch.setattr(knowledge_api, "get_store", lambda: store)
+
+    unknown_item = request(
+        "PATCH",
+        "/api/knowledge/classification/items/missing",
+        json={"lotcd": "4SA", "reason": "원문 확인"},
+    )
+    unknown_lotcd = request(
+        "PATCH",
+        "/api/knowledge/classification/items/classification-agenda",
+        json={"lotcd": "4ZZ", "reason": "원문 확인"},
+    )
+    blocked_approval = request(
+        "POST", "/api/knowledge/classification/weeks/2026-01/approve"
+    )
+
+    assert unknown_item.status_code == 404
+    assert unknown_lotcd.status_code == 422
+    assert blocked_approval.status_code == 409
+
+
+def test_classification_run_uses_weekly_orchestration(tmp_path, monkeypatch):
+    store = SQLiteKnowledgeStore(tmp_path / "classification.db")
+    mail_dir = tmp_path / "mail"
+    mail_dir.mkdir()
+    captured = {}
+    monkeypatch.setattr(knowledge_api, "get_store", lambda: store)
+    monkeypatch.setattr(
+        knowledge_api, "_classification_mail_directories", lambda week: [mail_dir]
+    )
+    monkeypatch.setattr(
+        knowledge_api, "_build_classification_splitter", lambda taxonomy: "splitter"
+    )
+
+    def fake_run(**kwargs):
+        captured.update(kwargs)
+        return store.week_summary(kwargs["week"])
+
+    monkeypatch.setattr(knowledge_api, "_run_week_classification", fake_run)
+
+    response = request(
+        "POST",
+        "/api/knowledge/classification/weeks/2026-01/run",
+        json={"rerun": True},
+    )
+
+    assert response.status_code == 200
+    assert captured == {
+        "week": "2026-01",
+        "store": store,
+        "mail_directories": [mail_dir],
+        "splitter": "splitter",
+        "rerun": True,
+    }
+
+
+def test_classification_run_maps_missing_policy_ack_to_409(tmp_path, monkeypatch):
+    store = SQLiteKnowledgeStore(tmp_path / "classification.db")
+    monkeypatch.setattr(knowledge_api, "get_store", lambda: store)
+    monkeypatch.setattr(
+        knowledge_api, "_classification_mail_directories", lambda week: [tmp_path]
+    )
+
+    def reject(_taxonomy):
+        raise RuntimeError(
+            "External LLM use requires KNOWLEDGE_LLM_DATA_POLICY_ACK=true"
+        )
+
+    monkeypatch.setattr(knowledge_api, "_build_classification_splitter", reject)
+
+    response = request(
+        "POST", "/api/knowledge/classification/weeks/2026-01/run"
+    )
+
+    assert response.status_code == 409
+
+
+def test_all_classification_mutations_require_editor(tmp_path, monkeypatch):
+    store, _run = classification_store(tmp_path, "unclassified")
+    monkeypatch.setattr(knowledge_api, "get_store", lambda: store)
+    monkeypatch.setenv("KNOWLEDGE_AUTH_MODE", "header")
+    headers = {"X-User-Id": "reader", "X-User-Roles": "knowledge-reader"}
+    calls = [
+        ("POST", "/api/knowledge/classification/weeks/2026-01/run", None),
+        ("POST", "/api/knowledge/classification/weeks/2026-01/approve", None),
+        ("PATCH", "/api/knowledge/classification/items/classification-agenda", {"lotcd": "4SA", "reason": "x"}),
+        ("PATCH", "/api/knowledge/classification/items/classification-agenda/disposition", {"status": "excluded", "reason": "x"}),
+        ("POST", "/api/knowledge/classification/items/classification-agenda/split", {"parts": [{"source_quote": "4SA", "summary": "a", "lotcd": "4SA"}, {"source_quote": "수율", "summary": "b", "lotcd": "4SA"}], "reason": "x"}),
+        ("POST", "/api/knowledge/classification/aliases", {"value": "x", "lotcd": "4SA", "origin_agenda_id": "classification-agenda"}),
+    ]
+
+    for method, path, payload in calls:
+        response = request(method, path, headers=headers, json=payload)
+        assert response.status_code == 403, path
