@@ -36,6 +36,7 @@ def classify_context(
     item_kind: str,
     taxonomy: TaxonomyDocument,
     aliases: list[AliasRecord] | None = None,
+    sender_team: str = "",
 ) -> ClassificationDecision:
     if item_kind == "aggregate":
         return ClassificationDecision(
@@ -60,6 +61,17 @@ def classify_context(
     for alias in aliases or []:
         if not _contains(text, alias.value):
             continue
+        if alias.context_domain or alias.context_tech:
+            contextual_terms: list[str] = []
+            for domain in taxonomy.domains:
+                if alias.context_domain == domain.name:
+                    contextual_terms.append(domain.name)
+                for tech in domain.techs:
+                    if alias.context_tech == tech.name:
+                        contextual_terms.extend([tech.name, *tech.aliases])
+            context = f"{text}\n{sender_team}"
+            if not any(_contains(context, term) for term in contextual_terms):
+                continue
         target_lotcds = list(dict.fromkeys(
             path.lotcd for path in alias.target_paths if path.lotcd is not None
         ))

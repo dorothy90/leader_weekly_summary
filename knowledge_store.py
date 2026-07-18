@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sqlite3
@@ -23,6 +24,7 @@ from knowledge_models import (
     ClassificationRevision,
     Domain,
     GroupAlias,
+    ItemSplitPart,
     Lotcd,
     Mail,
     MailDocument,
@@ -81,7 +83,10 @@ class SQLiteKnowledgeStore:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     value TEXT NOT NULL,
                     normalized_value TEXT NOT NULL UNIQUE,
-                    is_active INTEGER NOT NULL DEFAULT 1
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    origin_agenda_id TEXT,
+                    context_domain TEXT,
+                    context_tech TEXT
                 );
 
                 CREATE TABLE IF NOT EXISTS alias_target (
@@ -129,7 +134,8 @@ class SQLiteKnowledgeStore:
                     before_json TEXT NOT NULL,
                     after_json TEXT NOT NULL,
                     changed_at TEXT NOT NULL,
-                    changed_by TEXT NOT NULL
+                    changed_by TEXT NOT NULL,
+                    reason TEXT
                 );
 
                 CREATE TABLE IF NOT EXISTS mapping_revision (
@@ -202,6 +208,25 @@ class SQLiteKnowledgeStore:
             if "is_active" not in alias_columns:
                 connection.execute(
                     "ALTER TABLE alias ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1"
+                )
+            for column, definition in (
+                ("origin_agenda_id", "TEXT"),
+                ("context_domain", "TEXT"),
+                ("context_tech", "TEXT"),
+            ):
+                if column not in alias_columns:
+                    connection.execute(
+                        f"ALTER TABLE alias ADD COLUMN {column} {definition}"
+                    )
+            revision_columns = {
+                row["name"]
+                for row in connection.execute(
+                    "PRAGMA table_info(classification_revision)"
+                ).fetchall()
+            }
+            if "reason" not in revision_columns:
+                connection.execute(
+                    "ALTER TABLE classification_revision ADD COLUMN reason TEXT"
                 )
             count = connection.execute("SELECT COUNT(*) FROM category").fetchone()[0]
             if count == 0:
@@ -700,9 +725,363 @@ class SQLiteKnowledgeStore:
                 after=json.loads(row["after_json"]),
                 changed_at=row["changed_at"],
                 changed_by=row["changed_by"],
+                reason=row["reason"],
             )
             for row in rows
         ]
+
+    @staticmethod
+    def _classification_item_from_row(row: sqlite3.Row) -> ClassificationItem:
+        return ClassificationItem(
+            agenda_id=row["agenda_id"],
+            mail_id=row["mail_id"],
+            summary=row["summary"],
+            source_quote=row["source_quote"],
+            classification_context=row["classification_context"],
+            item_kind=row["item_kind"],
+            decision=ClassificationDecision(
+                status=row["decision_status"],
+                target_path=(
+                    CategoryPath.model_validate_json(row["target_path_json"])
+                    if row["target_path_json"]
+                    else None
+                ),
+                matches=[
+                    CandidateMatch.model_validate(match)
+                    for match in json.loads(row["matches_json"])
+                ],
+                diagnostics=json.loads(row["diagnostics_json"]),
+                confidence=row["confidence"],
+            ),
+            revision_count=row["revision_count"],
+        )
+
+    def _classification_item_for_agenda(
+        self, connection: sqlite3.Connection, agenda_id: str
+    ) -> ClassificationItem:
+        row = connection.execute(
+            """
+            SELECT
+                a.id AS agenda_id, a.mail_id, a.summary, a.source_quote,
+                a.classification_context, a.confidence, t.item_kind,
+                t.decision_status, t.target_path_json, t.matches_json,
+                t.diagnostics_json,
+                (SELECT COUNT(*) FROM classification_revision revision
+                 WHERE revision.agenda_id = a.id) AS revision_count
+            FROM agenda a
+            JOIN classification_trace t ON t.agenda_id = a.id
+            WHERE a.id = ?
+            """,
+            (agenda_id,),
+        ).fetchone()
+        if row is None:
+            raise KeyError(agenda_id)
+        return self._classification_item_from_row(row)
+
+    @staticmethod
+    def _record_classification_revision(
+        connection: sqlite3.Connection,
+        agenda_id: str,
+        before: dict,
+        after: dict,
+        changed_by: str,
+        reason: str,
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO classification_revision(
+                agenda_id, before_json, after_json, changed_at, changed_by, reason
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                agenda_id,
+                json.dumps(before, ensure_ascii=False),
+                json.dumps(after, ensure_ascii=False),
+                datetime.now(UTC).isoformat(),
+                changed_by,
+                reason,
+            ),
+        )
+
+    @staticmethod
+    def _recalculate_week_readiness(
+        connection: sqlite3.Connection, run_id: str
+    ) -> None:
+        run = connection.execute(
+            "SELECT week, status FROM classification_run WHERE id = ?", (run_id,)
+        ).fetchone()
+        if run is None or run["status"] != "completed":
+            return
+        counts = connection.execute(
+            """
+            SELECT
+                COUNT(*) AS total,
+                COALESCE(SUM(
+                    decision_status IN (
+                        'unclassified', 'conflict', 'review_required'
+                    )
+                ), 0) AS unresolved
+            FROM classification_trace
+            WHERE run_id = ?
+            """,
+            (run_id,),
+        ).fetchone()
+        workflow_state = (
+            "review_in_progress"
+            if counts["total"] == 0 or counts["unresolved"]
+            else "ready_for_approval"
+        )
+        connection.execute(
+            """
+            UPDATE week_classification SET workflow_state = ?
+            WHERE week = ? AND active_run_id = ?
+            """,
+            (workflow_state, run["week"], run_id),
+        )
+
+    def correct_classification(
+        self,
+        agenda_id: str,
+        lotcd: str,
+        changed_by: str,
+        reason: str,
+    ) -> ClassificationItem:
+        from classification_workbench import lotcd_path
+
+        path = lotcd_path(self.taxonomy, lotcd)
+        target_id = self._category_id(path, self._lookups())
+        with self._connect() as connection:
+            before = self._classification_item_for_agenda(connection, agenda_id)
+            trace = connection.execute(
+                "SELECT run_id FROM classification_trace WHERE agenda_id = ?",
+                (agenda_id,),
+            ).fetchone()
+            connection.execute(
+                """
+                UPDATE agenda
+                SET scope = 'lotcd', confidence = 1.0,
+                    review_required = 0, review_status = 'confirmed'
+                WHERE id = ?
+                """,
+                (agenda_id,),
+            )
+            connection.execute(
+                "DELETE FROM agenda_target WHERE agenda_id = ?", (agenda_id,)
+            )
+            connection.execute(
+                "INSERT INTO agenda_target(agenda_id, category_id) VALUES (?, ?)",
+                (agenda_id, target_id),
+            )
+            connection.execute(
+                """
+                UPDATE classification_trace
+                SET item_kind = 'lotcd_specific',
+                    decision_status = 'manually_corrected',
+                    target_path_json = ?, matches_json = '[]',
+                    diagnostics_json = '[]'
+                WHERE agenda_id = ?
+                """,
+                (path.model_dump_json(), agenda_id),
+            )
+            after = self._classification_item_for_agenda(connection, agenda_id)
+            self._record_classification_revision(
+                connection,
+                agenda_id,
+                before.model_dump(mode="json"),
+                after.model_dump(mode="json"),
+                changed_by,
+                reason,
+            )
+            self._recalculate_week_readiness(connection, trace["run_id"])
+            return self._classification_item_for_agenda(connection, agenda_id)
+
+    def set_item_disposition(
+        self,
+        agenda_id: str,
+        status: str,
+        changed_by: str,
+        reason: str,
+    ) -> ClassificationItem:
+        if status not in {"aggregate", "excluded"}:
+            raise ValueError(f"Unknown disposition: {status}")
+        diagnostics = ["AGGREGATE_METRIC"] if status == "aggregate" else []
+        item_kind = "aggregate" if status == "aggregate" else "unknown"
+        with self._connect() as connection:
+            before = self._classification_item_for_agenda(connection, agenda_id)
+            trace = connection.execute(
+                "SELECT run_id FROM classification_trace WHERE agenda_id = ?",
+                (agenda_id,),
+            ).fetchone()
+            connection.execute(
+                """
+                UPDATE agenda
+                SET scope = 'unknown', confidence = 1.0,
+                    review_required = 0, review_status = 'confirmed'
+                WHERE id = ?
+                """,
+                (agenda_id,),
+            )
+            connection.execute(
+                "DELETE FROM agenda_target WHERE agenda_id = ?", (agenda_id,)
+            )
+            connection.execute(
+                """
+                UPDATE classification_trace
+                SET item_kind = ?, decision_status = ?, target_path_json = NULL,
+                    matches_json = '[]', diagnostics_json = ?
+                WHERE agenda_id = ?
+                """,
+                (item_kind, status, json.dumps(diagnostics), agenda_id),
+            )
+            after = self._classification_item_for_agenda(connection, agenda_id)
+            self._record_classification_revision(
+                connection,
+                agenda_id,
+                before.model_dump(mode="json"),
+                after.model_dump(mode="json"),
+                changed_by,
+                reason,
+            )
+            self._recalculate_week_readiness(connection, trace["run_id"])
+            return self._classification_item_for_agenda(connection, agenda_id)
+
+    def split_classification_item(
+        self,
+        agenda_id: str,
+        parts: list[ItemSplitPart],
+        changed_by: str,
+        reason: str,
+    ) -> list[ClassificationItem]:
+        from classification_workbench import lotcd_path
+
+        if len(parts) < 2:
+            raise ValueError("A split requires at least two parts")
+        paths = [lotcd_path(self.taxonomy, part.lotcd) for part in parts]
+        target_ids = [
+            self._category_id(path, self._lookups()) for path in paths
+        ]
+        child_ids = [
+            hashlib.sha256(
+                "\0".join((agenda_id, part.source_quote, path.lotcd)).encode()
+            ).hexdigest()
+            for part, path in zip(parts, paths, strict=True)
+        ]
+        if len(set(child_ids)) != len(child_ids):
+            raise ValueError("Split produces duplicate child IDs")
+
+        with self._connect() as connection:
+            original = connection.execute(
+                """
+                SELECT a.*, m.body AS mail_body, t.run_id, t.prompt_version,
+                       t.taxonomy_version, t.alias_version
+                FROM agenda a
+                JOIN mail m ON m.id = a.mail_id
+                JOIN classification_trace t ON t.agenda_id = a.id
+                WHERE a.id = ?
+                """,
+                (agenda_id,),
+            ).fetchone()
+            if original is None:
+                raise KeyError(agenda_id)
+            ranges = []
+            for part in parts:
+                start = original["classification_context"].find(part.source_quote)
+                if start < 0:
+                    raise ValueError(
+                        "Every split source_quote must occur in classification_context"
+                    )
+                ranges.append((start, start + len(part.source_quote)))
+            for index, first in enumerate(ranges):
+                for second in ranges[index + 1:]:
+                    if max(first[0], second[0]) < min(first[1], second[1]):
+                        raise ValueError("Split source ranges overlap")
+            placeholders = ",".join("?" for _ in child_ids)
+            if connection.execute(
+                f"SELECT 1 FROM agenda WHERE id IN ({placeholders}) LIMIT 1",
+                child_ids,
+            ).fetchone():
+                raise ValueError("Split produces an existing child ID")
+
+            before = self._classification_item_for_agenda(connection, agenda_id)
+            for child_id, part, path, target_id in zip(
+                child_ids, parts, paths, target_ids, strict=True
+            ):
+                source_start = original["mail_body"].find(part.source_quote)
+                connection.execute(
+                    """
+                    INSERT INTO agenda(
+                        id, mail_id, source_quote, source_start, source_end,
+                        classification_context, summary, scope,
+                        candidate_paths_json, topic, state, confidence,
+                        review_required, review_status
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'lotcd', '[]', ?, ?, 1.0, 0, 'confirmed')
+                    """,
+                    (
+                        child_id, original["mail_id"], part.source_quote,
+                        source_start, source_start + len(part.source_quote),
+                        part.source_quote, part.summary,
+                        original["topic"], original["state"],
+                    ),
+                )
+                connection.execute(
+                    "INSERT INTO agenda_target(agenda_id, category_id) VALUES (?, ?)",
+                    (child_id, target_id),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO classification_trace(
+                        agenda_id, run_id, item_kind, decision_status,
+                        target_path_json, matches_json, diagnostics_json,
+                        prompt_version, taxonomy_version, alias_version
+                    ) VALUES (?, ?, 'lotcd_specific', 'manually_corrected', ?, '[]', '[]', ?, ?, ?)
+                    """,
+                    (
+                        child_id, original["run_id"], path.model_dump_json(),
+                        original["prompt_version"], original["taxonomy_version"],
+                        original["alias_version"],
+                    ),
+                )
+
+            connection.execute(
+                """
+                UPDATE agenda
+                SET scope = 'unknown', confidence = 1.0,
+                    review_required = 0, review_status = 'confirmed'
+                WHERE id = ?
+                """,
+                (agenda_id,),
+            )
+            connection.execute(
+                "DELETE FROM agenda_target WHERE agenda_id = ?", (agenda_id,)
+            )
+            connection.execute(
+                """
+                UPDATE classification_trace
+                SET item_kind = 'unknown', decision_status = 'excluded',
+                    target_path_json = NULL, matches_json = '[]', diagnostics_json = '[]'
+                WHERE agenda_id = ?
+                """,
+                (agenda_id,),
+            )
+            after = self._classification_item_for_agenda(connection, agenda_id)
+            after_payload = after.model_dump(mode="json")
+            after_payload["split_parts"] = [
+                part.model_dump(mode="json") for part in parts
+            ]
+            after_payload["child_agenda_ids"] = child_ids
+            self._record_classification_revision(
+                connection,
+                agenda_id,
+                before.model_dump(mode="json"),
+                after_payload,
+                changed_by,
+                reason,
+            )
+            self._recalculate_week_readiness(connection, original["run_id"])
+            return [
+                self._classification_item_for_agenda(connection, child_id)
+                for child_id in child_ids
+            ]
 
     def _path_for_category_id(
         self, connection: sqlite3.Connection, category_id: str
@@ -744,6 +1123,9 @@ class SQLiteKnowledgeStore:
                 self._path_for_category_id(connection, row["category_id"])
                 for row in target_rows
             ],
+            origin_agenda_id=alias_row["origin_agenda_id"],
+            context_domain=alias_row["context_domain"],
+            context_tech=alias_row["context_tech"],
         )
 
     def aliases(self) -> list[AliasRecord]:
@@ -769,6 +1151,23 @@ class SQLiteKnowledgeStore:
                         tech.name,
                     )
         return lookups
+
+    @staticmethod
+    def _record_alias_impact(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            """
+            UPDATE knowledge_meta
+            SET value = CAST(value AS INTEGER) + 1
+            WHERE key = 'alias_version'
+            """
+        )
+        connection.execute(
+            """
+            UPDATE week_classification
+            SET workflow_state = 'revalidation_required'
+            WHERE workflow_state = 'approved'
+            """
+        )
 
     def create_alias(
         self, value: str, target_paths: list[CategoryPath], changed_by: str
@@ -808,6 +1207,7 @@ class SQLiteKnowledgeStore:
                     changed_by,
                 ),
             )
+            self._record_alias_impact(connection)
             return record
 
     def update_alias(
@@ -854,6 +1254,7 @@ class SQLiteKnowledgeStore:
                     changed_by,
                 ),
             )
+            self._record_alias_impact(connection)
             return after
 
     def delete_alias(self, alias_id: int, changed_by: str) -> AliasRecord:
@@ -882,7 +1283,63 @@ class SQLiteKnowledgeStore:
                     changed_by,
                 ),
             )
+            self._record_alias_impact(connection)
             return before
+
+    def create_learned_alias(
+        self,
+        value: str,
+        lotcd: str,
+        origin_agenda_id: str,
+        changed_by: str,
+        context_domain: str | None = None,
+        context_tech: str | None = None,
+    ) -> AliasRecord:
+        from classification_workbench import lotcd_path
+
+        path = lotcd_path(self.taxonomy, lotcd)
+        normalized = value.strip().casefold()
+        target_id = self._category_id(path, self._lookups())
+        with self._connect() as connection:
+            existing = connection.execute(
+                "SELECT id FROM alias WHERE normalized_value = ? AND is_active = 1",
+                (normalized,),
+            ).fetchone()
+            if existing:
+                raise ValueError(f"Alias already exists: {value.strip()}")
+            cursor = connection.execute(
+                """
+                INSERT INTO alias(
+                    value, normalized_value, is_active, origin_agenda_id,
+                    context_domain, context_tech
+                ) VALUES (?, ?, 1, ?, ?, ?)
+                """,
+                (
+                    value.strip(), normalized, origin_agenda_id,
+                    context_domain, context_tech,
+                ),
+            )
+            alias_id = int(cursor.lastrowid)
+            connection.execute(
+                "INSERT INTO alias_target(alias_id, category_id) VALUES (?, ?)",
+                (alias_id, target_id),
+            )
+            record = self._alias_record(connection, alias_id)
+            connection.execute(
+                """
+                INSERT INTO mapping_revision(
+                    alias_id, before_json, after_json, changed_at, changed_by
+                ) VALUES (?, NULL, ?, ?, ?)
+                """,
+                (
+                    alias_id,
+                    record.model_dump_json(),
+                    datetime.now(UTC).isoformat(),
+                    changed_by,
+                ),
+            )
+            self._record_alias_impact(connection)
+            return record
 
     def mapping_revisions(self, alias_id: int) -> list[MappingRevision]:
         with self._connect() as connection:

@@ -201,6 +201,7 @@ class ClassificationRevision(StrictModel):
     after: dict[str, Any]
     changed_at: datetime
     changed_by: str
+    reason: str | None = None
 
 
 class RevisionListResponse(StrictModel):
@@ -211,6 +212,9 @@ class AliasRecord(StrictModel):
     id: int
     value: str
     target_paths: list[CategoryPath]
+    origin_agenda_id: str | None = None
+    context_domain: Literal["DRAM", "NAND"] | None = None
+    context_tech: str | None = None
 
 
 class AliasListResponse(StrictModel):
@@ -224,6 +228,35 @@ class AliasCreate(StrictModel):
 
 class AliasUpdate(AliasCreate):
     pass
+
+
+class WorkbenchCorrection(StrictModel):
+    lotcd: str
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class ItemDispositionUpdate(StrictModel):
+    status: Literal["aggregate", "excluded"]
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class LearnedAliasCreate(StrictModel):
+    value: str = Field(min_length=1, max_length=200)
+    lotcd: str
+    origin_agenda_id: str
+    context_domain: Literal["DRAM", "NAND"] | None = None
+    context_tech: str | None = None
+
+
+class ItemSplitPart(StrictModel):
+    source_quote: str = Field(min_length=1)
+    summary: str = Field(min_length=1, max_length=240)
+    lotcd: str
+
+
+class ItemSplitRequest(StrictModel):
+    parts: list[ItemSplitPart] = Field(min_length=2)
+    reason: str = Field(min_length=1, max_length=500)
 
 
 class MappingRevision(StrictModel):

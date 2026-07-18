@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+import hashlib
 from pathlib import Path
 import sqlite3
 
@@ -12,6 +13,7 @@ from knowledge_models import (
     CategoryPath,
     ClassificationDecision,
     Mail,
+    ItemSplitPart,
     TaxonomyDocument,
 )
 from knowledge_store import SQLiteKnowledgeStore
@@ -77,6 +79,19 @@ def classified_extraction(status: str = "confirmed"):
         review_required=status != "confirmed",
     )
     return mail, MailExtractionResult(mail_id=mail.id, agendas=[agenda])
+
+
+def store_with_completed_run(tmp_path, status: str = "unclassified"):
+    store = SQLiteKnowledgeStore(tmp_path / "knowledge.db")
+    run = store.start_classification_run(
+        week="2026-01",
+        prompt_version="agenda-v2",
+        classifier_version="lotcd-v1",
+    )
+    mail, result = classified_extraction(status)
+    store.save_classified_extraction(run.id, mail, result)
+    store.finish_classification_run(run.id)
+    return store, run, result.agendas[0]
 
 
 def test_run_and_trace_survive_reload(tmp_path):
@@ -452,3 +467,232 @@ def test_alias_with_unknown_lotcd_target_requires_review_with_trace():
     assert result.diagnostics == ["UNKNOWN_LOTCD_CODE"]
     assert result.matches[0].rule_id == "alias:12"
     assert result.matches[0].lotcd == "9ZZ"
+
+
+def test_manual_correction_records_one_lotcd_revision_and_readiness(tmp_path):
+    store, _, agenda = store_with_completed_run(tmp_path)
+
+    item = store.correct_classification(
+        agenda.id, "4SA", "reviewer", "원문 확인"
+    )
+
+    assert item.decision.status == "manually_corrected"
+    assert item.decision.target_path.lotcd == "4SA"
+    assert item.decision.confidence == 1.0
+    revision = store.revisions(agenda.id)[0]
+    assert revision.changed_by == "reviewer"
+    assert revision.reason == "원문 확인"
+    assert store.week_summary("2026-01").workflow_state == "ready_for_approval"
+
+
+@pytest.mark.parametrize(
+    ("status", "diagnostics"),
+    [("aggregate", ["AGGREGATE_METRIC"]), ("excluded", [])],
+)
+def test_item_disposition_clears_targets_and_recalculates_readiness(
+    tmp_path, status, diagnostics
+):
+    store, _, agenda = store_with_completed_run(tmp_path, "confirmed")
+
+    item = store.set_item_disposition(
+        agenda.id, status, "reviewer", "not LOTCD-specific"
+    )
+
+    assert item.decision.status == status
+    assert item.decision.target_path is None
+    assert item.decision.diagnostics == diagnostics
+    assert store.week_summary("2026-01").workflow_state == "ready_for_approval"
+
+
+def test_split_is_deterministic_and_excludes_original(tmp_path):
+    store, run, agenda = store_with_completed_run(tmp_path)
+    parts = [
+        ItemSplitPart(source_quote="4SA", summary="first", lotcd="4SA"),
+        ItemSplitPart(source_quote="수율 하락", summary="second", lotcd="6SA"),
+    ]
+
+    children = store.split_classification_item(
+        agenda.id, parts, "reviewer", "two independent items"
+    )
+
+    expected_ids = [
+        hashlib.sha256(
+            "\0".join((agenda.id, part.source_quote, part.lotcd)).encode()
+        ).hexdigest()
+        for part in parts
+    ]
+    assert [child.agenda_id for child in children] == expected_ids
+    assert {child.decision.target_path.lotcd for child in children} == {"4SA", "6SA"}
+    assert all(child.decision.status == "manually_corrected" for child in children)
+    items = {item.agenda_id: item for item in store.classification_items("2026-01")}
+    assert items[agenda.id].decision.status == "excluded"
+    assert set(expected_ids) <= items.keys()
+    assert all(items[child_id].revision_count == 0 for child_id in expected_ids)
+    assert store.revisions(agenda.id)[0].reason == "two independent items"
+    assert store.week_summary("2026-01").workflow_state == "ready_for_approval"
+    with sqlite3.connect(store.db_path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM classification_trace WHERE run_id = ?", (run.id,)
+        ).fetchone()[0] == 3
+
+
+@pytest.mark.parametrize(
+    "parts, message",
+    [
+        ([ItemSplitPart(source_quote="4SA", summary="only", lotcd="4SA")], "two"),
+        (
+            [
+                ItemSplitPart(source_quote="4SA 수율", summary="first", lotcd="4SA"),
+                ItemSplitPart(source_quote="수율 하락", summary="second", lotcd="6SA"),
+            ],
+            "overlap",
+        ),
+        (
+            [
+                ItemSplitPart(source_quote="4SA", summary="first", lotcd="4SA"),
+                ItemSplitPart(source_quote="수율 하락", summary="second", lotcd="9ZZ"),
+            ],
+            "Unknown LOTCD",
+        ),
+        (
+            [
+                ItemSplitPart(source_quote="4SA", summary="first", lotcd="4SA"),
+                ItemSplitPart(source_quote="4SA", summary="duplicate", lotcd="4SA"),
+            ],
+            "duplicate child IDs",
+        ),
+        (
+            [
+                ItemSplitPart(source_quote="4SA", summary="first", lotcd="4SA"),
+                ItemSplitPart(source_quote="missing", summary="second", lotcd="6SA"),
+            ],
+            "classification_context",
+        ),
+    ],
+)
+def test_invalid_split_is_atomic(tmp_path, parts, message):
+    store, run, agenda = store_with_completed_run(tmp_path)
+    before = store.classification_items("2026-01")
+
+    with pytest.raises(ValueError, match=message):
+        store.split_classification_item(agenda.id, parts, "reviewer", "invalid")
+
+    assert store.classification_items("2026-01") == before
+    assert store.revisions(agenda.id) == []
+    with sqlite3.connect(store.db_path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM classification_trace WHERE run_id = ?", (run.id,)
+        ).fetchone()[0] == 1
+
+
+@pytest.mark.parametrize("mutation", ["create", "update", "delete", "learned"])
+def test_every_alias_mutation_bumps_version_and_revalidates_approved_week(
+    tmp_path, mutation
+):
+    store, run, _ = store_with_completed_run(tmp_path, "confirmed")
+    original = store.create_alias(
+        "existing alias",
+        [CategoryPath(domain="DRAM", tech="Spica", lotcd="4SA")],
+        "setup",
+    )
+    store.approve_week("2026-01", "approver")
+    if mutation == "create":
+        store.create_alias(
+            "new alias",
+            [CategoryPath(domain="DRAM", tech="Spica", lotcd="4SA")],
+            "reviewer",
+        )
+    elif mutation == "update":
+        store.update_alias(
+            original.id,
+            "updated alias",
+            [CategoryPath(domain="DRAM", tech="Spica", lotcd="6SA")],
+            "reviewer",
+        )
+    elif mutation == "delete":
+        store.delete_alias(original.id, "reviewer")
+    else:
+        learned = store.create_learned_alias(
+            value="SP 24G",
+            lotcd="4SA",
+            origin_agenda_id="classification-agenda",
+            changed_by="reviewer",
+            context_domain="DRAM",
+            context_tech="Spica",
+        )
+        assert learned.origin_agenda_id == "classification-agenda"
+        assert learned.context_domain == "DRAM"
+        assert learned.context_tech == "Spica"
+
+    with sqlite3.connect(store.db_path) as connection:
+        alias_version = int(connection.execute(
+            "SELECT value FROM knowledge_meta WHERE key = 'alias_version'"
+        ).fetchone()[0])
+        week = connection.execute(
+            "SELECT active_run_id, workflow_state, approved_at, approved_by "
+            "FROM week_classification WHERE week = '2026-01'"
+        ).fetchone()
+        trace_count = connection.execute(
+            "SELECT COUNT(*) FROM classification_trace WHERE run_id = ?", (run.id,)
+        ).fetchone()[0]
+    assert alias_version == 3
+    assert week[0] == run.id
+    assert week[1] == "revalidation_required"
+    assert week[2] is not None
+    assert week[3] == "approver"
+    assert trace_count == 1
+
+
+def test_alias_mutation_and_impact_roll_back_together(tmp_path):
+    store, _, _ = store_with_completed_run(tmp_path, "confirmed")
+    store.approve_week("2026-01", "approver")
+    with sqlite3.connect(store.db_path) as connection:
+        connection.execute(
+            """
+            CREATE TRIGGER reject_revalidation
+            BEFORE UPDATE OF workflow_state ON week_classification
+            WHEN NEW.workflow_state = 'revalidation_required'
+            BEGIN
+                SELECT RAISE(ABORT, 'impact failure');
+            END
+            """
+        )
+
+    with pytest.raises(sqlite3.IntegrityError, match="impact failure"):
+        store.create_learned_alias(
+            value="rollback alias",
+            lotcd="4SA",
+            origin_agenda_id="classification-agenda",
+            changed_by="reviewer",
+        )
+
+    with sqlite3.connect(store.db_path) as connection:
+        assert connection.execute(
+            "SELECT value FROM knowledge_meta WHERE key = 'alias_version'"
+        ).fetchone()[0] == "1"
+        assert connection.execute(
+            "SELECT workflow_state FROM week_classification"
+        ).fetchone()[0] == "approved"
+        assert connection.execute(
+            "SELECT COUNT(*) FROM alias WHERE value = 'rollback alias'"
+        ).fetchone()[0] == 0
+
+
+def test_contextual_alias_requires_matching_taxonomy_context():
+    alias = AliasRecord(
+        id=13,
+        value="legacy edge",
+        target_paths=[CategoryPath(domain="DRAM", tech="Spica", lotcd="4SA")],
+        context_domain="DRAM",
+        context_tech="Spica",
+    )
+
+    no_context = classify_context(
+        "legacy edge defect", "lotcd_specific", taxonomy(), [alias], "Quality"
+    )
+    sender_context = classify_context(
+        "legacy edge defect", "lotcd_specific", taxonomy(), [alias], "Spica team"
+    )
+
+    assert no_context.status == "unclassified"
+    assert sender_context.target_path.lotcd == "4SA"
