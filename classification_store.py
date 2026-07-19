@@ -182,6 +182,18 @@ class JsonClassificationStore:
         document = self._load_week(week)
         return sorted(document.items.values(), key=lambda item: item.agenda_id)
 
+    def approved_week(self, week: str) -> WeekDocument:
+        document = self._load_week(week)
+        if document.workflow_state != "approved":
+            raise ValueError(f"Week {week} is not approved")
+        if not document.active_run_id:
+            raise ValueError(f"Week {week} has no active run")
+        return document.model_copy(deep=True)
+
+    def classification_item(self, agenda_id: str) -> tuple[str, ClassificationItem]:
+        document, item = self._find_item(agenda_id)
+        return document.week, item.model_copy(deep=True)
+
     def start_classification_run(
         self,
         week: str,
@@ -251,6 +263,12 @@ class JsonClassificationStore:
                 item_kind=agenda.item_kind,
                 decision=agenda.decision,
                 revision_count=len(document.revisions.get(agenda.id, [])),
+                team=mail.sender_team,
+                subject=mail.subject,
+                received_at=mail.received_at,
+                source_path=mail.source_path,
+                topic_hint=agenda.topic,
+                state_hint=agenda.state,
             )
         self._save_week(document)
         return {"saved": len(result.agendas)}
@@ -455,6 +473,12 @@ class JsonClassificationStore:
                     confidence=1.0,
                 ),
                 revision_count=0,
+                team=original.team,
+                subject=original.subject,
+                received_at=original.received_at,
+                source_path=original.source_path,
+                topic_hint=original.topic_hint,
+                state_hint=original.state_hint,
             )
             document.items[child_id] = child
             children.append(child)

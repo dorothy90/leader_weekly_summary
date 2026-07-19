@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from agenda_extract import AgendaDraft, AgendaDraftList, CanonicalResolver, extract_mail
+from agenda_extract import AgendaDraft, AgendaDraftList, CanonicalResolver, extract_mail, llm_connection
 from classification_workbench import classify_context
 from knowledge_models import MailDocument, TaxonomyDocument
 
@@ -9,6 +9,12 @@ FIXTURES = ROOT / "fixtures" / "knowledge"
 
 def taxonomy():
     return TaxonomyDocument.model_validate_json((ROOT / "config/classification_rules.json").read_text(encoding="utf-8"))
+
+def test_llm_connection_defaults_to_glm_52(monkeypatch):
+    monkeypatch.setenv("KNOWLEDGE_LLM_BASE_URL", "http://localhost:8000/v1")
+    for name in ("KNOWLEDGE_LLM_MODEL", "LLM_MODEL"):
+        monkeypatch.delenv(name, raising=False)
+    assert llm_connection().model == "z-ai/glm-5.2"
 
 def test_group_alias_stays_conflict_candidate():
     resolved = CanonicalResolver(taxonomy()).resolve("SP LPDDR5 24G Edge defect")

@@ -15,6 +15,7 @@ def make_store(tmp_path):
 
 def save_one(store):
     mail = MailDocument.model_validate_json((ROOT / "fixtures/knowledge/mails.json").read_text(encoding="utf-8")).mails[1]
+    mail = mail.model_copy(update={"source_path": "data/2026-28/Spica수율/mail_001/combined.txt"})
     quote = "4SA는 장비 조건 변경 이후 수율이 1.2%p 하락해 원인 분석 중입니다."
     run = store.start_classification_run("2026-28", "prompt", "classifier")
     result = extract_mail(mail, lambda _text: AgendaDraftList(agendas=[AgendaDraft(
@@ -23,6 +24,15 @@ def save_one(store):
     )]), CanonicalResolver(store.taxonomy, store.aliases()))
     store.save_classified_extraction(run.id, mail, result)
     return run, result, store.finish_classification_run(run.id)
+
+def test_saved_item_preserves_wiki_source_metadata(tmp_path):
+    store = make_store(tmp_path)
+    _run, result, _summary = save_one(store)
+    item = store.classification_items("2026-28")[0]
+    assert item.team == "Spica수율"
+    assert item.topic_hint == result.agendas[0].topic
+    assert item.state_hint == result.agendas[0].state
+    assert item.source_path.endswith("combined.txt")
 
 def test_json_store_persists_and_reloads(tmp_path):
     store = make_store(tmp_path)

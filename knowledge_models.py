@@ -62,6 +62,7 @@ class Mail(StrictModel):
     received_at: datetime
     body: str
     reply_to: str | None = None
+    source_path: str | None = None
 
 
 class MailDocument(StrictModel):
@@ -151,6 +152,12 @@ class ClassificationItem(StrictModel):
     item_kind: ItemKind
     decision: ClassificationDecision
     revision_count: int
+    team: str = "unknown"
+    subject: str = ""
+    received_at: datetime | None = None
+    source_path: str | None = None
+    topic_hint: str = ""
+    state_hint: str = ""
 
 
 class ClassificationItemListResponse(StrictModel):

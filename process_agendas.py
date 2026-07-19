@@ -46,6 +46,7 @@ def mail_from_directory(mail_dir: Path) -> Mail:
         received_at=_received_at(meta, combined_path),
         body=combined_path.read_text(encoding="utf-8"),
         reply_to=None,
+        source_path=combined_path.resolve().relative_to(DATA_DIR.resolve().parent).as_posix(),
     )
 
 

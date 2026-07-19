@@ -14,3 +14,4 @@ def test_mail_from_directory_builds_stable_id(tmp_path, monkeypatch):
     mail = process_agendas.mail_from_directory(directory)
     assert mail.id == "2026-28:Spica수율:mail_001"
     assert mail.body == "4SA 수율 하락"
+    assert mail.source_path == "data/2026-28/Spica수율/mail_001/combined.txt"
