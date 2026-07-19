@@ -1,12 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
+  fetchWikiBuild,
   fetchLotcdWiki,
   fetchTeamWiki,
   fetchTopic,
   fetchWeekWiki,
   resolveWikiReview,
+  startWikiBuild,
 } from './knowledge'
+import type { WikiBuildRun } from '../types'
 
 describe('Wiki API', () => {
   beforeEach(() => {
@@ -39,6 +42,39 @@ describe('Wiki API', () => {
         method: 'POST',
         body: '{"action":"attach","topic_id":"T-001"}',
       }),
+    ])
+  })
+
+  it('preserves the build taxonomy version from the backend contract', async () => {
+    const build: WikiBuildRun = {
+      run_id: 'WB/1',
+      week: '2026-W30',
+      classification_run_id: 'CR-1',
+      taxonomy_version: 7,
+      status: 'published',
+      input_hash: 'hash',
+      model: 'model',
+      affected_topic_ids: ['T-001'],
+      failed_topic_ids: [],
+      started_at: '2026-07-20T00:00:00Z',
+      completed_at: '2026-07-20T00:01:00Z',
+      error: null,
+    }
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response(JSON.stringify(build)),
+    )
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response(JSON.stringify(build)),
+    )
+
+    const started = await startWikiBuild('2026/W30')
+    const fetched = await fetchWikiBuild('WB/1')
+
+    expect(started.taxonomy_version).toBe(7)
+    expect(fetched.taxonomy_version).toBe(7)
+    expect(vi.mocked(fetch).mock.calls.map(([url]) => url)).toEqual([
+      '/api/knowledge/wiki/builds/2026%2FW30',
+      '/api/knowledge/wiki/builds/WB%2F1',
     ])
   })
 })

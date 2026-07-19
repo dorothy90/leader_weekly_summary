@@ -302,6 +302,7 @@ export interface WikiBuildRun {
   run_id: string
   week: string
   classification_run_id: string
+  taxonomy_version: number
   status:
     | 'linking'
     | 'review_required'
