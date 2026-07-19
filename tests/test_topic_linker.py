@@ -8,6 +8,8 @@ from knowledge_models import (
     CategoryPath,
     ClassificationDecision,
     ClassificationItem,
+    TopicRelation,
+    WikiReview,
     WikiReviewResolution,
     WikiTopic,
 )
@@ -297,6 +299,77 @@ def test_manual_create_always_uses_stable_new_topic_id(tmp_path):
     assignment = store.assignment(agenda.agenda_id)
     assert assignment is not None
     assert assignment.topic_id == expected_topic_id
+
+
+@pytest.mark.parametrize(
+    ("action", "expected_state"),
+    [("accept", "accepted"), ("reject", "rejected")],
+)
+def test_relation_review_resolution_updates_relation_without_assignment(
+    tmp_path, action, expected_state
+):
+    store = JsonWikiStore(tmp_path / "wiki_data")
+    relation = TopicRelation(
+        relation_id="REL-001",
+        source_topic_id="T-001",
+        target_topic_id="T-002",
+        kind="possible_cause",
+        agenda_ids=["A-001"],
+        confidence=0.8,
+        review_state="pending",
+    )
+    store.save_relation(relation)
+    store.save_review(
+        WikiReview(
+            review_id="R-REL-001",
+            kind="relation",
+            relation_id="REL-001",
+            relation_kind="possible_cause",
+            relation_agenda_ids=["A-001"],
+            rationale="Evidence suggests a possible cause.",
+        )
+    )
+
+    resolved = resolve_wiki_review(
+        store,
+        "R-REL-001",
+        WikiReviewResolution(action=action),
+        "operator@example.com",
+    )
+
+    assert resolved.status == "resolved"
+    assert store.relation("REL-001").review_state == expected_state
+    assert store.assignment("A-001") is None
+
+
+def test_relation_review_rejects_assignment_action_and_missing_relation(tmp_path):
+    store = JsonWikiStore(tmp_path / "wiki_data")
+    store.save_review(
+        WikiReview(
+            review_id="R-REL-001",
+            kind="relation",
+            relation_id="REL-001",
+            relation_kind="supports",
+            relation_agenda_ids=["A-001"],
+        )
+    )
+
+    with pytest.raises(ValueError, match="Invalid relation resolution: attach"):
+        resolve_wiki_review(
+            store,
+            "R-REL-001",
+            WikiReviewResolution(action="attach", topic_id="T-001"),
+            "operator@example.com",
+        )
+    with pytest.raises(KeyError):
+        resolve_wiki_review(
+            store,
+            "R-REL-001",
+            WikiReviewResolution(action="accept"),
+            "operator@example.com",
+        )
+
+    assert store.reviews()[0].status == "pending"
 
 
 def test_gold_fixture_has_zero_incorrect_auto_merges():

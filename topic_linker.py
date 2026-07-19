@@ -235,10 +235,28 @@ def resolve_wiki_review(
     )
     if review is None:
         raise KeyError(review_id)
-    if review.kind != "assignment":
-        raise ValueError("Only assignment reviews are resolved by the Topic linker")
     if review.status != "pending":
         raise ValueError(f"Review is not pending: {review_id}")
+    if review.kind == "relation":
+        if resolution.action not in {"accept", "reject"}:
+            raise ValueError(f"Invalid relation resolution: {resolution.action}")
+        if review.relation_id is None:
+            raise ValueError("Relation review requires relation_id")
+        relation = store.relation(review.relation_id)
+        if relation.review_state != "pending":
+            raise ValueError(f"Relation is not pending: {review.relation_id}")
+        store.save_relation(
+            relation.model_copy(
+                update={
+                    "review_state": (
+                        "accepted" if resolution.action == "accept" else "rejected"
+                    )
+                }
+            )
+        )
+        resolved = review.model_copy(update={"status": "resolved"})
+        store.save_review(resolved)
+        return resolved
     if review.agenda_id is None:
         raise ValueError("Assignment review requires agenda_id")
     if resolution.action == "hold":

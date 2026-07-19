@@ -1,14 +1,16 @@
-import { render, screen } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, vi } from 'vitest'
 
 import { fetchWikiReviews } from '../api/knowledge'
+import { WIKI_ASSIGNMENT_REVIEWS_CHANGED } from '../reviewEvents'
 import type { WikiReview } from '../types'
 import { WikiShell } from './WikiShell'
 
 vi.mock('../api/knowledge', () => ({ fetchWikiReviews: vi.fn() }))
 
 beforeEach(() => {
+  vi.clearAllMocks()
   vi.mocked(fetchWikiReviews).mockResolvedValue([])
 })
 
@@ -30,4 +32,21 @@ it('shows only blocking assignment reviews in the operator badge', async () => {
   render(<MemoryRouter initialEntries={['/wiki/topics']}><WikiShell /></MemoryRouter>)
 
   expect(await screen.findByRole('link', { name: '차단 중인 배정 검토 1건' })).toHaveAttribute('href', '/wiki/reviews')
+})
+
+it('refreshes the assignment badge after a successful assignment decision event', async () => {
+  vi.mocked(fetchWikiReviews)
+    .mockResolvedValueOnce([
+      { review_id: 'RV-001', kind: 'assignment', status: 'pending' },
+    ] as WikiReview[])
+    .mockResolvedValueOnce([])
+  render(<MemoryRouter initialEntries={['/wiki/reviews']}><WikiShell /></MemoryRouter>)
+  expect(await screen.findByRole('link', { name: '차단 중인 배정 검토 1건' })).toBeInTheDocument()
+
+  act(() => { window.dispatchEvent(new Event(WIKI_ASSIGNMENT_REVIEWS_CHANGED)) })
+
+  await waitFor(() => {
+    expect(fetchWikiReviews).toHaveBeenCalledTimes(2)
+    expect(screen.queryByRole('link', { name: /차단 중인 배정 검토/ })).not.toBeInTheDocument()
+  })
 })

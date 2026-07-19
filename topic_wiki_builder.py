@@ -24,6 +24,7 @@ from knowledge_models import (
     TopicState,
     WikiTopic,
     WikiBuildRun,
+    WikiReview,
 )
 from topic_linker import DecisionFn, link_agenda, persist_link_proposal
 from wiki_store import JsonWikiStore
@@ -307,6 +308,20 @@ def build_week(
                 wiki_store.publish_topic(updated, revision)
                 for relation in relations:
                     wiki_store.save_relation(relation)
+                    wiki_store.save_review(
+                        WikiReview(
+                            review_id=f"R-{relation.relation_id}",
+                            kind="relation",
+                            relation_id=relation.relation_id,
+                            relation_kind=relation.kind,
+                            relation_agenda_ids=relation.agenda_ids,
+                            rationale=(
+                                f"{relation.source_topic_id} -> "
+                                f"{relation.target_topic_id} {relation.kind} relation "
+                                "proposed from Agenda evidence."
+                            ),
+                        )
+                    )
             except Exception:
                 failed.append(topic_id)
         wiki_store.rebuild_catalog()

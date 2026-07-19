@@ -50,3 +50,18 @@ it('polls a transient build and stops after its terminal result', async () => {
   await act(async () => { await vi.advanceTimersByTimeAsync(4000) })
   expect(fetchWikiBuild).toHaveBeenCalledOnce()
 })
+
+it('retries a transient build after a non-abort polling error', async () => {
+  vi.useFakeTimers()
+  vi.mocked(fetchWikiBuild)
+    .mockRejectedValueOnce(new Error('temporary network error'))
+    .mockResolvedValueOnce({ ...run, status: 'published' })
+  render(<BuildStatusBanner run={{ ...run, status: 'generating', completed_at: null }} />)
+
+  await act(async () => { await vi.advanceTimersByTimeAsync(2000) })
+  expect(fetchWikiBuild).toHaveBeenCalledOnce()
+
+  await act(async () => { await vi.advanceTimersByTimeAsync(2000) })
+  expect(fetchWikiBuild).toHaveBeenCalledTimes(2)
+  expect(screen.getByRole('status')).toHaveTextContent('게시 완료')
+})

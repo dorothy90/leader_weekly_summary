@@ -15,7 +15,7 @@ from knowledge_models import (
     WikiTopic,
 )
 from topic_linker import TopicLinkDecision
-from topic_wiki_builder import TopicAnalysis, TopicDraft, build_week
+from topic_wiki_builder import RelationProposal, TopicAnalysis, TopicDraft, build_week
 from wiki_projections import (
     LOTCD_SECTION_ORDER,
     build_lotcd_view,
@@ -233,6 +233,45 @@ def test_pending_relation_review_does_not_block_publication(stores):
     assert result.status == "published"
     assert result.classification_run_id == "CLASS-001"
     assert wiki.week("2026-W30").build_run_id == result.run_id
+
+
+def test_build_creates_typed_nonblocking_review_for_relation_proposal(stores):
+    classification, wiki = stores
+    target = topic("T-002")
+    wiki.publish_topic(target, revision(target))
+
+    def analysis_with_relation(_context):
+        return fake_analysis(_context).model_copy(
+            update={
+                "relation_proposals": [
+                    RelationProposal(
+                        target_topic_id="T-002",
+                        kind="possible_cause",
+                        agenda_ids=["A-001"],
+                        confidence=0.8,
+                    )
+                ]
+            }
+        )
+
+    analysis_with_relation.model = "test-model"
+    result = build_week(
+        "2026-W30",
+        classification,
+        wiki,
+        lambda *_: None,
+        analysis_with_relation,
+        fake_draft,
+    )
+
+    reviews = wiki.reviews("pending")
+    assert result.status == "published"
+    assert len(reviews) == 1
+    assert reviews[0].kind == "relation"
+    assert reviews[0].relation_kind == "possible_cause"
+    assert reviews[0].relation_agenda_ids == ["A-001"]
+    assert reviews[0].relation_id == wiki.relation(reviews[0].relation_id).relation_id
+    assert reviews[0].review_id == f"R-{reviews[0].relation_id}"
 
 
 def test_identical_successful_build_is_reused(stores):

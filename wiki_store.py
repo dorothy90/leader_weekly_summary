@@ -179,6 +179,12 @@ class JsonWikiStore:
                 value,
             )
 
+    def relation(self, relation_id: str) -> TopicRelation:
+        return _load(
+            self.root / "relations" / f"{_safe_id(relation_id)}.json",
+            TopicRelation,
+        )
+
     def reviews(self, status: str | None = None) -> list[WikiReview]:
         values = [
             _load(path, WikiReview)

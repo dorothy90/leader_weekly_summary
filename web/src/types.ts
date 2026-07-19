@@ -295,6 +295,8 @@ export interface WikiReview {
     rank_reasons: string[]
   }>
   relation_id: string | null
+  relation_kind?: RelationKind | null
+  relation_agenda_ids?: string[]
   rationale: string
   status: 'pending' | 'resolved' | 'held'
 }

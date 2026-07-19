@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, NavLink, Outlet } from 'react-router-dom'
 
 import { fetchWikiReviews } from '../api/knowledge'
+import { WIKI_ASSIGNMENT_REVIEWS_CHANGED } from '../reviewEvents'
 
 const wikiModes = [
   { label: '주제', to: '/wiki/topics' },
@@ -14,13 +15,24 @@ export function WikiShell() {
   const [blockingReviewCount, setBlockingReviewCount] = useState(0)
 
   useEffect(() => {
-    const controller = new AbortController()
-    fetchWikiReviews(controller.signal).then((reviews) => {
-      setBlockingReviewCount(reviews.filter((review) => review.kind === 'assignment').length)
-    }).catch((error: unknown) => {
-      if (!(error instanceof DOMException && error.name === 'AbortError')) setBlockingReviewCount(0)
-    })
-    return () => controller.abort()
+    let controller: AbortController | null = null
+    const refresh = () => {
+      controller?.abort()
+      const request = new AbortController()
+      controller = request
+      fetchWikiReviews(request.signal).then((reviews) => {
+        if (request.signal.aborted) return
+        setBlockingReviewCount(reviews.filter((review) => review.kind === 'assignment').length)
+      }).catch((error: unknown) => {
+        if (!(error instanceof DOMException && error.name === 'AbortError')) setBlockingReviewCount(0)
+      })
+    }
+    refresh()
+    window.addEventListener(WIKI_ASSIGNMENT_REVIEWS_CHANGED, refresh)
+    return () => {
+      window.removeEventListener(WIKI_ASSIGNMENT_REVIEWS_CHANGED, refresh)
+      controller?.abort()
+    }
   }, [])
 
   return (

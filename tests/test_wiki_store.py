@@ -9,6 +9,7 @@ import wiki_store
 from knowledge_models import (
     CategoryPath,
     TopicAssignment,
+    TopicRelation,
     TopicRevision,
     WeekWikiView,
     WikiBuildRun,
@@ -193,6 +194,25 @@ def test_records_round_trip_and_lists_are_sorted(tmp_path):
     assert [item.review_id for item in store.reviews()] == ["R-001", "R-002"]
     assert [item.review_id for item in store.reviews("pending")] == ["R-002"]
     assert store.assignment_digest() == store.assignment_digest()
+
+
+def test_relation_round_trip_and_missing_relation(tmp_path):
+    store = JsonWikiStore(tmp_path / "wiki_data")
+    relation = TopicRelation(
+        relation_id="REL-001",
+        source_topic_id="T-001",
+        target_topic_id="T-002",
+        kind="possible_cause",
+        agenda_ids=["A-001"],
+        confidence=0.8,
+        review_state="pending",
+    )
+
+    store.save_relation(relation)
+
+    assert store.relation("REL-001") == relation
+    with pytest.raises(KeyError):
+        store.relation("REL-missing")
 
 
 def test_week_replacement_archives_previous_revision(tmp_path):

@@ -8,6 +8,7 @@ import {
   startWikiBuild,
 } from '../api/knowledge'
 import { BuildStatusBanner } from '../components/BuildStatusBanner'
+import { WIKI_ASSIGNMENT_REVIEWS_CHANGED } from '../reviewEvents'
 import type {
   KnowledgeSession,
   WikiBuildRun,
@@ -101,7 +102,8 @@ function RelationReviewCard({
         <span className="review-card__id">{review.review_id}</span>
       </header>
       <dl className="review-relation">
-        <div><dt>관계 종류</dt><dd>검토 제안</dd></div>
+        <div><dt>관계 종류</dt><dd>{review.relation_kind ?? '정보 없음'}</dd></div>
+        <div><dt>Agenda 근거</dt><dd>{review.relation_agenda_ids?.join(', ') || '정보 없음'}</dd></div>
         <div><dt>근거</dt><dd>{review.rationale || '근거 정보 없음'}</dd></div>
       </dl>
       <div className="review-card__actions">
@@ -161,6 +163,7 @@ export function WikiReviewPage() {
   }, [])
 
   async function resolve(reviewId: string, input: WikiReviewResolution) {
+    const review = reviews.find((value) => value.review_id === reviewId)
     setBusyId(reviewId)
     setMessage(null)
     setError(false)
@@ -169,6 +172,9 @@ export function WikiReviewPage() {
       setReviews((current) => current.filter((review) => review.review_id !== reviewId))
       setMessage('검토 결정을 저장했습니다.')
       headingRef.current?.focus()
+      if (review?.kind === 'assignment') {
+        window.dispatchEvent(new Event(WIKI_ASSIGNMENT_REVIEWS_CHANGED))
+      }
     } catch {
       setError(true)
       setMessage('검토 결정을 저장하지 못했습니다.')

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   fetchWikiBuild,
+  fetchWikiReviews,
   fetchLotcdWiki,
   fetchTeamWiki,
   fetchTopic,
@@ -9,7 +10,7 @@ import {
   resolveWikiReview,
   startWikiBuild,
 } from './knowledge'
-import type { WeekWikiView, WikiBuildRun } from '../types'
+import type { WeekWikiView, WikiBuildRun, WikiReview } from '../types'
 
 describe('Wiki API', () => {
   beforeEach(() => {
@@ -43,6 +44,20 @@ describe('Wiki API', () => {
         body: '{"action":"attach","topic_id":"T-001"}',
       }),
     ])
+  })
+
+  it('preserves typed relation review details from the backend', async () => {
+    const review: WikiReview = {
+      review_id: 'R-REL-001', kind: 'relation', agenda_id: null, candidates: [],
+      relation_id: 'REL-001', relation_kind: 'supports', relation_agenda_ids: ['A-001'],
+      rationale: 'Evidence supports the relation.', status: 'pending',
+    }
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify([review])))
+
+    const [fetched] = await fetchWikiReviews()
+
+    expect(fetched.relation_kind).toBe('supports')
+    expect(fetched.relation_agenda_ids).toEqual(['A-001'])
   })
 
   it('preserves the build taxonomy version from the backend contract', async () => {

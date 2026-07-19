@@ -9,6 +9,7 @@ import {
   startWikiBuild,
 } from '../api/knowledge'
 import type { WikiBuildRun, WikiReview, WikiTopicDetail } from '../types'
+import { WIKI_ASSIGNMENT_REVIEWS_CHANGED } from '../reviewEvents'
 import { WikiReviewPage } from './WikiReviewPage'
 
 vi.mock('../api/knowledge', () => ({
@@ -26,6 +27,8 @@ const assignmentReview: WikiReview = {
   agenda_id: 'A-001',
   candidates: [{ topic_id: 'T-001', score: 0.74, rank_reasons: ['수율 > 검사 > DRAM'] }],
   relation_id: null,
+  relation_kind: null,
+  relation_agenda_ids: [],
   rationale: '두 Topic과 유사도가 비슷합니다.',
   status: 'pending',
 }
@@ -36,6 +39,8 @@ const relationReview: WikiReview = {
   agenda_id: null,
   candidates: [],
   relation_id: 'REL-001',
+  relation_kind: 'possible_cause',
+  relation_agenda_ids: ['A-001', 'A-002'],
   rationale: 'A-001에서 가능한 원인 관계가 관찰되었습니다.',
   status: 'pending',
 }
@@ -88,10 +93,50 @@ describe('WikiReviewPage', () => {
     render(<WikiReviewPage />)
 
     expect(await screen.findByText('발행 비차단')).toBeInTheDocument()
+    expect(screen.getByText('possible_cause')).toBeInTheDocument()
+    expect(screen.getByText('A-001, A-002')).toBeInTheDocument()
     expect(screen.getByText(/가능한 원인 관계/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '관계 승인' })).toBeDisabled()
     expect(screen.getByRole('button', { name: '관계 거절' })).toBeDisabled()
   })
+
+  it.each([
+    ['관계 승인', 'accept'],
+    ['관계 거절', 'reject'],
+  ] as const)('submits %s for a typed nonblocking relation review', async (button, action) => {
+    vi.mocked(fetchWikiReviews).mockResolvedValue([relationReview])
+    render(<WikiReviewPage />)
+
+    fireEvent.click(await screen.findByRole('button', { name: button }))
+
+    await waitFor(() => expect(resolveWikiReview).toHaveBeenCalledWith(
+      'RV-002', { action },
+    ))
+  })
+
+  it.each(['attach', 'create', 'hold'] as const)(
+    'announces a successful %s decision to the shell badge',
+    async (action) => {
+      const listener = vi.fn()
+      window.addEventListener(WIKI_ASSIGNMENT_REVIEWS_CHANGED, listener)
+      vi.mocked(fetchWikiReviews).mockResolvedValue([assignmentReview])
+      render(<WikiReviewPage />)
+
+      if (action === 'attach') {
+        fireEvent.click(await screen.findByRole('button', { name: 'T-001에 연결' }))
+      } else if (action === 'create') {
+        fireEvent.change(await screen.findByLabelText('새 Topic 제목'), {
+          target: { value: '새 Topic' },
+        })
+        fireEvent.click(screen.getByRole('button', { name: '새 Topic 생성' }))
+      } else {
+        fireEvent.click(await screen.findByRole('button', { name: '보류' }))
+      }
+
+      await waitFor(() => expect(listener).toHaveBeenCalledOnce())
+      window.removeEventListener(WIKI_ASSIGNMENT_REVIEWS_CHANGED, listener)
+    },
+  )
 
   it('starts an explicit build for the entered approved week', async () => {
     vi.mocked(startWikiBuild).mockResolvedValue(buildRun)

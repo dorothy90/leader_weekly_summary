@@ -1418,7 +1418,7 @@
 }
 
 .review-relation {
-  grid-template-columns: 130px minmax(0, 1fr);
+  grid-template-columns: 130px 160px minmax(0, 1fr);
   margin-top: 14px;
 }
 

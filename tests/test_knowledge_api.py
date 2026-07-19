@@ -13,9 +13,11 @@ from knowledge_models import (
     CategoryPath,
     ClassificationDecision,
     ClassificationItem,
+    TopicRelation,
     TopicSection,
     TopicRevision,
     WikiTopic,
+    WikiReview,
 )
 from wiki_projections import build_week_view
 from wiki_store import JsonWikiStore
@@ -161,3 +163,70 @@ def test_build_requires_editor_and_approved_week(api_app, monkeypatch):
     )
     assert viewer.status_code == 403
     assert editor.status_code == 409
+
+
+def test_relation_review_api_accepts_and_rejects(api_app):
+    store = api_app.state.wiki_store
+    for suffix, action, expected_state in (
+        ("accept", "accept", "accepted"),
+        ("reject", "reject", "rejected"),
+    ):
+        relation_id = f"REL-{suffix}"
+        review_id = f"R-{relation_id}"
+        store.save_relation(
+            TopicRelation(
+                relation_id=relation_id,
+                source_topic_id="T-001",
+                target_topic_id="T-002",
+                kind="supports",
+                agenda_ids=["A-001"],
+                confidence=0.8,
+                review_state="pending",
+            )
+        )
+        store.save_review(
+            WikiReview(
+                review_id=review_id,
+                kind="relation",
+                relation_id=relation_id,
+                relation_kind="supports",
+                relation_agenda_ids=["A-001"],
+            )
+        )
+
+        response = post(
+            api_app,
+            f"/api/knowledge/wiki/reviews/{review_id}/resolve",
+            json={"action": action},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "resolved"
+        assert store.relation(relation_id).review_state == expected_state
+
+
+def test_relation_review_api_maps_invalid_action_and_missing_relation(api_app):
+    store = api_app.state.wiki_store
+    store.save_review(
+        WikiReview(
+            review_id="R-REL-missing",
+            kind="relation",
+            relation_id="REL-missing",
+            relation_kind="supports",
+            relation_agenda_ids=["A-001"],
+        )
+    )
+
+    invalid = post(
+        api_app,
+        "/api/knowledge/wiki/reviews/R-REL-missing/resolve",
+        json={"action": "hold"},
+    )
+    missing = post(
+        api_app,
+        "/api/knowledge/wiki/reviews/R-REL-missing/resolve",
+        json={"action": "accept"},
+    )
+
+    assert invalid.status_code == 409
+    assert missing.status_code == 404

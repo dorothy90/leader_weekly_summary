@@ -25,6 +25,7 @@ export function BuildStatusBanner({
   onRunChange?: (run: WikiBuildRun) => void
 }) {
   const [currentRun, setCurrentRun] = useState(run)
+  const [pollAttempt, setPollAttempt] = useState(0)
 
   useEffect(() => {
     if (!transientStatuses.has(currentRun.status)) return
@@ -35,7 +36,7 @@ export function BuildStatusBanner({
         onRunChange?.(nextRun)
       }).catch((error: unknown) => {
         if (!(error instanceof DOMException && error.name === 'AbortError')) {
-          // The current status stays visible; the next parent refresh may resume polling.
+          setPollAttempt((value) => value + 1)
         }
       })
     }, 2000)
@@ -44,7 +45,7 @@ export function BuildStatusBanner({
       window.clearTimeout(timeout)
       controller.abort()
     }
-  }, [currentRun, onRunChange])
+  }, [currentRun, onRunChange, pollAttempt])
 
   return (
     <section className={`build-status build-status--${currentRun.status}`} role="status" aria-live="polite">

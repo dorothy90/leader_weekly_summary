@@ -310,6 +310,8 @@ class WikiReview(StrictModel):
     agenda_id: str | None = None
     candidates: list[TopicCandidate] = Field(default_factory=list)
     relation_id: str | None = None
+    relation_kind: RelationKind | None = None
+    relation_agenda_ids: list[str] = Field(default_factory=list)
     rationale: str = ""
     status: Literal["pending", "resolved", "held"] = "pending"
 
