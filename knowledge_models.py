@@ -380,6 +380,7 @@ class WeekWikiView(StrictModel):
     changed_topic_ids: list[str]
     resolved_topic_ids: list[str]
     reopened_topic_ids: list[str]
+    actions_and_decisions: list[TopicListItem]
     new_relation_ids: list[str]
     pending_assignment_count: int
     contradictions: list[str]

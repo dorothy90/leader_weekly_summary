@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
-import { useLocation, useNavigate, useParams } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 
-import { fetchTopics, fetchWeekWiki, fetchWikiBuild } from '../api/knowledge'
+import { fetchWeekWiki, fetchWikiBuild } from '../api/knowledge'
 import { TopicList } from '../components/TopicList'
-import type { TopicListItem, WeekWikiView, WikiBuildRun } from '../types'
+import type { WeekWikiView, WikiBuildRun } from '../types'
 
 const buildStatusLabels: Record<WikiBuildRun['status'], string> = {
   linking: '연결 중', review_required: '배정 검토 필요', generating: '생성 중',
@@ -15,28 +15,25 @@ function selectedWeek(params: Readonly<Record<string, string | undefined>>) {
   return value ? decodeURIComponent(value) : undefined
 }
 
-function topicsFor(ids: string[], topicsById: Map<string, TopicListItem>) {
-  return ids.flatMap((id) => {
-    const topic = topicsById.get(id)
-    return topic ? [topic] : []
-  })
-}
-
 function TopicGroup({
-  title, ids, topicsById, from,
+  title, ids, from,
 }: {
   title: string
   ids: string[]
-  topicsById: Map<string, TopicListItem>
   from: string
 }) {
   return (
     <section className="projection-section projection-section--group">
       <h2>{title}</h2>
-      <TopicList topics={topicsFor(ids, topicsById)} from={from} />
-      {ids.some((id) => !topicsById.has(id)) ? (
-        <p className="projection-note">목록에 없는 Topic ID: {ids.filter((id) => !topicsById.has(id)).join(', ')}</p>
-      ) : null}
+      {ids.length > 0 ? (
+        <ol className="week-topic-ids">
+          {ids.map((id) => (
+            <li key={id}>
+              <Link to={`/wiki/topics/${encodeURIComponent(id)}?from=${encodeURIComponent(from)}`}>{id}</Link>
+            </li>
+          ))}
+        </ol>
+      ) : <p className="projection-empty">해당 변경이 없습니다.</p>}
     </section>
   )
 }
@@ -47,7 +44,6 @@ export function WeekWikiPage() {
   const navigate = useNavigate()
   const week = selectedWeek(params)
   const [view, setView] = useState<WeekWikiView | null>(null)
-  const [topics, setTopics] = useState<TopicListItem[]>([])
   const [build, setBuild] = useState<WikiBuildRun | null>(null)
   const [error, setError] = useState(false)
 
@@ -55,17 +51,15 @@ export function WeekWikiPage() {
     if (!week) return
     const controller = new AbortController()
     setView(null)
-    setTopics([])
     setBuild(null)
     setError(false)
 
-    Promise.all([fetchWeekWiki(week, controller.signal), fetchTopics({}, controller.signal)])
-      .then(async ([nextView, nextTopics]) => {
+    fetchWeekWiki(week, controller.signal)
+      .then(async (nextView) => {
         const nextBuild = nextView.build_run_id
           ? await fetchWikiBuild(nextView.build_run_id, controller.signal)
           : null
         setView(nextView)
-        setTopics(nextTopics)
         setBuild(nextBuild)
       })
       .catch((fetchError: unknown) => {
@@ -74,8 +68,6 @@ export function WeekWikiPage() {
       })
     return () => controller.abort()
   }, [week])
-
-  const topicsById = useMemo(() => new Map(topics.map((topic) => [topic.topic_id, topic])), [topics])
 
   if (!week) {
     return (
@@ -90,8 +82,6 @@ export function WeekWikiPage() {
   if (!view || (view.build_run_id && !build)) return <p className="projection-page-status" role="status">주차 스냅샷을 불러오는 중입니다.</p>
 
   const from = location.pathname + location.search
-  const actions = topicsFor(view.changed_topic_ids, topicsById)
-    .filter((topic) => topic.primary_area === 'decision_action')
 
   return (
     <article className="projection-page">
@@ -114,22 +104,27 @@ export function WeekWikiPage() {
         <div><dt>게시 시각</dt><dd><time dateTime={view.published_at}>{view.published_at}</time></dd></div>
         <div><dt>빌드 실행</dt><dd>{view.build_run_id || '기록 없음'}</dd></div>
         <div><dt>빌드 상태</dt><dd>{build ? buildStatusLabels[build.status] : '기록 없음'}</dd></div>
-        {build?.status === 'partially_failed' ? (
-          <div className="projection-provenance__wide">
-            <dt>이전 유효 리비전 유지</dt><dd>{build.failed_topic_ids.join(', ') || '없음'}</dd>
-          </div>
-        ) : null}
+        <div><dt>분류 실행</dt><dd>{build?.classification_run_id ?? '기록 없음'}</dd></div>
+        <div><dt>분류 체계 버전</dt><dd>{build?.taxonomy_version ?? '기록 없음'}</dd></div>
+        <div><dt>입력 해시</dt><dd>{build?.input_hash ?? '기록 없음'}</dd></div>
+        <div><dt>모델</dt><dd>{build?.model ?? '기록 없음'}</dd></div>
+        <div><dt>시작 시각</dt><dd>{build ? <time dateTime={build.started_at}>{build.started_at}</time> : '기록 없음'}</dd></div>
+        <div><dt>완료 시각</dt><dd>{build?.completed_at ? <time dateTime={build.completed_at}>{build.completed_at}</time> : '기록 없음'}</dd></div>
+        <div className="projection-provenance__wide">
+          <dt>{build?.status === 'partially_failed' ? '이전 유효 리비전 유지' : '실패 Topic'}</dt>
+          <dd>{build?.failed_topic_ids.join(', ') || '없음'}</dd>
+        </div>
       </dl>
 
       <div className="projection-page__sections projection-page__sections--week">
-        <TopicGroup title="새 Topic" ids={view.new_topic_ids} topicsById={topicsById} from={from} />
-        <TopicGroup title="변경된 Topic" ids={view.changed_topic_ids} topicsById={topicsById} from={from} />
-        <TopicGroup title="해결된 Topic" ids={view.resolved_topic_ids} topicsById={topicsById} from={from} />
-        <TopicGroup title="재발한 Topic" ids={view.reopened_topic_ids} topicsById={topicsById} from={from} />
+        <TopicGroup title="새 Topic" ids={view.new_topic_ids} from={from} />
+        <TopicGroup title="변경된 Topic" ids={view.changed_topic_ids} from={from} />
+        <TopicGroup title="해결된 Topic" ids={view.resolved_topic_ids} from={from} />
+        <TopicGroup title="재발한 Topic" ids={view.reopened_topic_ids} from={from} />
 
         <section className="projection-section">
           <h2>중요 조치와 의사결정</h2>
-          <TopicList topics={actions} from={from} />
+          <TopicList topics={view.actions_and_decisions} from={from} />
         </section>
 
         <section className="projection-section">

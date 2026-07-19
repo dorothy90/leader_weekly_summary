@@ -1103,6 +1103,27 @@
   padding-top: 30px;
 }
 
+.week-topic-ids {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.week-topic-ids a {
+  display: block;
+  border: 1px solid var(--line-strong);
+  border-radius: 2px;
+  padding: 6px 9px;
+  color: var(--carbon-950);
+  background: var(--panel);
+  font: 10px/1.4 var(--mono);
+  text-decoration-color: var(--line-strong);
+  text-underline-offset: 3px;
+}
+
 .projection-note,
 .projection-empty,
 .projection-page-status {

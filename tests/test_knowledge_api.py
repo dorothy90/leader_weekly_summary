@@ -13,9 +13,11 @@ from knowledge_models import (
     CategoryPath,
     ClassificationDecision,
     ClassificationItem,
+    TopicSection,
     TopicRevision,
     WikiTopic,
 )
+from wiki_projections import build_week_view
 from wiki_store import JsonWikiStore
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -89,9 +91,10 @@ def api_app(tmp_path, monkeypatch):
         model="test-model",
     )
     wiki_store.publish_topic(topic, revision)
+    app = FastAPI()
+    app.state.wiki_store = wiki_store
     monkeypatch.setattr(knowledge_api, "get_store", lambda: ClassificationStore())
     monkeypatch.setattr(knowledge_api, "get_wiki_store", lambda: wiki_store, raising=False)
-    app = FastAPI()
     app.include_router(knowledge_api.router)
     return app
 
@@ -116,6 +119,32 @@ def test_topic_and_lotcd_routes_read_same_topic(api_app):
     topic = request(api_app, "/api/knowledge/wiki/topics/T-001").json()
     lotcd = request(api_app, "/api/knowledge/wiki/lotcd/DRAM/Spica/4SA").json()
     assert topic["topic"]["topic_id"] in lotcd["topic_ids"]
+
+
+def test_week_route_preserves_snapshot_action_rows(api_app):
+    store = api_app.state.wiki_store
+    current = store.topic("T-001")
+    action_revision = store.topic_revision("T-001", "REV-001").model_copy(
+        update={
+            "sections": [
+                TopicSection(
+                    key="actions_and_decisions",
+                    title="Actions and decisions",
+                    body="Adjust condition.",
+                )
+            ]
+        }
+    )
+    store.publish_topic(current, action_revision)
+    snapshot = build_week_view(store, "2026-W30", "RUN-001")
+    store.save_week(snapshot)
+
+    response = request(api_app, "/api/knowledge/wiki/weeks/2026-W30")
+
+    assert response.status_code == 200
+    assert response.json()["actions_and_decisions"] == [
+        snapshot.actions_and_decisions[0].model_dump(mode="json")
+    ]
 
 
 def test_build_requires_editor_and_approved_week(api_app, monkeypatch):

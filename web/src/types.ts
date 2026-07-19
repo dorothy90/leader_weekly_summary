@@ -278,6 +278,7 @@ export interface WeekWikiView {
   changed_topic_ids: string[]
   resolved_topic_ids: string[]
   reopened_topic_ids: string[]
+  actions_and_decisions: TopicListItem[]
   new_relation_ids: string[]
   pending_assignment_count: number
   contradictions: string[]

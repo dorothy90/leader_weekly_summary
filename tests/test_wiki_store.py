@@ -207,6 +207,7 @@ def test_week_replacement_archives_previous_revision(tmp_path):
         changed_topic_ids=[],
         resolved_topic_ids=[],
         reopened_topic_ids=[],
+        actions_and_decisions=[],
         new_relation_ids=[],
         pending_assignment_count=0,
         contradictions=[],

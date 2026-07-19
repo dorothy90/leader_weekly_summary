@@ -18,18 +18,12 @@ function makeTopic(topic_id: string, title: string, overrides: Partial<TopicList
   }
 }
 
-const topics = [
-  makeTopic('T-001', '새 불량'),
-  makeTopic('T-002', '조치 변경', { primary_area: 'decision_action' }),
-  makeTopic('T-003', '해결 완료', { state: 'resolved' }),
-  makeTopic('T-004', '재발 확인', { state: 'reopened' }),
-]
-
 const weekView: WeekWikiView = {
   week: '2026-W30', revision_id: 'WREV-ABC123', published_at: '2026-07-20T01:02:03Z',
   build_run_id: 'RUN-030', new_topic_ids: ['T-001'],
   changed_topic_ids: ['T-001', 'T-002', 'T-003', 'T-004'], resolved_topic_ids: ['T-003'],
   reopened_topic_ids: ['T-004'], new_relation_ids: ['REL-001'], pending_assignment_count: 2,
+  actions_and_decisions: [makeTopic('T-002', '스냅샷 당시 조치', { primary_area: 'yield_defect' })],
   contradictions: ['REL-009'], teams: ['Process', 'Yield'],
 }
 
@@ -43,7 +37,10 @@ const buildRun: WikiBuildRun = {
 beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(fetchWeekWiki).mockResolvedValue(weekView)
-  vi.mocked(fetchTopics).mockResolvedValue(topics)
+  vi.mocked(fetchTopics).mockResolvedValue([
+    makeTopic('T-001', '변경된 현재 제목'),
+    makeTopic('T-002', '변경된 현재 조치'),
+  ])
   vi.mocked(fetchWikiBuild).mockResolvedValue(buildRun)
 })
 
@@ -55,16 +52,18 @@ function renderWeek(route: string) {
   )
 }
 
-it('separates new, changed, resolved, and reopened topics with canonical links', async () => {
+it('renders stored change IDs as canonical links without mutable current titles', async () => {
   renderWeek('/wiki/weeks/2026-W30')
 
   for (const label of ['새 Topic', '변경된 Topic', '해결된 Topic', '재발한 Topic']) {
     expect(await screen.findByRole('heading', { name: label })).toBeInTheDocument()
   }
-  expect(screen.getAllByRole('link', { name: '새 불량' })[0]).toHaveAttribute(
+  expect(screen.getAllByRole('link', { name: 'T-001' })[0]).toHaveAttribute(
     'href', '/wiki/topics/T-001?from=%2Fwiki%2Fweeks%2F2026-W30',
   )
-  expect(screen.getAllByText('조치 변경').length).toBeGreaterThan(0)
+  expect(screen.queryByText('변경된 현재 제목')).not.toBeInTheDocument()
+  expect(fetchTopics).not.toHaveBeenCalled()
+  expect(screen.getByRole('link', { name: '스냅샷 당시 조치' })).toBeInTheDocument()
 })
 
 it('shows snapshot provenance, partial build status, and audit counters', async () => {
@@ -75,6 +74,12 @@ it('shows snapshot provenance, partial build status, and audit counters', async 
   expect(within(provenance).getByText('RUN-030')).toBeInTheDocument()
   expect(within(provenance).getByText('부분 실패')).toBeInTheDocument()
   expect(within(provenance).getByText('T-009')).toBeInTheDocument()
+  for (const value of [
+    'CLASS-030', '7', 'hash', 'test-model', '2026-07-20T01:00:00Z',
+    '2026-07-20T01:02:03Z', '2026-07-20T01:02:03Z',
+  ]) {
+    expect(within(provenance).getAllByText(value).length).toBeGreaterThan(0)
+  }
   expect(screen.getByText('미해결 배정 2건')).toBeInTheDocument()
   expect(screen.getByText('REL-001')).toBeInTheDocument()
   expect(screen.getByText('REL-009')).toBeInTheDocument()

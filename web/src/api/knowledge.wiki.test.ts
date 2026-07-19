@@ -9,7 +9,7 @@ import {
   resolveWikiReview,
   startWikiBuild,
 } from './knowledge'
-import type { WikiBuildRun } from '../types'
+import type { WeekWikiView, WikiBuildRun } from '../types'
 
 describe('Wiki API', () => {
   beforeEach(() => {
@@ -76,5 +76,24 @@ describe('Wiki API', () => {
       '/api/knowledge/wiki/builds/2026%2FW30',
       '/api/knowledge/wiki/builds/WB%2F1',
     ])
+  })
+
+  it('preserves backend-owned actions in a Week snapshot', async () => {
+    const week: WeekWikiView = {
+      week: '2026-W30', revision_id: 'WREV-001', published_at: '2026-07-20T00:01:00Z',
+      build_run_id: 'RUN-001', new_topic_ids: [], changed_topic_ids: ['T-001'],
+      resolved_topic_ids: [], reopened_topic_ids: [], new_relation_ids: [],
+      pending_assignment_count: 0, contradictions: [], teams: ['Yield'],
+      actions_and_decisions: [{
+        topic_id: 'T-001', title: '스냅샷 조치', state: 'monitoring', importance: 'high',
+        primary_area: 'yield_defect', target_paths: [], teams: ['Yield'],
+        last_updated_week: '2026-W30', evidence_count: 1, rank_reasons: [],
+      }],
+    }
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify(week)))
+
+    const fetched = await fetchWeekWiki('2026-W30')
+
+    expect(fetched.actions_and_decisions[0].title).toBe('스냅샷 조치')
   })
 })

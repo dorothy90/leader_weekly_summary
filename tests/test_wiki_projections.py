@@ -339,6 +339,22 @@ def test_week_revision_is_versioned_from_projection_content(stores):
 
     assert first.revision_id == second.revision_id
     assert first.build_run_id == "RUN-001"
+    assert [item.topic_id for item in first.actions_and_decisions] == ["T-001"]
+    assert first.actions_and_decisions[0].title == "4SA 수율 하락"
+
+
+def test_week_revision_hash_includes_snapshot_action_rows(stores):
+    _, wiki = stores
+    first = build_week_view(wiki, "2026-W30", "RUN-001")
+    changed = topic().model_copy(
+        update={"title": "스냅샷 시점 조치", "current_revision_id": "REV-T-001-2"}
+    )
+    wiki.publish_topic(changed, revision(changed))
+
+    second = build_week_view(wiki, "2026-W30", "RUN-001")
+
+    assert second.actions_and_decisions[0].title == "스냅샷 시점 조치"
+    assert second.revision_id != first.revision_id
 
 
 def fake_analysis(_context):

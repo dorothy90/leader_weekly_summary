@@ -367,6 +367,8 @@ def build_week_view(
     build_run_id: str | None = None,
 ) -> WeekWikiView:
     topics = [topic for topic in store.topics() if topic.last_updated_week == week]
+    ranked = _ranked_items(store, topics, week)
+    topics_by_id = {topic.topic_id: topic for topic in topics}
     accepted = _relations(store)
     changed_ids = sorted(topic.topic_id for topic in topics)
     new_ids = sorted(
@@ -399,6 +401,11 @@ def build_week_view(
         "changed_topic_ids": changed_ids,
         "resolved_topic_ids": resolved_ids,
         "reopened_topic_ids": reopened_ids,
+        "actions_and_decisions": [
+            item
+            for item in ranked
+            if _has_actions(store, topics_by_id[item.topic_id])
+        ],
         "new_relation_ids": relation_ids,
         "pending_assignment_count": pending_count,
         "contradictions": sorted(
@@ -409,8 +416,15 @@ def build_week_view(
         ),
         "teams": sorted({team for topic in topics for team in topic.teams}),
     }
+    hash_payload = {
+        **payload,
+        "actions_and_decisions": [
+            item.model_dump(mode="json")
+            for item in payload["actions_and_decisions"]
+        ],
+    }
     revision_id = "WREV-" + hashlib.sha256(
-        json.dumps(payload, sort_keys=True).encode("utf-8")
+        json.dumps(hash_payload, sort_keys=True).encode("utf-8")
     ).hexdigest()[:16].upper()
     return WeekWikiView(
         revision_id=revision_id,
