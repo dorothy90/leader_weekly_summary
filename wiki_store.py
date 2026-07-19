@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import tempfile
+import threading
 import uuid
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -53,6 +55,7 @@ class JsonWikiStore:
     ) -> None:
         self.root = Path(root)
         self.recovery_threshold = recovery_threshold
+        self._lock_owner: int | None = None
         for name in (
             "topics",
             "assignments",
@@ -65,17 +68,29 @@ class JsonWikiStore:
         ):
             (self.root / name).mkdir(parents=True, exist_ok=True)
 
-    @staticmethod
-    def _atomic_replace(path: Path, payload: str) -> None:
+    def _atomic_replace(self, path: Path, payload: str) -> None:
+        if self._lock_owner != threading.get_ident():
+            raise RuntimeError("Wiki mutation requires the build lock")
         path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_suffix(path.suffix + ".tmp")
-        temporary.write_text(payload, encoding="utf-8")
-        os.replace(temporary, path)
+        descriptor, temporary_name = tempfile.mkstemp(
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            text=True,
+        )
+        temporary = Path(temporary_name)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
 
-    @classmethod
-    def _atomic_write(cls, path: Path, model: StrictModel) -> None:
+    def _atomic_write(self, path: Path, model: StrictModel) -> None:
         validated = type(model).model_validate(model.model_dump(mode="json"))
-        cls._atomic_replace(path, validated.model_dump_json(indent=2))
+        self._atomic_replace(path, validated.model_dump_json(indent=2))
 
     @contextmanager
     def build_lock(self) -> Iterator[None]:
@@ -89,9 +104,19 @@ class JsonWikiStore:
                 os.write(descriptor, str(os.getpid()).encode())
             finally:
                 os.close(descriptor)
+            self._lock_owner = threading.get_ident()
             yield
         finally:
+            self._lock_owner = None
             lock.unlink(missing_ok=True)
+
+    @contextmanager
+    def _mutation_lock(self) -> Iterator[None]:
+        if self._lock_owner == threading.get_ident():
+            yield
+            return
+        with self.build_lock():
+            yield
 
     def topics(self) -> list[WikiTopic]:
         return sorted(
@@ -125,29 +150,34 @@ class JsonWikiStore:
             raise ValueError("Topic and revision identity mismatch")
         topic_id = _safe_id(topic.topic_id)
         revision_id = _safe_id(revision.revision_id)
-        self._atomic_write(
-            self.root
-            / "history"
-            / "topics"
-            / topic_id
-            / f"{revision_id}.json",
-            revision,
-        )
-        self._atomic_write(self.root / "topics" / f"{topic_id}.json", topic)
+        with self._mutation_lock():
+            self._atomic_write(
+                self.root
+                / "history"
+                / "topics"
+                / topic_id
+                / f"{revision_id}.json",
+                revision,
+            )
+            self._atomic_write(self.root / "topics" / f"{topic_id}.json", topic)
 
     def assignment(self, agenda_id: str) -> TopicAssignment | None:
         path = self.root / "assignments" / f"{_safe_id(agenda_id)}.json"
         return _load(path, TopicAssignment) if path.exists() else None
 
     def save_assignment(self, value: TopicAssignment) -> None:
-        self._atomic_write(
-            self.root / "assignments" / f"{_safe_id(value.agenda_id)}.json", value
-        )
+        with self._mutation_lock():
+            self._atomic_write(
+                self.root / "assignments" / f"{_safe_id(value.agenda_id)}.json",
+                value,
+            )
 
     def save_relation(self, value: TopicRelation) -> None:
-        self._atomic_write(
-            self.root / "relations" / f"{_safe_id(value.relation_id)}.json", value
-        )
+        with self._mutation_lock():
+            self._atomic_write(
+                self.root / "relations" / f"{_safe_id(value.relation_id)}.json",
+                value,
+            )
 
     def reviews(self, status: str | None = None) -> list[WikiReview]:
         values = [
@@ -160,14 +190,16 @@ class JsonWikiStore:
         )
 
     def save_review(self, value: WikiReview) -> None:
-        self._atomic_write(
-            self.root / "reviews" / f"{_safe_id(value.review_id)}.json", value
-        )
+        with self._mutation_lock():
+            self._atomic_write(
+                self.root / "reviews" / f"{_safe_id(value.review_id)}.json", value
+            )
 
     def save_build(self, value: WikiBuildRun) -> None:
-        self._atomic_write(
-            self.root / "builds" / f"{_safe_id(value.run_id)}.json", value
-        )
+        with self._mutation_lock():
+            self._atomic_write(
+                self.root / "builds" / f"{_safe_id(value.run_id)}.json", value
+            )
 
     def build(self, run_id: str) -> WikiBuildRun:
         return _load(
@@ -233,17 +265,18 @@ class JsonWikiStore:
     def save_week(self, value: WeekWikiView) -> None:
         week = _safe_id(value.week)
         current = self.root / "weeks" / f"{week}.json"
-        if current.exists():
-            previous = _load(current, WeekWikiView)
-            self._atomic_write(
-                self.root
-                / "history"
-                / "weeks"
-                / week
-                / f"{_safe_id(previous.revision_id)}.json",
-                previous,
-            )
-        self._atomic_write(current, value)
+        with self._mutation_lock():
+            if current.exists():
+                previous = _load(current, WeekWikiView)
+                self._atomic_write(
+                    self.root
+                    / "history"
+                    / "weeks"
+                    / week
+                    / f"{_safe_id(previous.revision_id)}.json",
+                    previous,
+                )
+            self._atomic_write(current, value)
 
     def week(self, week: str) -> WeekWikiView:
         return _load(
@@ -251,11 +284,12 @@ class JsonWikiStore:
         )
 
     def rebuild_catalog(self) -> list[dict[str, Any]]:
-        catalog = [topic.model_dump(mode="json") for topic in self.topics()]
-        self._atomic_replace(
-            self.root / "catalog.json",
-            json.dumps(catalog, ensure_ascii=False, indent=2),
-        )
+        with self._mutation_lock():
+            catalog = [topic.model_dump(mode="json") for topic in self.topics()]
+            self._atomic_replace(
+                self.root / "catalog.json",
+                json.dumps(catalog, ensure_ascii=False, indent=2),
+            )
         return catalog
 
     def recover_incomplete_builds(
@@ -264,17 +298,21 @@ class JsonWikiStore:
         recovered: list[WikiBuildRun] = []
         recovered_at = now or datetime.now(UTC)
         cutoff = recovered_at - self.recovery_threshold
-        for path in sorted(self.root.joinpath("builds").glob("*.json")):
-            run = _load(path, WikiBuildRun)
-            if run.status not in TRANSIENT_BUILD_STATES or run.started_at >= cutoff:
-                continue
-            failed = run.model_copy(
-                update={
-                    "status": "failed",
-                    "completed_at": recovered_at,
-                    "error": "interrupted build",
-                }
-            )
-            self.save_build(failed)
-            recovered.append(failed)
+        with self._mutation_lock():
+            for path in sorted(self.root.joinpath("builds").glob("*.json")):
+                run = _load(path, WikiBuildRun)
+                if (
+                    run.status not in TRANSIENT_BUILD_STATES
+                    or run.started_at >= cutoff
+                ):
+                    continue
+                failed = run.model_copy(
+                    update={
+                        "status": "failed",
+                        "completed_at": recovered_at,
+                        "error": "interrupted build",
+                    }
+                )
+                self.save_build(failed)
+                recovered.append(failed)
         return recovered

@@ -1,8 +1,11 @@
 import json
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from threading import Event, Thread
 
 import pytest
 
+import wiki_store
 from knowledge_models import (
     CategoryPath,
     TopicAssignment,
@@ -67,6 +70,106 @@ def test_second_build_lock_is_rejected(tmp_path):
         with pytest.raises(WikiStoreLockError):
             with store.build_lock():
                 pass
+
+
+def test_mutation_writes_while_store_lock_is_held(tmp_path, monkeypatch):
+    store = JsonWikiStore(tmp_path / "wiki_data")
+    assignment = TopicAssignment(
+        agenda_id="A-locked",
+        topic_id="T-001",
+        decision="attach",
+        confidence=0.9,
+        rationale="same issue",
+        decision_source="auto",
+        decided_by="linker",
+        decided_at=datetime(2026, 7, 19, tzinfo=UTC),
+    )
+    original = store._atomic_write
+
+    def assert_locked(path, model):
+        assert (store.root / ".build.lock").exists()
+        original(path, model)
+
+    monkeypatch.setattr(store, "_atomic_write", assert_locked)
+
+    store.save_assignment(assignment)
+
+
+def test_concurrent_mutation_is_rejected_without_temp_collision(tmp_path, monkeypatch):
+    root = tmp_path / "wiki_data"
+    owner = JsonWikiStore(root)
+    contender = JsonWikiStore(root)
+    entered_write = Event()
+    release_write = Event()
+    writer_errors = []
+    original = owner._atomic_write
+
+    def slow_write(path, model):
+        entered_write.set()
+        release_write.wait(timeout=2)
+        original(path, model)
+
+    def write_as_owner():
+        try:
+            owner.save_review(WikiReview(review_id="R-owner", kind="assignment"))
+        except Exception as exc:  # pragma: no cover - asserted below
+            writer_errors.append(exc)
+
+    monkeypatch.setattr(owner, "_atomic_write", slow_write)
+    writer = Thread(target=write_as_owner)
+    writer.start()
+    assert entered_write.wait(timeout=2)
+
+    try:
+        with pytest.raises(WikiStoreLockError):
+            contender.save_review(WikiReview(review_id="R-contended", kind="assignment"))
+    finally:
+        release_write.set()
+        writer.join(timeout=2)
+
+    assert not writer.is_alive()
+    assert writer_errors == []
+    assert [review.review_id for review in contender.reviews()] == ["R-owner"]
+    assert not list(root.rglob("*.tmp"))
+
+
+def test_atomic_writes_use_unique_temporary_files(tmp_path, monkeypatch):
+    store = JsonWikiStore(tmp_path / "wiki_data")
+    sources = []
+    original_replace = wiki_store.os.replace
+
+    def record_replace(source, destination):
+        sources.append(Path(source))
+        original_replace(source, destination)
+
+    monkeypatch.setattr(wiki_store.os, "replace", record_replace)
+
+    store.save_review(WikiReview(review_id="R-unique", kind="assignment"))
+    store.save_review(WikiReview(review_id="R-unique", kind="assignment", status="held"))
+
+    assert len(set(sources)) == 2
+    assert all(path.suffix == ".tmp" for path in sources)
+
+
+def test_failed_current_pointer_replace_keeps_previous_topic(tmp_path, monkeypatch):
+    store = JsonWikiStore(tmp_path / "wiki_data")
+    store.publish_topic(topic(), revision())
+    current_path = store.root / "topics" / "T-001.json"
+    original_replace = wiki_store.os.replace
+
+    def fail_current_replace(source, destination):
+        if Path(destination) == current_path:
+            raise OSError("injected current-pointer failure")
+        original_replace(source, destination)
+
+    monkeypatch.setattr(wiki_store.os, "replace", fail_current_replace)
+
+    with pytest.raises(OSError, match="current-pointer failure"):
+        store.publish_topic(topic("REV-002"), revision("REV-002"))
+
+    assert store.topic("T-001").current_revision_id == "REV-001"
+    assert store.topic_revision("T-001", "REV-002").revision_id == "REV-002"
+    assert not list(store.root.rglob("*.tmp"))
 
 
 def test_records_round_trip_and_lists_are_sorted(tmp_path):
