@@ -18,9 +18,11 @@ from topic_wiki_builder import (
     TopicDraft,
     build_analysis_fn,
     build_draft_fn,
+    build_week,
     build_topic_revision,
     validate_topic_draft,
 )
+from wiki_store import JsonWikiStore
 
 
 def path(lotcd: str = "4SA") -> CategoryPath:
@@ -124,6 +126,22 @@ def previous_revision() -> TopicRevision:
         created_at=datetime(2026, 7, 12, tzinfo=UTC),
         model="old-model",
     )
+
+
+def test_unapproved_week_cannot_build(tmp_path):
+    class UnapprovedStore:
+        def approved_week(self, week):
+            raise ValueError(f"Week {week} is not approved")
+
+    with pytest.raises(ValueError, match="not approved"):
+        build_week(
+            "2026-W30",
+            UnapprovedStore(),
+            JsonWikiStore(tmp_path / "wiki_data"),
+            lambda *_: None,
+            lambda *_: None,
+            lambda *_: None,
+        )
 
 
 def test_uncited_factual_sentence_is_rejected():

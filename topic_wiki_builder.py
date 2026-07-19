@@ -23,7 +23,10 @@ from knowledge_models import (
     TopicSection,
     TopicState,
     WikiTopic,
+    WikiBuildRun,
 )
+from topic_linker import DecisionFn, link_agenda, persist_link_proposal
+from wiki_store import JsonWikiStore
 
 
 TERMINAL_STATE_HINTS = {
@@ -71,6 +74,15 @@ WikiLlm = tuple[Any, str]
 ANALYSIS_SYSTEM_PROMPT = """Analyze one semiconductor Topic using only the supplied approved Agenda evidence and previous revision. Return supported claims with Agenda IDs, a conservative state transition, and typed relation proposals. Never infer facts outside the supplied evidence."""
 
 DRAFT_SYSTEM_PROMPT = """Write the current Korean Topic narrative from the validated analysis and approved evidence. Return ordered structured sections only. Every factual sentence must cite its evidence as [agenda:<agenda_id>]. Do not return a complete Markdown document or invent facts."""
+
+TOPIC_PROMPT_VERSION = "topic-wiki-v1"
+WIKI_BUILDER_VERSION = "json-wiki-v1"
+
+
+def llm_connection() -> Any:
+    from agenda_extract import llm_connection as connection_factory
+
+    return connection_factory()
 
 
 def build_wiki_llm() -> WikiLlm:
@@ -124,6 +136,184 @@ def build_draft_fn(wiki_llm: WikiLlm | None = None) -> DraftFn:
 
     draft.model = model  # type: ignore[attr-defined]
     return draft
+
+
+def build_input_hash(
+    document: Any,
+    *,
+    taxonomy_version: int,
+    assignment_digest: str,
+    prompt_version: str,
+    builder_version: str,
+    model: str,
+) -> str:
+    payload = {
+        "active_run_id": document.active_run_id,
+        "items": [
+            document.items[key].model_dump(mode="json")
+            for key in sorted(document.items)
+        ],
+        "taxonomy_version": taxonomy_version,
+        "assignment_digest": assignment_digest,
+        "prompt_version": prompt_version,
+        "builder_version": builder_version,
+        "model": model,
+    }
+    return hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+
+
+def _new_topic(
+    topic_id: str,
+    week: str,
+    items: Sequence[ClassificationItem],
+) -> WikiTopic:
+    first = items[0]
+    target_paths = sorted(
+        {
+            (
+                item.decision.target_path.domain,
+                item.decision.target_path.tech,
+                item.decision.target_path.lotcd,
+            )
+            for item in items
+            if item.decision.target_path is not None
+        },
+        key=lambda value: tuple(part or "" for part in value),
+    )
+    return WikiTopic(
+        topic_id=topic_id,
+        title=first.topic_hint or first.summary,
+        topic_kind="knowledge",
+        primary_area="other",
+        state="new",
+        importance="medium",
+        first_seen_week=week,
+        last_updated_week=week,
+        target_paths=[
+            CategoryPath(domain=domain, tech=tech, lotcd=lotcd)
+            for domain, tech, lotcd in target_paths
+        ],
+        teams=sorted({item.team for item in items}),
+        source_agenda_ids=[],
+        current_revision_id="pending",
+    )
+
+
+def _group_assigned_items(
+    items: Sequence[ClassificationItem],
+    store: JsonWikiStore,
+) -> dict[str, list[ClassificationItem]]:
+    grouped: dict[str, list[ClassificationItem]] = {}
+    for item in sorted(items, key=lambda value: value.agenda_id):
+        assignment = store.assignment(item.agenda_id)
+        if assignment is not None:
+            grouped.setdefault(assignment.topic_id, []).append(item)
+    return dict(sorted(grouped.items()))
+
+
+def build_week(
+    week: str,
+    classification_store: Any,
+    wiki_store: JsonWikiStore,
+    link_decider: DecisionFn,
+    analysis_fn: AnalysisFn,
+    draft_fn: DraftFn,
+) -> WikiBuildRun:
+    from wiki_projections import build_week_view
+
+    document = classification_store.approved_week(week)
+    model = llm_connection().model
+    with wiki_store.build_lock():
+        eligible = sorted(
+            (
+                item
+                for item in document.items.values()
+                if item.decision.status in APPROVED_EVIDENCE_STATUSES
+                and item.decision.target_path is not None
+            ),
+            key=lambda item: item.agenda_id,
+        )
+        for item in eligible:
+            if wiki_store.assignment(item.agenda_id) is not None:
+                continue
+            proposal = link_agenda(item, wiki_store.topics(), link_decider)
+            persist_link_proposal(wiki_store, item, proposal)
+        input_hash = build_input_hash(
+            document,
+            taxonomy_version=classification_store.taxonomy.version,
+            assignment_digest=wiki_store.assignment_digest(),
+            prompt_version=TOPIC_PROMPT_VERSION,
+            builder_version=WIKI_BUILDER_VERSION,
+            model=model,
+        )
+        prior = wiki_store.successful_build(input_hash)
+        if prior is not None:
+            return prior
+        run = wiki_store.start_build(
+            week,
+            document.active_run_id,
+            input_hash,
+            model,
+        )
+        eligible_ids = {item.agenda_id for item in eligible}
+        if any(
+            review.kind == "assignment" and review.agenda_id in eligible_ids
+            for review in wiki_store.reviews("pending")
+        ):
+            return wiki_store.finish_build(run, status="review_required")
+
+        grouped = _group_assigned_items(eligible, wiki_store)
+        run = run.model_copy(
+            update={"status": "generating", "affected_topic_ids": list(grouped)}
+        )
+        wiki_store.save_build(run)
+        existing_topics = {value.topic_id: value for value in wiki_store.topics()}
+        known_topic_ids = {*existing_topics, *grouped}
+        failed: list[str] = []
+        for topic_id, items in grouped.items():
+            try:
+                current = existing_topics.get(topic_id) or _new_topic(
+                    topic_id, week, items
+                )
+                previous_revision = (
+                    wiki_store.topic_revision(
+                        topic_id, current.current_revision_id
+                    )
+                    if topic_id in existing_topics
+                    else None
+                )
+                assignments = [
+                    assignment
+                    for item in items
+                    if (assignment := wiki_store.assignment(item.agenda_id))
+                    is not None
+                ]
+                updated, revision, relations = build_topic_revision(
+                    current,
+                    items,
+                    assignments,
+                    analysis_fn,
+                    draft_fn,
+                    previous_revision=previous_revision,
+                    week=week,
+                    model=model,
+                    existing_topic_ids=known_topic_ids,
+                )
+                wiki_store.publish_topic(updated, revision)
+                for relation in relations:
+                    wiki_store.save_relation(relation)
+            except Exception:
+                failed.append(topic_id)
+        wiki_store.rebuild_catalog()
+        wiki_store.save_week(build_week_view(wiki_store, week, run.run_id))
+        status = "partially_failed" if failed else "published"
+        return wiki_store.finish_build(
+            run,
+            status=status,
+            failed_topic_ids=failed,
+        )
 
 
 def _split_after_citations(value: str) -> list[str]:

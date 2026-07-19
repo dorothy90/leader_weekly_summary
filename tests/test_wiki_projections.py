@@ -1,0 +1,265 @@
+import shutil
+from datetime import UTC, datetime
+from pathlib import Path
+
+import pytest
+
+from classification_store import JsonClassificationStore
+from knowledge_models import (
+    CategoryPath,
+    TopicAssignment,
+    TopicRevision,
+    TopicSection,
+    WikiReview,
+    WikiTopic,
+)
+from topic_linker import TopicLinkDecision
+from topic_wiki_builder import TopicAnalysis, TopicDraft, build_week
+from wiki_projections import (
+    LOTCD_SECTION_ORDER,
+    build_lotcd_view,
+    build_team_view,
+    build_topic_detail,
+    build_week_view,
+    list_topics,
+)
+from wiki_store import JsonWikiStore
+
+
+FIXTURE = Path(__file__).parents[1] / "fixtures" / "wiki" / "approved-week.json"
+RULES = Path(__file__).parents[1] / "config" / "classification_rules.json"
+
+
+def path(lotcd="4SA"):
+    return CategoryPath(domain="DRAM", tech="Spica", lotcd=lotcd)
+
+
+def topic(topic_id="T-001", *, week="2026-W30", state="investigating"):
+    return WikiTopic(
+        topic_id=topic_id,
+        title="4SA 수율 하락",
+        topic_kind="issue",
+        primary_area="yield_defect",
+        state=state,
+        importance="high",
+        first_seen_week="2026-W29",
+        last_updated_week=week,
+        target_paths=[path()],
+        teams=["Yield", "Process"],
+        source_agenda_ids=["A-001"],
+        current_revision_id=f"REV-{topic_id}",
+    )
+
+
+def revision(value):
+    return TopicRevision(
+        revision_id=value.current_revision_id,
+        topic_id=value.topic_id,
+        week=value.last_updated_week,
+        body_markdown="## 조치와 의사결정\n\n조건을 조정했다. [agenda:A-001]",
+        sections=[
+            TopicSection(
+                key="actions_and_decisions",
+                title="조치와 의사결정",
+                body="조건을 조정했다. [agenda:A-001]",
+            )
+        ],
+        claims=[],
+        source_agenda_ids=["A-001"],
+        created_at=datetime(2026, 7, 19, tzinfo=UTC),
+        model="test-model",
+    )
+
+
+@pytest.fixture
+def stores(tmp_path, monkeypatch):
+    data_dir = tmp_path / "classification_data"
+    data_dir.mkdir()
+    shutil.copy(FIXTURE, data_dir / "2026-W30.json")
+    classification = JsonClassificationStore(data_dir, RULES)
+    wiki = JsonWikiStore(tmp_path / "wiki_data")
+    value = topic()
+    wiki.publish_topic(value, revision(value))
+    wiki.save_assignment(
+        TopicAssignment(
+            agenda_id="A-001",
+            topic_id="T-001",
+            decision="attach",
+            confidence=1,
+            rationale="accepted",
+            decision_source="manual",
+            decided_by="tester",
+            decided_at=datetime(2026, 7, 19, tzinfo=UTC),
+        )
+    )
+    monkeypatch.setenv("KNOWLEDGE_LLM_BASE_URL", "http://localhost:8000/v1")
+    monkeypatch.setenv("KNOWLEDGE_LLM_MODEL", "test-model")
+    return classification, wiki
+
+
+def test_four_views_share_canonical_topic_ids(stores):
+    classification, wiki = stores
+
+    assert [item.topic_id for item in list_topics(wiki)] == ["T-001"]
+    detail = build_topic_detail(wiki, classification, "T-001")
+    assert detail.topic.topic_id == "T-001"
+    assert "T-001" in build_lotcd_view(wiki, "DRAM", "Spica", "4SA").topic_ids
+    assert "T-001" in build_team_view(wiki, "Yield").topic_ids
+    assert "T-001" in build_week_view(wiki, "2026-W30").changed_topic_ids
+
+
+def test_lotcd_projection_has_fixed_sections_and_one_primary_area_membership(stores):
+    _, wiki = stores
+
+    view = build_lotcd_view(wiki, "DRAM", "Spica", "4SA")
+
+    assert LOTCD_SECTION_ORDER == (
+        "summary",
+        "recent_changes",
+        "active_topics",
+        "knowledge_areas",
+        "actions_and_decisions",
+        "related_lotcds",
+        "closed_topics",
+        "activity",
+    )
+    assert [item.topic_id for item in view.knowledge_areas["yield_defect"]] == [
+        "T-001"
+    ]
+    assert view.active_topics[0].rank_reasons
+
+
+def test_pending_relation_review_does_not_block_publication(stores):
+    classification, wiki = stores
+    wiki.save_review(
+        WikiReview(
+            review_id="R-relation",
+            kind="relation",
+            relation_id="REL-001",
+        )
+    )
+
+    result = build_week(
+        "2026-W30",
+        classification,
+        wiki,
+        lambda *_: TopicLinkDecision(
+            action="review", rationale="unused", confidence=1
+        ),
+        fake_analysis,
+        fake_draft,
+    )
+
+    assert result.status == "published"
+    assert result.classification_run_id == "CLASS-001"
+    assert wiki.week("2026-W30").build_run_id == result.run_id
+
+
+def test_identical_successful_build_is_reused(stores):
+    classification, wiki = stores
+    calls = []
+
+    def counting_analysis(context):
+        calls.append(context)
+        return fake_analysis(context)
+
+    counting_analysis.model = "test-model"
+    first = build_week(
+        "2026-W30",
+        classification,
+        wiki,
+        lambda *_: None,
+        counting_analysis,
+        fake_draft,
+    )
+    second = build_week(
+        "2026-W30",
+        classification,
+        wiki,
+        lambda *_: None,
+        counting_analysis,
+        fake_draft,
+    )
+
+    assert second.run_id == first.run_id
+    assert len(calls) == 1
+
+
+def test_pending_assignment_review_blocks_publication(stores):
+    classification, wiki = stores
+    wiki.save_review(
+        WikiReview(
+            review_id="R-assignment",
+            kind="assignment",
+            agenda_id="A-001",
+        )
+    )
+
+    result = build_week(
+        "2026-W30",
+        classification,
+        wiki,
+        lambda *_: None,
+        fake_analysis,
+        fake_draft,
+    )
+
+    assert result.status == "review_required"
+    assert not (wiki.root / "weeks" / "2026-W30.json").exists()
+
+
+def test_failed_topic_update_keeps_previous_revision_and_builds_partial(stores):
+    classification, wiki = stores
+    previous = wiki.topic("T-001").current_revision_id
+
+    def fail_analysis(_context):
+        raise ValueError("invalid generated topic")
+
+    fail_analysis.model = "test-model"
+    result = build_week(
+        "2026-W30",
+        classification,
+        wiki,
+        lambda *_: None,
+        fail_analysis,
+        fake_draft,
+    )
+
+    assert result.status == "partially_failed"
+    assert result.failed_topic_ids == ["T-001"]
+    assert wiki.topic("T-001").current_revision_id == previous
+    assert wiki.week("2026-W30").changed_topic_ids == ["T-001"]
+
+
+def test_week_revision_is_versioned_from_projection_content(stores):
+    _, wiki = stores
+    first = build_week_view(wiki, "2026-W30", "RUN-001")
+    second = build_week_view(wiki, "2026-W30", "RUN-001")
+
+    assert first.revision_id == second.revision_id
+    assert first.build_run_id == "RUN-001"
+
+
+def fake_analysis(_context):
+    return TopicAnalysis(
+        title="4SA 수율 하락",
+        topic_kind="issue",
+        primary_area="yield_defect",
+        secondary_areas=[],
+        next_state="monitoring",
+        importance="high",
+        claims=[],
+        stale_claims=[],
+        relation_proposals=[],
+        open_questions=[],
+    )
+
+
+fake_analysis.model = "test-model"
+
+
+def fake_draft(_context, _analysis):
+    return TopicDraft(sections=[])
+
+
+fake_draft.model = "test-model"

@@ -1,0 +1,47 @@
+{
+  "week": "2026-W30",
+  "workflow_state": "approved",
+  "active_run_id": "CLASS-001",
+  "approved_at": "2026-07-19T00:00:00Z",
+  "approved_by": "tester@example.com",
+  "runs": {
+    "CLASS-001": {
+      "id": "CLASS-001",
+      "week": "2026-W30",
+      "status": "completed",
+      "prompt_version": "classification-v1",
+      "classifier_version": "classification-v1",
+      "taxonomy_version": 1,
+      "alias_version": 1,
+      "prior_run_id": null,
+      "started_at": "2026-07-19T00:00:00Z",
+      "completed_at": "2026-07-19T00:01:00Z",
+      "error": null
+    }
+  },
+  "items": {
+    "A-001": {
+      "agenda_id": "A-001",
+      "mail_id": "M-001",
+      "summary": "4SA 수율이 하락했다.",
+      "source_quote": "4SA 수율이 하락했다.",
+      "classification_context": "4SA 수율이 하락했다.",
+      "item_kind": "lotcd_specific",
+      "decision": {
+        "status": "confirmed",
+        "target_path": {"domain": "DRAM", "tech": "Spica", "lotcd": "4SA"},
+        "matches": [],
+        "diagnostics": [],
+        "confidence": 1.0
+      },
+      "revision_count": 0,
+      "team": "Yield",
+      "subject": "Weekly yield",
+      "received_at": "2026-07-19T00:00:00Z",
+      "source_path": "mail/M-001",
+      "topic_hint": "4SA 수율 하락",
+      "state_hint": "monitoring"
+    }
+  },
+  "revisions": {}
+}
