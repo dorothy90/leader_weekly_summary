@@ -38,6 +38,7 @@ export function TeamWikiPage() {
     return () => controller.abort()
   }, [team])
 
+  if (error) return <p className="projection-page-status projection-page-status--error" role="alert">팀 기여 보기를 불러오지 못했습니다.</p>
   if (!team) {
     return (
       <section className="projection-page projection-page--empty">
@@ -50,7 +51,6 @@ export function TeamWikiPage() {
       </section>
     )
   }
-  if (error) return <p className="projection-page-status projection-page-status--error" role="alert">팀 기여 보기를 불러오지 못했습니다.</p>
   if (!view) return <p className="projection-page-status" role="status">팀 기여 보기를 불러오는 중입니다.</p>
 
   const from = location.pathname + location.search

@@ -41,6 +41,14 @@ it('shows backend-derived team choices at the root route', async () => {
   expect(fetchWikiTeams).toHaveBeenCalled()
 })
 
+it('shows an alert when the root team index fails', async () => {
+  vi.mocked(fetchWikiTeams).mockRejectedValue(new Error('failed'))
+  render(<MemoryRouter initialEntries={['/wiki/teams']}>
+    <Routes><Route path="/wiki/teams/*" element={<TeamWikiPage />} /></Routes>
+  </MemoryRouter>)
+  expect(await screen.findByRole('alert')).toHaveTextContent('팀 기여 보기를 불러오지 못했습니다.')
+})
+
 function renderTeam(route: string) {
   return render(
     <MemoryRouter initialEntries={[route]}>

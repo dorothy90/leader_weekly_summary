@@ -585,10 +585,104 @@ def test_second_week_update_retains_prior_claim_and_citation():
         topic(), [old, new],
         [assignment(agenda_id="A-old"), assignment(agenda_id="A-new")],
         analyzed, drafted, previous_revision=previous_revision(), model="test-model",
-        added_agenda_ids=["A-new"],
     )
 
     assert {claim.text for claim in revision.claims} == {"기존 관찰", "새 관찰"}
     assert "[agenda:A-old]" in revision.body_markdown
     assert revision.added_agenda_ids == ["A-new"]
     assert updated.source_agenda_ids == ["A-new", "A-old"]
+
+
+def test_retention_does_not_resurrect_stale_prose_from_same_section():
+    old = item(agenda_id="A-old")
+    stale = item(agenda_id="A-stale")
+    new = item(agenda_id="A-new")
+    previous = previous_revision().model_copy(update={
+        "claims": [
+            SupportedClaim(text="기존 관찰", agenda_ids=["A-old"]),
+            SupportedClaim(text="폐기 관찰", agenda_ids=["A-stale"]),
+        ],
+        "source_agenda_ids": ["A-old", "A-stale"],
+        "sections": [TopicSection(
+            key="observations", title="관찰",
+            body="기존 관찰. [agenda:A-old] 폐기 관찰. [agenda:A-stale]",
+        )],
+    })
+    analyzed = analysis().model_copy(update={
+        "claims": [SupportedClaim(text="새 관찰", agenda_ids=["A-new"])],
+        "stale_claims": ["폐기 관찰"],
+    })
+
+    _, revision, _ = build_topic_revision(
+        topic(), [old, stale, new],
+        [assignment(agenda_id=value) for value in ("A-old", "A-stale", "A-new")],
+        analyzed,
+        draft(sections=[TopicSection(
+            key="observations", title="관찰", body="새 관찰. [agenda:A-new]",
+        )]),
+        previous_revision=previous, model="test-model",
+    )
+
+    assert "기존 관찰. [agenda:A-old]" in revision.body_markdown
+    assert "폐기 관찰" not in revision.body_markdown
+    assert "A-stale" not in revision.body_markdown
+
+
+def test_old_terminal_evidence_cannot_resolve_or_close_topic():
+    old_terminal = item(agenda_id="A-old", state_hint="resolved")
+    new_open = item(agenda_id="A-new", state_hint="monitoring")
+    for next_state in ("resolved", "closed"):
+        with pytest.raises(ValueError, match="new terminal evidence"):
+            build_topic_revision(
+                topic(), [old_terminal, new_open],
+                [assignment(agenda_id="A-old"), assignment(agenda_id="A-new")],
+                analysis(state=next_state), draft(),
+                previous_revision=previous_revision(), model="test-model",
+            )
+
+
+def test_new_terminal_evidence_can_resolve_and_close_topic():
+    for next_state in ("resolved", "closed"):
+        _, revision, _ = build_topic_revision(
+            topic(), [item(agenda_id="A-old"), item(agenda_id="A-new", state_hint="closed")],
+            [assignment(agenda_id="A-old"), assignment(agenda_id="A-new")],
+            analysis(state=next_state), draft(),
+            previous_revision=previous_revision(), model="test-model",
+        )
+        assert revision.new_state == next_state
+
+
+def test_reopened_requires_newer_nonterminal_evidence():
+    old = item(agenda_id="A-old", state_hint="closed")
+    old = old.model_copy(update={"received_at": datetime(2026, 7, 20, tzinfo=UTC)})
+    prior = previous_revision().model_copy(update={"source_agenda_ids": ["A-old"]})
+    terminal_topic = topic(state="closed")
+    too_old = item(agenda_id="A-new", state_hint="monitoring").model_copy(
+        update={"received_at": datetime(2026, 7, 19, tzinfo=UTC)}
+    )
+    with pytest.raises(ValueError, match="newer nonterminal evidence"):
+        build_topic_revision(
+            terminal_topic, [old, too_old],
+            [assignment(agenda_id="A-old"), assignment(agenda_id="A-new")],
+            analysis(state="reopened"), draft(), previous_revision=prior,
+            model="test-model",
+        )
+
+    newer = too_old.model_copy(update={"received_at": datetime(2026, 7, 21, tzinfo=UTC)})
+    _, revision, _ = build_topic_revision(
+        terminal_topic, [old, newer],
+        [assignment(agenda_id="A-old"), assignment(agenda_id="A-new")],
+        analysis(state="reopened"), draft(), previous_revision=prior,
+        model="test-model",
+    )
+    assert revision.new_state == "reopened"
+
+
+def test_added_agendas_are_derived_from_previous_revision_sources():
+    _, revision, _ = build_topic_revision(
+        topic(), [item(agenda_id="A-old"), item(agenda_id="A-new")],
+        [assignment(agenda_id="A-old"), assignment(agenda_id="A-new")],
+        analysis(), draft(), previous_revision=previous_revision(),
+        model="test-model",
+    )
+    assert revision.added_agenda_ids == ["A-new"]

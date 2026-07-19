@@ -77,6 +77,7 @@ export function WeekWikiPage() {
     return () => controller.abort()
   }, [week])
 
+  if (error) return <p className="projection-page-status projection-page-status--error" role="alert">주차 스냅샷을 불러오지 못했습니다.</p>
   if (!week) {
     return (
       <section className="projection-page projection-page--empty">
@@ -89,7 +90,6 @@ export function WeekWikiPage() {
       </section>
     )
   }
-  if (error) return <p className="projection-page-status projection-page-status--error" role="alert">주차 스냅샷을 불러오지 못했습니다.</p>
   if (!view || (view.build_run_id && !build)) return <p className="projection-page-status" role="status">주차 스냅샷을 불러오는 중입니다.</p>
 
   const from = location.pathname + location.search

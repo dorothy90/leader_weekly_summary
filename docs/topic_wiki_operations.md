@@ -54,6 +54,42 @@ citations only through those immutable references. Wiki data created before this
 evidence-reference contract must be rebuilt from approved classification weeks.
 There is no fallback to mutable `classification_data` for an old Topic revision.
 
+## Roll out the immutable-evidence contract
+
+Use this procedure only for a deployment that already has Topic revisions without
+`evidence_refs`. Stop Wiki writers first using the process check in the recovery
+section. Choose explicit deployment paths and an unused backup path; do not point
+either variable at a workspace root or home directory.
+
+```bash
+WIKI_DATA_PATH=/srv/weekly-mail-agent/wiki_data
+WIKI_BACKUP_PATH=/srv/weekly-mail-agent/wiki_data.pre-evidence-backup
+test -d "$WIKI_DATA_PATH"
+test ! -e "$WIKI_BACKUP_PATH"
+mv "$WIKI_DATA_PATH" "$WIKI_BACKUP_PATH"
+mkdir -p "$WIKI_DATA_PATH"
+```
+
+The move is the rollback copy and is recoverable; do not delete it during rollout.
+Set `WIKI_DATA_DIR` to the new explicit directory, then rebuild every approved week
+in chronological order. Replace the sample list below with the deployment's
+verified approved-week list from `classification_data`; do not include an
+unapproved week.
+
+```bash
+export WIKI_DATA_DIR=/srv/weekly-mail-agent/wiki_data
+for APPROVED_WEEK in 2026-W28 2026-W29 2026-W30; do
+  python process_wiki.py --week "$APPROVED_WEEK" --allow-external-llm || exit 1
+done
+```
+
+Verify Topic evidence and Week snapshots before restarting writers. Roll back by
+stopping writers, moving the new `/srv/weekly-mail-agent/wiki_data` aside to a
+separately named diagnostic path, and moving
+`/srv/weekly-mail-agent/wiki_data.pre-evidence-backup` back to
+`/srv/weekly-mail-agent/wiki_data`. Keep both directories until validation and
+retention approval are complete.
+
 ## Build an approved week
 
 Set the OpenAI-compatible connection variables required by the deployment,

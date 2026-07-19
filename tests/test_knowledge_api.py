@@ -252,3 +252,34 @@ def test_team_and_week_root_indexes_are_backend_derived(api_app):
 
     assert teams.json() == {"values": ["Yield"]}
     assert weeks.json() == {"values": ["2026-W30"]}
+
+
+def test_relation_accept_api_versions_origin_week_immediately(api_app):
+    store = api_app.state.wiki_store
+    store.save_week(build_week_view(store, "2026-W30", "RUN-1"))
+    before = store.week("2026-W30")
+    relation = TopicRelation(
+        relation_id="REL-origin", source_topic_id="T-001", target_topic_id="T-002",
+        kind="supports", agenda_ids=["A-001"], confidence=.9,
+        review_state="pending", creation_week="2026-W30",
+    )
+    store.save_relation(relation)
+    store.save_review(WikiReview(
+        review_id="R-REL-origin", kind="relation", relation_id="REL-origin",
+        relation_kind="supports", relation_agenda_ids=["A-001"],
+    ))
+
+    first = post(
+        api_app, "/api/knowledge/wiki/reviews/R-REL-origin/resolve",
+        json={"action": "accept"},
+    )
+    retried = post(
+        api_app, "/api/knowledge/wiki/reviews/R-REL-origin/resolve",
+        json={"action": "accept"},
+    )
+    week = request(api_app, "/api/knowledge/wiki/weeks/2026-W30")
+
+    assert first.status_code == retried.status_code == 200
+    assert week.json()["revision_id"] != before.revision_id
+    assert week.json()["new_relation_ids"] == ["REL-origin"]
+    assert len(week.json()["relation_review_events"]) == 1

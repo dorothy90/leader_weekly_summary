@@ -54,6 +54,14 @@ it('shows persisted week choices at the root route', async () => {
   expect(fetchWikiWeeks).toHaveBeenCalled()
 })
 
+it('shows an alert when the root week index fails', async () => {
+  vi.mocked(fetchWikiWeeks).mockRejectedValue(new Error('failed'))
+  render(<MemoryRouter initialEntries={['/wiki/weeks']}>
+    <Routes><Route path="/wiki/weeks/*" element={<WeekWikiPage />} /></Routes>
+  </MemoryRouter>)
+  expect(await screen.findByRole('alert')).toHaveTextContent('주차 스냅샷을 불러오지 못했습니다.')
+})
+
 function renderWeek(route: string) {
   return render(
     <MemoryRouter initialEntries={[route]}>

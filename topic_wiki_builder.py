@@ -42,6 +42,10 @@ TERMINAL_STATE_HINTS = {
     "positive",
     "normal",
 }
+NONTERMINAL_STATE_HINTS = {
+    "open", "investigating", "action_in_progress", "monitoring", "ongoing",
+    "active", "reopened",
+}
 APPROVED_EVIDENCE_STATUSES = {"confirmed", "manually_corrected", "aggregate"}
 CITATION_PATTERN = re.compile(r"\[agenda:([^\]\s]+)\]")
 CLAIM_PUNCTUATION = ".!?;。！？；"
@@ -358,7 +362,6 @@ def build_week(
                     model=model,
                     existing_topic_ids=known_topic_ids,
                     evidence_refs=archived_refs,
-                    added_agenda_ids=[item.agenda_id for item in items],
                     build_run_id=run.run_id,
                 )
                 relation_changes: list[TopicRelationChange] = []
@@ -601,6 +604,7 @@ def _build_relations(
     evidence: Mapping[str, ClassificationItem],
     existing_topic_ids: set[str] | None,
     build_run_id: str = "",
+    creation_week: str = "",
 ) -> list[TopicRelation]:
     if proposals and existing_topic_ids is None:
         raise ValueError("existing Topic IDs are required for relation proposals")
@@ -636,6 +640,7 @@ def _build_relations(
                 created_by="topic-wiki-builder",
                 created_at=datetime.now(UTC),
                 created_build_run_id=build_run_id,
+                creation_week=creation_week or topic.last_updated_week,
             )
         )
     return relations
@@ -653,7 +658,6 @@ def build_topic_revision(
     model: str | None = None,
     existing_topic_ids: set[str] | None = None,
     evidence_refs: Mapping[str, str] | None = None,
-    added_agenda_ids: Sequence[str] | None = None,
     build_run_id: str = "",
 ) -> tuple[WikiTopic, TopicRevision, list[TopicRelation]]:
     evidence = {item.agenda_id: item for item in items}
@@ -679,6 +683,7 @@ def build_topic_revision(
     analysis = TopicAnalysis.model_validate(
         analysis_source(context) if callable(analysis_source) else analysis_source
     )
+    retained_previous_claims: list[SupportedClaim] = []
     if previous_revision is not None:
         stale = {value.strip() for value in analysis.stale_claims}
         claims_by_text = {
@@ -688,18 +693,50 @@ def build_topic_revision(
             and set(claim.agenda_ids) <= set(evidence)
         }
         claims_by_text.update({claim.text: claim for claim in analysis.claims})
+        retained_previous_claims = [
+            claim for claim in previous_revision.claims
+            if claim.text not in stale
+            and set(claim.agenda_ids) <= set(evidence)
+            and claims_by_text.get(claim.text) == claim
+        ]
         analysis = analysis.model_copy(update={
             "claims": [claims_by_text[key] for key in sorted(claims_by_text)]
         })
+    previous_ids = set(previous_revision.source_agenda_ids) if previous_revision else set()
+    if previous_revision and previous_revision.evidence_refs:
+        previous_ids.update(ref.rsplit("/", 1)[-1] for ref in previous_revision.evidence_refs)
+    computed_added_ids = sorted(set(evidence) - previous_ids)
+    new_items = [evidence[agenda_id] for agenda_id in computed_added_ids]
     if (
-        topic.state != "resolved"
-        and analysis.next_state == "resolved"
+        analysis.next_state in {"resolved", "closed"}
+        and topic.state != analysis.next_state
         and not any(
             item.state_hint.strip().casefold() in TERMINAL_STATE_HINTS
-            for item in items
+            for item in new_items
         )
     ):
-        raise ValueError("resolved transition requires terminal evidence")
+        raise ValueError(f"{analysis.next_state} transition requires new terminal evidence")
+    if analysis.next_state == "reopened":
+        if topic.state not in {"resolved", "closed"}:
+            raise ValueError("reopened transition requires a terminal previous state")
+
+        def evidence_order(item: ClassificationItem) -> tuple[str, str]:
+            evidence_ref = (evidence_refs or {}).get(item.agenda_id, "")
+            evidence_week = evidence_ref.split("/", 1)[0] if evidence_ref else ""
+            received = item.received_at.isoformat() if item.received_at else ""
+            return evidence_week, received
+
+        prior_orders = [
+            evidence_order(item) for item in items if item.agenda_id in previous_ids
+        ]
+        newest_prior = max(prior_orders, default=("", ""))
+        valid_reopen = any(
+            item.state_hint.strip().casefold() in NONTERMINAL_STATE_HINTS
+            and evidence_order(item) > newest_prior
+            for item in new_items
+        )
+        if not valid_reopen:
+            raise ValueError("reopened transition requires newer nonterminal evidence")
     draft = TopicDraft.model_validate(
         draft_source(context, analysis) if callable(draft_source) else draft_source
     )
@@ -707,6 +744,12 @@ def build_topic_revision(
         retained_ids = {
             agenda_id for claim in analysis.claims for agenda_id in claim.agenda_ids
         } & set(evidence)
+        stale_ids = {
+            agenda_id
+            for claim in previous_revision.claims
+            if claim.text in stale
+            for agenda_id in claim.agenda_ids
+        }
         next_sections = list(draft.sections)
         by_key = {section.key: index for index, section in enumerate(next_sections)}
         current_citations = {
@@ -714,34 +757,53 @@ def build_topic_revision(
             for agenda_id in CITATION_PATTERN.findall(section.body)
         }
         for previous_section in previous_revision.sections:
-            previous_ids = set(CITATION_PATTERN.findall(previous_section.body))
-            if not (previous_ids & retained_ids - current_citations):
+            retained_chunks = []
+            for chunk in _factual_chunks(previous_section):
+                chunk_ids = set(CITATION_PATTERN.findall(chunk))
+                if (
+                    chunk_ids
+                    and chunk_ids <= retained_ids
+                    and not chunk_ids & stale_ids
+                    and not chunk_ids <= current_citations
+                ):
+                    retained_chunks.append(chunk)
+            if not retained_chunks:
                 continue
+            retained_body = "\n".join(retained_chunks)
             if previous_section.key in by_key:
                 index = by_key[previous_section.key]
                 current = next_sections[index]
                 next_sections[index] = current.model_copy(update={
-                    "body": f"{previous_section.body}\n\n{current.body}".strip()
+                    "body": f"{retained_body}\n\n{current.body}".strip()
                 })
             else:
                 by_key[previous_section.key] = len(next_sections)
-                next_sections.append(previous_section)
-            current_citations.update(previous_ids)
+                next_sections.append(previous_section.model_copy(update={"body": retained_body}))
+            current_citations.update(CITATION_PATTERN.findall(retained_body))
         draft = draft.model_copy(update={"sections": next_sections})
+        rendered_ids = {
+            agenda_id
+            for section in draft.sections
+            for agenda_id in CITATION_PATTERN.findall(section.body)
+        }
+        for claim in retained_previous_claims:
+            if not set(claim.agenda_ids) <= rendered_ids:
+                raise ValueError(f"retained claim missing citation prose: {claim.text}")
     cited_ids = validate_topic_draft(draft, evidence)
     _validate_evidence_ids(sorted(cited_ids), evidence, topic_for_build)
     for claim in analysis.claims:
         _validate_evidence_ids(claim.agenda_ids, evidence, topic_for_build)
 
+    revision_week = week or topic.last_updated_week
     relations = _build_relations(
         topic_for_build,
         analysis.relation_proposals,
         evidence,
         existing_topic_ids,
         build_run_id,
+        revision_week,
     )
     model_name = _model_name(analysis_source, draft_source, model)
-    revision_week = week or topic.last_updated_week
     body_markdown = _render_markdown(draft.sections)
     revision_id = _revision_id(
         topic.topic_id,
@@ -783,7 +845,7 @@ def build_topic_revision(
         ),
         previous_state=topic.state,
         new_state=analysis.next_state,
-        added_agenda_ids=sorted(added_agenda_ids or source_agenda_ids),
+        added_agenda_ids=computed_added_ids,
         added_claims=[next_by_text[key] for key in sorted(next_by_text.keys() - previous_by_text.keys())],
         removed_claims=[previous_by_text[key] for key in sorted(previous_by_text.keys() - next_by_text.keys())],
         changed_claims=changed_claims,

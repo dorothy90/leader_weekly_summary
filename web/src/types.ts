@@ -282,6 +282,12 @@ export interface WeekWikiView {
   reopened_topic_ids: string[]
   actions_and_decisions: TopicListItem[]
   new_relation_ids: string[]
+  relation_review_events?: Array<{
+    relation_id: string
+    action: 'accepted' | 'rejected'
+    actor: string
+    reviewed_at: string
+  }>
   pending_assignment_count: number
   contradictions: string[]
   teams: string[]

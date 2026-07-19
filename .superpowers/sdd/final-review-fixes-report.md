@@ -46,3 +46,25 @@ DONE
 
 - No in-place migration can reconstruct immutable historical approval evidence safely from mutable current JSON. Rebuild any pre-contract Wiki data from approved classification weeks; the runbook documents this.
 - Focused tests and the Web production build were run as requested. The controller retains the final full-suite gate.
+
+## Second re-review fix wave
+
+### Behavior changes
+
+- Prior prose retention now operates on validated factual chunks. A chunk is retained only when all of its citations support retained structured claims and none support a stale claim; an entire prior section is never concatenated.
+- `resolved` and `closed` transitions require terminal hints from the revision's derived `added_agenda_ids`, not accumulated evidence. `reopened` requires a terminal prior state and newly added evidence with an accepted nonterminal hint that is newer by archived Week/`received_at` ordering.
+- `added_agenda_ids` is always derived as current authorized evidence minus the previous revision's immutable evidence/source IDs. The builder no longer accepts a caller-supplied delta.
+- Relation accept/reject journals now include an immutable Week update. The originating Week receives one accepted/rejected review event, a new Week revision, and immediate history preservation; only accept adds the relation to `new_relation_ids`. Journal replay is invoked before review resolution so a same-process retry converges after a partial write.
+- Team and Week root index failures now render alerts. The runbook includes explicit recoverable backup/move, chronological approved-week rebuild, verification, and rollback steps with bounded deployment paths.
+
+### RED / GREEN evidence
+
+- RED: relation accept/reject tests initially observed the unchanged originating Week revision. Stale-section and lifecycle regressions were authored first against the identified whole-section/accumulated-evidence branches; their separate pre-fix output was not retained because the targeted selector ran the relation cases.
+- GREEN backend affected set: 90 passed across Topic builder, projections, linker, store, history integrity, and API tests; a final narrowed confirmation after recency/retry hardening passed 59 tests.
+- GREEN Web affected set: Team/Week tests passed 10 tests, including root-index alert behavior.
+- GREEN production Web build: `npm run build` passed TypeScript checking and Vite production bundling.
+- `git diff --check` passed.
+
+### Migration note
+
+- The immutable-evidence rollout remains rebuild-only for pre-contract Wiki data. The runbook now requires an explicit backup move of `/srv/weekly-mail-agent/wiki_data`, a separately created replacement directory, chronological rebuild of a verified approved-week list, and a reversible rollback move. No recursive deletion is part of the procedure.

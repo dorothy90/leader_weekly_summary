@@ -383,9 +383,43 @@ def test_rebuild_preserves_resolved_relation_and_review(
             )
         )
         _build_with_relation(classification, wiki)
-        assert review.relation_id not in wiki.week("2026-W30").new_relation_ids
+        assert wiki.week("2026-W30").new_relation_ids.count(review.relation_id) == 1
     else:
         assert review.relation_id not in snapshot.new_relation_ids
+
+
+@pytest.mark.parametrize("action", ["accept", "reject"])
+def test_relation_resolution_versions_origin_week_immediately_and_once(stores, action):
+    classification, wiki = stores
+    target = topic("T-002")
+    wiki.publish_topic(target, revision(target))
+    _build_with_relation(classification, wiki)
+    review = wiki.reviews("pending")[0]
+    before = wiki.week("2026-W30")
+
+    resolved = resolve_wiki_review(
+        wiki, review.review_id, WikiReviewResolution(action=action),
+        "operator@example.com",
+    )
+    after = wiki.week("2026-W30")
+    retried = resolve_wiki_review(
+        wiki, review.review_id, WikiReviewResolution(action=action),
+        "operator@example.com",
+    )
+
+    assert resolved == retried
+    assert after.revision_id != before.revision_id
+    assert [event.relation_id for event in after.relation_review_events] == [
+        review.relation_id
+    ]
+    assert after.relation_review_events[0].action == (
+        "accepted" if action == "accept" else "rejected"
+    )
+    assert after.new_relation_ids == (
+        [review.relation_id] if action == "accept" else []
+    )
+    history = list((wiki.root / "history" / "weeks" / "2026-W30").glob("*.json"))
+    assert [path.stem for path in history] == [before.revision_id]
 
 
 def test_rebuild_preserves_pending_relation_and_review_metadata(stores):

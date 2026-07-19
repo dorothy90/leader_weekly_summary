@@ -393,6 +393,11 @@ def build_week_view(
     week: str,
     build_run_id: str | None = None,
 ) -> WeekWikiView:
+    try:
+        previous_snapshot = store.week(week)
+        review_events = previous_snapshot.relation_review_events
+    except KeyError:
+        review_events = []
     resolved_build_run_id = build_run_id
     if resolved_build_run_id is None:
         try:
@@ -438,7 +443,7 @@ def build_week_view(
             revision.previous_state is None and topics_by_id[revision.topic_id].state == "reopened"
         )
     )
-    relation_ids = sorted(
+    relation_ids = sorted({
         relation.relation_id for relation in accepted
         if relation.relation_id in {
             change.relation_id
@@ -449,7 +454,9 @@ def build_week_view(
             not relation.created_build_run_id
             and {relation.source_topic_id, relation.target_topic_id} & set(changed_ids)
         )
-    )
+    } | {
+        event.relation_id for event in review_events if event.action == "accepted"
+    })
     target_agenda_ids: set[str] = set()
     if resolved_build_run_id:
         try:
@@ -480,6 +487,7 @@ def build_week_view(
             if _has_actions(store, topics_by_id[item.topic_id])
         ],
         "new_relation_ids": relation_ids,
+        "relation_review_events": review_events,
         "pending_assignment_count": pending_count,
         "contradictions": sorted(
             relation.relation_id
@@ -493,6 +501,10 @@ def build_week_view(
         "actions_and_decisions": [
             item.model_dump(mode="json")
             for item in payload["actions_and_decisions"]
+        ],
+        "relation_review_events": [
+            event.model_dump(mode="json")
+            for event in payload["relation_review_events"]
         ],
     }
     revision_id = "WREV-" + hashlib.sha256(

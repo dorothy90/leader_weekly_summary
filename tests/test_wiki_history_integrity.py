@@ -1,5 +1,7 @@
 from datetime import UTC, datetime
 
+import pytest
+
 from knowledge_models import (
     ArchivedApprovedEvidence,
     CategoryPath,
@@ -8,8 +10,11 @@ from knowledge_models import (
     TopicAssignment,
     TopicRevision,
     TopicSection,
+    TopicRelation,
     SupportedClaim,
     WikiTopic,
+    WeekRelationReviewEvent,
+    WeekWikiView,
     WikiReview,
     WikiReviewResolution,
 )
@@ -135,3 +140,47 @@ def test_topic_detail_resolves_revision_evidence_from_archive_not_mutable_store(
     assert [(value.week, value.source_quote) for value in detail.evidence] == [
         ("2026-W30", "immutable quote")
     ]
+
+
+def test_relation_review_transition_recovers_week_snapshot_write(tmp_path, monkeypatch):
+    root = tmp_path / "wiki"
+    store = JsonWikiStore(root)
+    now = datetime(2026, 7, 20, tzinfo=UTC)
+    base = WeekWikiView(
+        week="2026-W30", revision_id="WREV-OLD", published_at=now,
+        build_run_id="RUN-1", new_topic_ids=[], changed_topic_ids=[],
+        resolved_topic_ids=[], reopened_topic_ids=[], actions_and_decisions=[],
+        new_relation_ids=[], pending_assignment_count=0, contradictions=[], teams=[],
+    )
+    store.save_week(base)
+    relation = TopicRelation(
+        relation_id="REL-1", source_topic_id="T-1", target_topic_id="T-2",
+        kind="supports", agenda_ids=["A-001"], confidence=.8,
+        review_state="accepted", creation_week="2026-W30",
+    )
+    review = WikiReview(
+        review_id="R-REL-1", kind="relation", relation_id="REL-1",
+        status="resolved", resolved_by="operator", resolved_at=now,
+        resolution_action="accept",
+    )
+    updated = base.model_copy(update={
+        "revision_id": "WREV-NEW", "new_relation_ids": ["REL-1"],
+        "relation_review_events": [WeekRelationReviewEvent(
+            relation_id="REL-1", action="accepted", actor="operator", reviewed_at=now,
+        )],
+    })
+    original = store._atomic_write
+
+    def fail_week(path, value):
+        if path == root / "weeks" / "2026-W30.json" and getattr(value, "revision_id", None) == "WREV-NEW":
+            raise OSError("injected week fault")
+        original(path, value)
+
+    monkeypatch.setattr(store, "_atomic_write", fail_week)
+    with pytest.raises(OSError, match="week fault"):
+        store.apply_review_transition(review, relation=relation, week=updated)
+
+    recovered = JsonWikiStore(root)
+    assert recovered.relation("REL-1").review_state == "accepted"
+    assert recovered.reviews()[0].status == "resolved"
+    assert recovered.week("2026-W30").revision_id == "WREV-NEW"

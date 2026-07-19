@@ -329,6 +329,7 @@ class TopicRelation(StrictModel):
     created_by: str = "migration"
     created_at: datetime | None = None
     created_build_run_id: str = ""
+    creation_week: str = ""
     reviewed_by: str | None = None
     reviewed_at: datetime | None = None
 
@@ -433,6 +434,13 @@ class TeamWikiView(StrictModel):
     actions_and_decisions: list[TopicListItem]
 
 
+class WeekRelationReviewEvent(StrictModel):
+    relation_id: str
+    action: Literal["accepted", "rejected"]
+    actor: str
+    reviewed_at: datetime
+
+
 class WeekWikiView(StrictModel):
     week: str
     revision_id: str
@@ -444,6 +452,7 @@ class WeekWikiView(StrictModel):
     reopened_topic_ids: list[str]
     actions_and_decisions: list[TopicListItem]
     new_relation_ids: list[str]
+    relation_review_events: list[WeekRelationReviewEvent] = Field(default_factory=list)
     pending_assignment_count: int
     contradictions: list[str]
     teams: list[str]

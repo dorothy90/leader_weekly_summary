@@ -232,6 +232,7 @@ class JsonWikiStore:
         *,
         assignment: TopicAssignment | None = None,
         relation: TopicRelation | None = None,
+        week: WeekWikiView | None = None,
     ) -> None:
         if (assignment is None) == (relation is None):
             raise ValueError("Review transition requires one target")
@@ -243,6 +244,7 @@ class JsonWikiStore:
                 "target_kind": target_kind,
                 "target": target.model_dump(mode="json"),
                 "review": review.model_dump(mode="json"),
+                "week": week.model_dump(mode="json") if week is not None else None,
             },
             ensure_ascii=False,
             indent=2,
@@ -271,6 +273,20 @@ class JsonWikiStore:
         self._atomic_write(
             self.root / "reviews" / f"{_safe_id(review.review_id)}.json", review
         )
+        if payload.get("week") is not None:
+            week = WeekWikiView.model_validate(payload["week"])
+            current_path = self.root / "weeks" / f"{_safe_id(week.week)}.json"
+            if current_path.exists():
+                current = _load(current_path, WeekWikiView)
+                if current.revision_id == week.revision_id:
+                    return
+                history_path = (
+                    self.root / "history" / "weeks" / _safe_id(week.week)
+                    / f"{_safe_id(current.revision_id)}.json"
+                )
+                if not history_path.exists():
+                    self._atomic_write(history_path, current)
+            self._atomic_write(current_path, week)
 
     def recover_review_transitions(self) -> list[str]:
         recovered: list[str] = []
