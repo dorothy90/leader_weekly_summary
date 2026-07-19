@@ -211,3 +211,199 @@ class KnowledgeSession(StrictModel):
     user_id: str
     roles: list[str]
     can_edit: bool
+
+
+DomainName = Literal["DRAM", "NAND"]
+TopicKind = Literal[
+    "issue", "observation", "change", "experiment", "action", "decision",
+    "plan", "knowledge",
+]
+KnowledgeArea = Literal[
+    "yield_defect", "process_equipment", "quality_analysis",
+    "experiment_validation", "product_production", "schedule_delivery",
+    "decision_action", "other",
+]
+TopicState = Literal[
+    "new", "investigating", "action_in_progress", "monitoring", "resolved",
+    "reopened", "closed", "review_required",
+]
+RelationKind = Literal[
+    "possible_cause", "affects", "measurement_effect", "comparison",
+    "follow_up", "supports", "contradicts", "shares_condition",
+]
+
+
+class SupportedClaim(StrictModel):
+    text: str = Field(min_length=1)
+    agenda_ids: list[str] = Field(min_length=1)
+
+
+class TopicSection(StrictModel):
+    key: Literal[
+        "current_state", "observations", "cause_and_impact",
+        "actions_and_decisions", "lotcd_differences", "team_contributions",
+        "related_topics", "open_questions", "timeline",
+    ]
+    title: str
+    body: str
+
+
+class WikiTopic(StrictModel):
+    topic_id: str
+    title: str
+    topic_kind: TopicKind
+    primary_area: KnowledgeArea
+    secondary_areas: list[KnowledgeArea] = Field(default_factory=list)
+    state: TopicState
+    importance: Literal["low", "medium", "high", "critical"]
+    first_seen_week: str
+    last_updated_week: str
+    target_paths: list[CategoryPath]
+    teams: list[str]
+    source_agenda_ids: list[str]
+    related_topic_ids: list[str] = Field(default_factory=list)
+    current_revision_id: str
+
+
+class TopicRevision(StrictModel):
+    revision_id: str
+    topic_id: str
+    week: str
+    body_markdown: str
+    sections: list[TopicSection]
+    claims: list[SupportedClaim]
+    source_agenda_ids: list[str]
+    created_at: datetime
+    model: str
+
+
+class TopicAssignment(StrictModel):
+    agenda_id: str
+    topic_id: str
+    decision: Literal["attach", "create"]
+    confidence: float = Field(ge=0, le=1)
+    rationale: str
+    decision_source: Literal["auto", "manual"]
+    decided_by: str
+    decided_at: datetime
+
+
+class TopicCandidate(StrictModel):
+    topic_id: str
+    score: float
+    rank_reasons: list[str] = Field(default_factory=list)
+
+
+class TopicRelation(StrictModel):
+    relation_id: str
+    source_topic_id: str
+    target_topic_id: str
+    kind: RelationKind
+    agenda_ids: list[str]
+    confidence: float
+    review_state: Literal["pending", "accepted", "rejected"]
+
+
+class WikiReview(StrictModel):
+    review_id: str
+    kind: Literal["assignment", "relation"]
+    agenda_id: str | None = None
+    candidates: list[TopicCandidate] = Field(default_factory=list)
+    relation_id: str | None = None
+    rationale: str = ""
+    status: Literal["pending", "resolved", "held"] = "pending"
+
+
+class TopicListItem(StrictModel):
+    topic_id: str
+    title: str
+    state: TopicState
+    importance: Literal["low", "medium", "high", "critical"]
+    primary_area: KnowledgeArea
+    target_paths: list[CategoryPath]
+    teams: list[str]
+    last_updated_week: str
+    evidence_count: int
+    rank_reasons: list[str] = Field(default_factory=list)
+
+
+class WikiEvidence(StrictModel):
+    agenda_id: str
+    mail_id: str
+    team: str
+    week: str
+    subject: str
+    source_quote: str
+    source_path: str | None = None
+
+
+class WikiTopicDetail(StrictModel):
+    topic: WikiTopic
+    body_markdown: str
+    sections: list[TopicSection]
+    claims: list[SupportedClaim]
+    evidence: list[WikiEvidence]
+    relations: list[TopicRelation]
+
+
+class LotcdWikiView(StrictModel):
+    domain: Literal["DRAM", "NAND"]
+    tech: str
+    lotcd: str
+    summary: str
+    recent_changes: list[TopicListItem]
+    active_topics: list[TopicListItem]
+    knowledge_areas: dict[KnowledgeArea, list[TopicListItem]]
+    actions_and_decisions: list[TopicListItem]
+    related_lotcds: list[str]
+    closed_topics: dict[str, list[TopicListItem]]
+    activity: list[WikiEvidence]
+    topic_ids: list[str]
+
+
+class TeamWikiView(StrictModel):
+    team: str
+    topics: list[TopicListItem]
+    topic_ids: list[str]
+    recent_activity: list[WikiEvidence]
+    partner_teams: list[str]
+    target_paths: list[CategoryPath]
+    actions_and_decisions: list[TopicListItem]
+
+
+class WeekWikiView(StrictModel):
+    week: str
+    revision_id: str
+    published_at: datetime
+    build_run_id: str
+    new_topic_ids: list[str]
+    changed_topic_ids: list[str]
+    resolved_topic_ids: list[str]
+    reopened_topic_ids: list[str]
+    new_relation_ids: list[str]
+    pending_assignment_count: int
+    contradictions: list[str]
+    teams: list[str]
+
+
+class WikiBuildRun(StrictModel):
+    run_id: str
+    week: str
+    classification_run_id: str
+    status: Literal[
+        "linking", "review_required", "generating", "validating", "published",
+        "partially_failed", "failed",
+    ]
+    input_hash: str
+    model: str
+    affected_topic_ids: list[str] = Field(default_factory=list)
+    failed_topic_ids: list[str] = Field(default_factory=list)
+    started_at: datetime
+    completed_at: datetime | None = None
+    error: str | None = None
+
+
+class WikiReviewResolution(StrictModel):
+    action: Literal["attach", "create", "hold", "accept", "reject"]
+    topic_id: str | None = None
+    title: str | None = None
