@@ -31,9 +31,10 @@ export function formatTargetPath(path: CategoryPath) {
 interface TopicListProps {
   topics: TopicListItem[]
   from: string
+  showRankReasons?: boolean
 }
 
-export function TopicList({ topics, from }: TopicListProps) {
+export function TopicList({ topics, from, showRankReasons = false }: TopicListProps) {
   if (topics.length === 0) {
     return <p className="topic-list__empty">조건에 맞는 주제가 없습니다.</p>
   }
@@ -67,9 +68,13 @@ export function TopicList({ topics, from }: TopicListProps) {
             <div><dt>최근 갱신</dt><dd>{topic.last_updated_week}</dd></div>
             <div><dt>인용</dt><dd>근거 {topic.evidence_count}건</dd></div>
           </dl>
+          {showRankReasons && topic.rank_reasons.length > 0 ? (
+            <ul className="topic-list__rank-reasons" aria-label={`${topic.title} 정렬 근거`}>
+              {topic.rank_reasons.map((reason) => <li key={reason}>{reason}</li>)}
+            </ul>
+          ) : null}
         </li>
       ))}
     </ol>
   )
 }
-
