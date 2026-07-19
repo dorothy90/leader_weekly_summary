@@ -136,7 +136,8 @@ def _factual_chunks(section: TopicSection) -> list[str]:
         chunks.extend(
             value.strip()
             for value in re.split(
-                r"(?<=[.!?;。！？；])\s*(?=(?!\[agenda:)\S)",
+                r"(?:(?<=[.!?;。！？；])\s*(?=(?!\[agenda:)\S)"
+                r"|(?<=\])\s+(?=(?!\[agenda:)\S))",
                 stripped,
             )
             if value.strip() and not value.rstrip().endswith(("?", "？"))
