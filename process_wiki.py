@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import os
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Sequence
+from typing import Iterator, Sequence
 
 from classification_store import (
     DEFAULT_DATA_DIR,
@@ -20,6 +22,23 @@ from topic_wiki_builder import (
     build_wiki_llm,
 )
 from wiki_store import DEFAULT_WIKI_DATA_DIR, JsonWikiStore
+
+
+@contextmanager
+def _external_llm_acknowledgement(enabled: bool) -> Iterator[None]:
+    if not enabled:
+        yield
+        return
+    name = "KNOWLEDGE_LLM_DATA_POLICY_ACK"
+    previous = os.environ.get(name)
+    os.environ[name] = "true"
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = previous
 
 
 def process_week(
@@ -53,14 +72,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--wiki-data-dir", type=Path, default=DEFAULT_WIKI_DATA_DIR)
     parser.add_argument("--allow-external-llm", action="store_true")
     args = parser.parse_args(argv)
-    if not args.allow_external_llm:
-        parser.error("--allow-external-llm is required")
-    run = process_week(
-        week=args.week,
-        classification_data_dir=args.classification_data_dir,
-        rules=args.rules,
-        wiki_data_dir=args.wiki_data_dir,
-    )
+    with _external_llm_acknowledgement(args.allow_external_llm):
+        run = process_week(
+            week=args.week,
+            classification_data_dir=args.classification_data_dir,
+            rules=args.rules,
+            wiki_data_dir=args.wiki_data_dir,
+        )
     print(run.model_dump_json())
     return 0 if run.status in {"published", "review_required"} else 1
 

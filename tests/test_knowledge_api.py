@@ -1,7 +1,5 @@
 import asyncio
 import shutil
-import subprocess
-import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -134,14 +132,3 @@ def test_build_requires_editor_and_approved_week(api_app, monkeypatch):
     )
     assert viewer.status_code == 403
     assert editor.status_code == 409
-
-
-def test_process_wiki_requires_external_llm_acknowledgement():
-    result = subprocess.run(
-        [sys.executable, ROOT / "process_wiki.py", "--week", "2026-W30"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode == 2
-    assert "--allow-external-llm is required" in result.stderr
