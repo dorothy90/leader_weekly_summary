@@ -153,13 +153,23 @@ def list_topics(
 
 
 def _evidence(
+    store: JsonWikiStore,
     classification_store: Any,
     agenda_ids: list[str],
+    evidence_refs: list[str] | None = None,
     include: Callable[[Any], bool] | None = None,
 ) -> list[WikiEvidence]:
     values: list[WikiEvidence] = []
+    archived_by_id = {}
+    for evidence_ref in evidence_refs or []:
+        archived = store.archived_evidence(evidence_ref)
+        archived_by_id[archived.item.agenda_id] = archived
     for agenda_id in sorted(set(agenda_ids)):
-        week, item = classification_store.classification_item(agenda_id)
+        archived = archived_by_id.get(agenda_id)
+        if archived is not None:
+            week, item = archived.week, archived.item
+        else:
+            raise KeyError(f"Missing immutable Wiki evidence: {agenda_id}")
         if include is not None and not include(item):
             continue
         values.append(
@@ -184,6 +194,16 @@ def _source_agenda_ids(topics: list[WikiTopic]) -> list[str]:
             for agenda_id in topic.source_agenda_ids
         }
     )
+
+
+def _evidence_refs(store: JsonWikiStore, topics: list[WikiTopic]) -> list[str]:
+    return sorted({
+        ref
+        for topic in topics
+        for ref in store.topic_revision(
+            topic.topic_id, topic.current_revision_id
+        ).evidence_refs
+    })
 
 
 def _four_week_activity(
@@ -221,7 +241,10 @@ def build_topic_detail(
         body_markdown=revision.body_markdown,
         sections=revision.sections,
         claims=revision.claims,
-        evidence=_evidence(classification_store, revision.source_agenda_ids),
+        evidence=_evidence(
+            store, classification_store, revision.source_agenda_ids,
+            revision.evidence_refs,
+        ),
         relations=relations,
     )
 
@@ -299,8 +322,10 @@ def build_lotcd_view(
         related_lotcds=sorted(related_lotcds),
         closed_topics=closed,
         activity=_evidence(
+            store,
             classification_store,
             _source_agenda_ids(topics),
+            _evidence_refs(store, topics),
             lambda item: item.decision.target_path
             == CategoryPath(domain=domain, tech=tech, lotcd=lotcd),
         ),
@@ -324,8 +349,10 @@ def build_team_view(
         for path in topic.target_paths
     }
     team_evidence = _evidence(
+        store,
         classification_store,
         _source_agenda_ids(topics),
+        _evidence_refs(store, topics),
         lambda item: item.team == team,
     )
     projection_week = max(
@@ -366,34 +393,80 @@ def build_week_view(
     week: str,
     build_run_id: str | None = None,
 ) -> WeekWikiView:
-    topics = [topic for topic in store.topics() if topic.last_updated_week == week]
-    ranked = _ranked_items(store, topics, week)
-    topics_by_id = {topic.topic_id: topic for topic in topics}
-    accepted = _relations(store)
-    changed_ids = sorted(topic.topic_id for topic in topics)
-    new_ids = sorted(
-        topic.topic_id for topic in topics if topic.first_seen_week == week
-    )
-    resolved_ids = sorted(
-        topic.topic_id for topic in topics if topic.state in {"resolved", "closed"}
-    )
-    reopened_ids = sorted(
-        topic.topic_id for topic in topics if topic.state == "reopened"
-    )
-    relation_ids = sorted(
-        relation.relation_id
-        for relation in accepted
-        if {relation.source_topic_id, relation.target_topic_id} & set(changed_ids)
-    )
-    pending_count = sum(
-        review.kind == "assignment" for review in store.reviews("pending")
-    )
     resolved_build_run_id = build_run_id
     if resolved_build_run_id is None:
         try:
             resolved_build_run_id = store.week(week).build_run_id
         except KeyError:
             resolved_build_run_id = ""
+    revisions = []
+    topics = []
+    for topic in store.topics():
+        revision = store.topic_revision(topic.topic_id, topic.current_revision_id)
+        if (
+            revision.week == week
+            and (
+                not resolved_build_run_id
+                or not revision.build_run_id  # pre-audit migration revision
+                or revision.build_run_id == resolved_build_run_id
+            )
+        ):
+            topics.append(topic)
+            revisions.append(revision)
+    ranked = _ranked_items(store, topics, week)
+    topics_by_id = {topic.topic_id: topic for topic in topics}
+    accepted = _relations(store)
+    changed_ids = sorted(revision.topic_id for revision in revisions)
+    new_ids = sorted(
+        topic.topic_id for topic in topics if topic.first_seen_week == week
+    )
+    resolved_ids = sorted(
+        revision.topic_id for revision in revisions
+        if (
+            revision.previous_state not in {"resolved", "closed"}
+            and revision.new_state in {"resolved", "closed"}
+        ) or (
+            revision.previous_state is None and topics_by_id[revision.topic_id].state in {"resolved", "closed"}
+        )
+    )
+    reopened_ids = sorted(
+        revision.topic_id for revision in revisions
+        if (
+            revision.previous_state in {"resolved", "closed"}
+            and revision.new_state == "reopened"
+        ) or (
+            revision.previous_state is None and topics_by_id[revision.topic_id].state == "reopened"
+        )
+    )
+    relation_ids = sorted(
+        relation.relation_id for relation in accepted
+        if relation.relation_id in {
+            change.relation_id
+            for revision in revisions
+            for change in revision.relation_changes
+            if change.action == "accepted"
+        } or (
+            not relation.created_build_run_id
+            and {relation.source_topic_id, relation.target_topic_id} & set(changed_ids)
+        )
+    )
+    target_agenda_ids: set[str] = set()
+    if resolved_build_run_id:
+        try:
+            build = store.build(resolved_build_run_id)
+            target_agenda_ids = set(
+                store.archived_week(week, build.classification_run_id).items
+            )
+        except KeyError:
+            pass
+    if not target_agenda_ids:
+        target_agenda_ids = {
+            agenda_id for revision in revisions for agenda_id in revision.source_agenda_ids
+        }
+    pending_count = sum(
+        review.kind == "assignment" and review.agenda_id in target_agenda_ids
+        for review in store.reviews("pending")
+    )
     payload = {
         "week": week,
         "build_run_id": resolved_build_run_id,
@@ -411,8 +484,7 @@ def build_week_view(
         "contradictions": sorted(
             relation.relation_id
             for relation in accepted
-            if relation.kind == "contradicts"
-            and {relation.source_topic_id, relation.target_topic_id} & set(changed_ids)
+            if relation.kind == "contradicts" and relation.relation_id in relation_ids
         ),
         "teams": sorted({team for topic in topics for team in topic.teams}),
     }

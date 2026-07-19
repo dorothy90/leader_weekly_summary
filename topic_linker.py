@@ -235,6 +235,8 @@ def resolve_wiki_review(
     )
     if review is None:
         raise KeyError(review_id)
+    if review.status == "resolved" and review.resolution_action == resolution.action:
+        return review
     if review.status != "pending":
         raise ValueError(f"Review is not pending: {review_id}")
     if review.kind == "relation":
@@ -245,22 +247,25 @@ def resolve_wiki_review(
         relation = store.relation(review.relation_id)
         if relation.review_state != "pending":
             raise ValueError(f"Relation is not pending: {review.relation_id}")
-        store.save_relation(
-            relation.model_copy(
-                update={
-                    "review_state": (
-                        "accepted" if resolution.action == "accept" else "rejected"
-                    )
-                }
-            )
-        )
-        resolved = review.model_copy(update={"status": "resolved"})
-        store.save_review(resolved)
+        now = datetime.now(UTC)
+        updated_relation = relation.model_copy(update={
+            "review_state": "accepted" if resolution.action == "accept" else "rejected",
+            "reviewed_by": user_id,
+            "reviewed_at": now,
+        })
+        resolved = review.model_copy(update={
+            "status": "resolved", "resolved_by": user_id,
+            "resolved_at": now, "resolution_action": resolution.action,
+        })
+        store.apply_review_transition(resolved, relation=updated_relation)
         return resolved
     if review.agenda_id is None:
         raise ValueError("Assignment review requires agenda_id")
     if resolution.action == "hold":
-        held = review.model_copy(update={"status": "held"})
+        held = review.model_copy(update={
+            "status": "held", "resolved_by": user_id,
+            "resolved_at": datetime.now(UTC), "resolution_action": "hold",
+        })
         store.save_review(held)
         return held
     if resolution.action not in {"attach", "create"}:
@@ -279,8 +284,8 @@ def resolve_wiki_review(
         if resolution.topic_id is not None:
             raise ValueError("Create resolution must not supply topic_id")
         topic_id = _stable_id("T", review.agenda_id)
-    store.save_assignment(
-        TopicAssignment(
+    now = datetime.now(UTC)
+    assignment = TopicAssignment(
             agenda_id=review.agenda_id,
             topic_id=topic_id,
             decision=resolution.action,
@@ -288,11 +293,13 @@ def resolve_wiki_review(
             rationale=f"Manual resolution of {review.review_id}",
             decision_source="manual",
             decided_by=user_id,
-            decided_at=datetime.now(UTC),
+            decided_at=now,
         )
-    )
-    resolved = review.model_copy(update={"status": "resolved"})
-    store.save_review(resolved)
+    resolved = review.model_copy(update={
+        "status": "resolved", "resolved_by": user_id,
+        "resolved_at": now, "resolution_action": resolution.action,
+    })
+    store.apply_review_transition(resolved, assignment=assignment)
     return resolved
 
 

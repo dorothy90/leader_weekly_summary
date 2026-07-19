@@ -10,6 +10,7 @@ from fastapi import FastAPI
 import knowledge_api
 from classification_store import JsonClassificationStore
 from knowledge_models import (
+    ArchivedApprovedEvidence,
     CategoryPath,
     ClassificationDecision,
     ClassificationItem,
@@ -89,9 +90,15 @@ def api_app(tmp_path, monkeypatch):
         sections=[],
         claims=[],
         source_agenda_ids=["A-001"],
+        evidence_refs=["2026-W30/CLASS-001/A-001"],
         created_at=datetime(2026, 7, 20, tzinfo=UTC),
         model="test-model",
     )
+    wiki_store.archive_evidence(ArchivedApprovedEvidence(
+        evidence_ref="2026-W30/CLASS-001/A-001", week="2026-W30",
+        classification_run_id="CLASS-001", item=item,
+        archived_at=datetime(2026, 7, 20, tzinfo=UTC),
+    ))
     wiki_store.publish_topic(topic, revision)
     app = FastAPI()
     app.state.wiki_store = wiki_store
@@ -128,6 +135,7 @@ def test_week_route_preserves_snapshot_action_rows(api_app):
     current = store.topic("T-001")
     action_revision = store.topic_revision("T-001", "REV-001").model_copy(
         update={
+            "revision_id": "REV-002",
             "sections": [
                 TopicSection(
                     key="actions_and_decisions",
@@ -137,7 +145,10 @@ def test_week_route_preserves_snapshot_action_rows(api_app):
             ]
         }
     )
-    store.publish_topic(current, action_revision)
+    store.publish_topic(
+        current.model_copy(update={"current_revision_id": "REV-002"}),
+        action_revision,
+    )
     snapshot = build_week_view(store, "2026-W30", "RUN-001")
     store.save_week(snapshot)
 
@@ -230,3 +241,14 @@ def test_relation_review_api_maps_invalid_action_and_missing_relation(api_app):
 
     assert invalid.status_code == 409
     assert missing.status_code == 404
+
+
+def test_team_and_week_root_indexes_are_backend_derived(api_app):
+    store = api_app.state.wiki_store
+    store.save_week(build_week_view(store, "2026-W30", ""))
+
+    teams = request(api_app, "/api/knowledge/wiki/teams")
+    weeks = request(api_app, "/api/knowledge/wiki/weeks")
+
+    assert teams.json() == {"values": ["Yield"]}
+    assert weeks.json() == {"values": ["2026-W30"]}

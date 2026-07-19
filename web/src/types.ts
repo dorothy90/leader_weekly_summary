@@ -269,6 +269,8 @@ export interface TeamWikiView {
   actions_and_decisions: TopicListItem[]
 }
 
+export interface WikiIndex { values: string[] }
+
 export interface WeekWikiView {
   week: string
   revision_id: string

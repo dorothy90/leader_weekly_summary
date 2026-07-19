@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 import { Link, useLocation, useParams, useSearchParams } from 'react-router-dom'
 
 import { fetchTopic } from '../api/knowledge'
@@ -10,6 +11,8 @@ const relationLabels = {
   possible_cause: '가능 원인', affects: '영향', measurement_effect: '측정 영향', comparison: '비교',
   follow_up: '후속', supports: '지지', contradicts: '상충', shares_condition: '조건 공유',
 } as const
+
+const citationPattern = /(\[agenda:([^\]\s]+)\])/g
 
 export function TopicPage() {
   const { topicId = '' } = useParams()
@@ -43,6 +46,20 @@ export function TopicPage() {
   const { topic } = detail
   const evidenceById = new Map(detail.evidence.map((evidence) => [evidence.agenda_id, evidence]))
   const acceptedRelations = detail.relations.filter((relation) => relation.review_state === 'accepted')
+  const renderBody = (body: string) => body.split(citationPattern).reduce<ReactNode[]>((nodes, value, index, parts) => {
+    if (index % 3 === 2) return nodes
+    if (index % 3 === 1) {
+      const agendaId = parts[index + 1]
+      const evidence = evidenceById.get(agendaId)
+      nodes.push(evidence ? (
+        <button key={`${agendaId}-${index}`} type="button" className="topic-inline-citation" onClick={(event) => {
+          citationTriggerRef.current = event.currentTarget
+          setSelectedEvidence(evidence)
+        }}>근거 {agendaId} 보기</button>
+      ) : <span key={`${agendaId}-${index}`}>{value}</span>)
+    } else if (value) nodes.push(value)
+    return nodes
+  }, [])
 
   return (
     <article className="topic-document">
@@ -70,7 +87,7 @@ export function TopicPage() {
           {detail.sections.map((section) => (
             <section key={section.key} className="topic-document__section">
               <h2>{section.title}</h2>
-              <p className="topic-document__section-body">{section.body}</p>
+              <p className="topic-document__section-body">{renderBody(section.body)}</p>
             </section>
           ))}
         </section>

@@ -2,11 +2,11 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { vi } from 'vitest'
 
-import { fetchTeamWiki } from '../api/knowledge'
+import { fetchTeamWiki, fetchWikiTeams } from '../api/knowledge'
 import type { TeamWikiView, TopicListItem } from '../types'
 import { TeamWikiPage } from './TeamWikiPage'
 
-vi.mock('../api/knowledge', () => ({ fetchTeamWiki: vi.fn() }))
+vi.mock('../api/knowledge', () => ({ fetchTeamWiki: vi.fn(), fetchWikiTeams: vi.fn() }))
 
 const topic: TopicListItem = {
   topic_id: 'T-001', title: '4SA D1 불량', state: 'investigating', importance: 'high',
@@ -30,6 +30,15 @@ const teamView: TeamWikiView = {
 beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(fetchTeamWiki).mockResolvedValue(teamView)
+  vi.mocked(fetchWikiTeams).mockResolvedValue({ values: ['Process', 'Yield'] })
+})
+
+it('shows backend-derived team choices at the root route', async () => {
+  render(<MemoryRouter initialEntries={['/wiki/teams']}>
+    <Routes><Route path="/wiki/teams/*" element={<TeamWikiPage />} /></Routes>
+  </MemoryRouter>)
+  expect(await screen.findByRole('button', { name: 'Yield' })).toBeInTheDocument()
+  expect(fetchWikiTeams).toHaveBeenCalled()
 })
 
 function renderTeam(route: string) {

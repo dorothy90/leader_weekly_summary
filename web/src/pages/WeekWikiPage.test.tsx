@@ -2,12 +2,13 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { vi } from 'vitest'
 
-import { fetchTopics, fetchWeekWiki, fetchWikiBuild } from '../api/knowledge'
+import { fetchTopics, fetchWeekWiki, fetchWikiBuild, fetchWikiWeeks } from '../api/knowledge'
 import type { TopicListItem, WeekWikiView, WikiBuildRun } from '../types'
 import { WeekWikiPage } from './WeekWikiPage'
 
 vi.mock('../api/knowledge', () => ({
   fetchTopics: vi.fn(), fetchWeekWiki: vi.fn(), fetchWikiBuild: vi.fn(),
+  fetchWikiWeeks: vi.fn(),
 }))
 
 function makeTopic(topic_id: string, title: string, overrides: Partial<TopicListItem> = {}): TopicListItem {
@@ -42,6 +43,15 @@ beforeEach(() => {
     makeTopic('T-002', '변경된 현재 조치'),
   ])
   vi.mocked(fetchWikiBuild).mockResolvedValue(buildRun)
+  vi.mocked(fetchWikiWeeks).mockResolvedValue({ values: ['2026-W29', '2026-W30'] })
+})
+
+it('shows persisted week choices at the root route', async () => {
+  render(<MemoryRouter initialEntries={['/wiki/weeks']}>
+    <Routes><Route path="/wiki/weeks/*" element={<WeekWikiPage />} /></Routes>
+  </MemoryRouter>)
+  expect(await screen.findByRole('button', { name: '2026-W30' })).toBeInTheDocument()
+  expect(fetchWikiWeeks).toHaveBeenCalled()
 })
 
 function renderWeek(route: string) {

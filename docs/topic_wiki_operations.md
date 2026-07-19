@@ -24,7 +24,13 @@ wiki_data/
 │   └── <run_id>.json
 ├── weeks/
 │   └── <week>.json
+├── transitions/
+│   └── <review_id>.json
 └── history/
+    ├── evidence/
+    │   └── <week>/<classification_run_id>/
+    │       ├── _week.json
+    │       └── <agenda_id>.json
     ├── topics/
     │   └── <topic_id>/
     │       └── <revision_id>.json
@@ -38,8 +44,15 @@ revision. Topic revision history is immutable under `history/topics/`.
 `weeks/<week>.json` is the current Week projection; replaced Week projections move
 to `history/weeks/`. Assignments, relations, reviews, and build runs use their
 corresponding top-level directories. `catalog.json` is a derived catalog rebuilt
-from the canonical current Topic records. `wiki_data/.build.lock` exists only
-while a writer holds the exclusive build lock.
+from the canonical current Topic records. `wiki_data/.build.lock` is created
+while a writer holds the exclusive build lock and can remain after an interrupted
+process; use the stale-lock procedure below before removing it. Review transition
+journals are replayed automatically when the store opens.
+
+Approved evidence is copied once into `history/evidence/`; Topic revisions resolve
+citations only through those immutable references. Wiki data created before this
+evidence-reference contract must be rebuilt from approved classification weeks.
+There is no fallback to mutable `classification_data` for an old Topic revision.
 
 ## Build an approved week
 

@@ -89,3 +89,16 @@ it('renders current revision sections and only accepted related Topics', async (
   expect(screen.queryByText('# export only')).not.toBeInTheDocument()
   expect(screen.queryByRole('main')).not.toBeInTheDocument()
 })
+
+it('opens evidence from an inline section citation token', async () => {
+  vi.mocked(fetchTopic).mockResolvedValue({
+    ...topicDetail,
+    sections: [{ key: 'status', title: '현재 상태', body: '증가했다. [agenda:A-001]' }],
+    claims: [],
+  })
+  render(<MemoryRouter initialEntries={['/wiki/topics/T-001']}>
+    <Routes><Route path="/wiki/topics/:topicId" element={<TopicPage />} /></Routes>
+  </MemoryRouter>)
+  fireEvent.click(await screen.findByRole('button', { name: '근거 A-001 보기' }))
+  expect(screen.getByRole('dialog', { name: 'Agenda 근거' })).toHaveTextContent('4SA D1 불량')
+})

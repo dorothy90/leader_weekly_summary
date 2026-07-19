@@ -33,6 +33,22 @@ def test_saved_item_preserves_wiki_source_metadata(tmp_path):
     assert item.topic_hint == result.agendas[0].topic
     assert item.state_hint == result.agendas[0].state
     assert item.source_path.endswith("combined.txt")
+    assert item.subject
+    assert item.received_at is not None
+
+
+def test_approved_week_is_guarded_and_returned_as_defensive_copy(tmp_path):
+    store = make_store(tmp_path)
+    _run, _result, _summary = save_one(store)
+    try:
+        store.approved_week("2026-28")
+        raise AssertionError("unapproved week was returned")
+    except ValueError as exc:
+        assert "not approved" in str(exc)
+    store.approve_week("2026-28", "tester")
+    first = store.approved_week("2026-28")
+    first.items.clear()
+    assert store.approved_week("2026-28").items
 
 def test_json_store_persists_and_reloads(tmp_path):
     store = make_store(tmp_path)

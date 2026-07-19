@@ -20,6 +20,7 @@ import type {
   WikiReview,
   WikiReviewResolution,
   WikiTopicDetail,
+  WikiIndex,
 } from '../types'
 
 async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
@@ -180,11 +181,17 @@ export const fetchTeamWiki = (team: string, signal?: AbortSignal) =>
     signal,
   )
 
+export const fetchWikiTeams = (signal?: AbortSignal) =>
+  getJson<WikiIndex>('/api/knowledge/wiki/teams', signal)
+
 export const fetchWeekWiki = (week: string, signal?: AbortSignal) =>
   getJson<WeekWikiView>(
     `/api/knowledge/wiki/weeks/${encodeURIComponent(week)}`,
     signal,
   )
+
+export const fetchWikiWeeks = (signal?: AbortSignal) =>
+  getJson<WikiIndex>('/api/knowledge/wiki/weeks', signal)
 
 export const fetchWikiReviews = (signal?: AbortSignal) =>
   getJson<WikiReview[]>('/api/knowledge/wiki/reviews?status=pending', signal)

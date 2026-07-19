@@ -265,6 +265,16 @@ class WikiTopic(StrictModel):
     current_revision_id: str
 
 
+class ClaimChange(StrictModel):
+    before: SupportedClaim
+    after: SupportedClaim
+
+
+class TopicRelationChange(StrictModel):
+    relation_id: str
+    action: Literal["proposed", "accepted", "rejected"]
+
+
 class TopicRevision(StrictModel):
     revision_id: str
     topic_id: str
@@ -273,6 +283,19 @@ class TopicRevision(StrictModel):
     sections: list[TopicSection]
     claims: list[SupportedClaim]
     source_agenda_ids: list[str]
+    evidence_refs: list[str] = Field(default_factory=list)
+    previous_state: TopicState | None = None
+    new_state: TopicState | None = None
+    added_agenda_ids: list[str] = Field(default_factory=list)
+    added_claims: list[SupportedClaim] = Field(default_factory=list)
+    removed_claims: list[SupportedClaim] = Field(default_factory=list)
+    changed_claims: list[ClaimChange] = Field(default_factory=list)
+    relation_changes: list[TopicRelationChange] = Field(default_factory=list)
+    build_run_id: str = ""
+    prompt_version: str = ""
+    builder_version: str = ""
+    summary: str = ""
+    validation_results: list[str] = Field(default_factory=list)
     created_at: datetime
     model: str
 
@@ -300,8 +323,14 @@ class TopicRelation(StrictModel):
     target_topic_id: str
     kind: RelationKind
     agenda_ids: list[str]
-    confidence: float
+    confidence: float = Field(ge=0, le=1)
     review_state: Literal["pending", "accepted", "rejected"]
+    creation_source: Literal["llm", "manual", "migration"] = "migration"
+    created_by: str = "migration"
+    created_at: datetime | None = None
+    created_build_run_id: str = ""
+    reviewed_by: str | None = None
+    reviewed_at: datetime | None = None
 
 
 class WikiReview(StrictModel):
@@ -314,6 +343,37 @@ class WikiReview(StrictModel):
     relation_agenda_ids: list[str] = Field(default_factory=list)
     rationale: str = ""
     status: Literal["pending", "resolved", "held"] = "pending"
+    resolved_by: str | None = None
+    resolved_at: datetime | None = None
+    resolution_action: Literal[
+        "attach", "create", "hold", "accept", "reject"
+    ] | None = None
+
+
+class ArchivedApprovedEvidence(StrictModel):
+    evidence_ref: str
+    week: str
+    classification_run_id: str
+    item: ClassificationItem
+    archived_at: datetime
+
+
+class ArchivedApprovedWeek(StrictModel):
+    week: str
+    workflow_state: Literal["approved"] = "approved"
+    classification_run_id: str
+    taxonomy_version: int
+    approved_at: datetime | None = None
+    approved_by: str | None = None
+    runs: dict[str, ClassificationRun]
+    items: dict[str, ClassificationItem]
+    revisions: dict[str, list[dict[str, object]]] = Field(default_factory=dict)
+    evidence_refs: list[str]
+    archived_at: datetime
+
+
+class WikiIndex(StrictModel):
+    values: list[str]
 
 
 class TopicListItem(StrictModel):

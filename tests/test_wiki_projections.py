@@ -7,6 +7,7 @@ import pytest
 
 from classification_store import JsonClassificationStore
 from knowledge_models import (
+    ArchivedApprovedEvidence,
     CategoryPath,
     TopicAssignment,
     TopicRevision,
@@ -67,7 +68,11 @@ def revision(value):
             )
         ],
         claims=[],
-        source_agenda_ids=["A-001"],
+        source_agenda_ids=value.source_agenda_ids,
+        evidence_refs=[
+            f"{value.last_updated_week}/CLASS-001/{agenda_id}"
+            for agenda_id in value.source_agenda_ids
+        ],
         created_at=datetime(2026, 7, 19, tzinfo=UTC),
         model="test-model",
     )
@@ -83,6 +88,13 @@ def stores(tmp_path, monkeypatch):
     classification = JsonClassificationStore(data_dir, rules_path)
     wiki = JsonWikiStore(tmp_path / "wiki_data")
     value = topic()
+    document = classification.approved_week("2026-W30")
+    for item in document.items.values():
+        wiki.archive_evidence(ArchivedApprovedEvidence(
+            evidence_ref=f"2026-W30/CLASS-001/{item.agenda_id}",
+            week="2026-W30", classification_run_id="CLASS-001", item=item,
+            archived_at=datetime(2026, 7, 19, tzinfo=UTC),
+        ))
     wiki.publish_topic(value, revision(value))
     for agenda_id in ("A-001", "A-002", "A-003"):
         wiki.save_assignment(
@@ -199,7 +211,20 @@ def test_team_recent_activity_uses_four_week_iso_window_across_year(tmp_path):
             ],
         }
     )
-    wiki.publish_topic(value, revision(value))
+    evidence_refs = []
+    for agenda_id in value.source_agenda_ids:
+        evidence_week, evidence_item = classification.classification_item(agenda_id)
+        evidence_ref = f"{evidence_week}/CLASS-001/{agenda_id}"
+        evidence_refs.append(evidence_ref)
+        wiki.archive_evidence(ArchivedApprovedEvidence(
+            evidence_ref=evidence_ref, week=evidence_week,
+            classification_run_id="CLASS-001", item=evidence_item,
+            archived_at=datetime(2026, 1, 19, tzinfo=UTC),
+        ))
+    wiki.publish_topic(
+        value,
+        revision(value).model_copy(update={"evidence_refs": evidence_refs}),
+    )
 
     view = build_team_view(wiki, classification, "Yield")
 
@@ -343,6 +368,24 @@ def test_rebuild_preserves_resolved_relation_and_review(
         value for value in wiki.reviews() if value.review_id == review.review_id
     )
     assert preserved.status == "resolved"
+    assert preserved.resolved_by == "operator@example.com"
+    relation = wiki.relation(review.relation_id)
+    assert relation.reviewed_by == "operator@example.com"
+    assert relation.reviewed_at is not None
+    snapshot = wiki.week("2026-W30")
+    if action == "accept":
+        assert review.relation_id in snapshot.new_relation_ids
+        wiki.save_assignment(
+            TopicAssignment(
+                agenda_id="A-rebuild-marker-2", topic_id="T-002", decision="attach",
+                confidence=1, rationale="next build", decision_source="manual",
+                decided_by="tester", decided_at=datetime(2026, 7, 20, tzinfo=UTC),
+            )
+        )
+        _build_with_relation(classification, wiki)
+        assert review.relation_id not in wiki.week("2026-W30").new_relation_ids
+    else:
+        assert review.relation_id not in snapshot.new_relation_ids
 
 
 def test_rebuild_preserves_pending_relation_and_review_metadata(stores):

@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Any, Iterator, TypeVar
 
 from knowledge_models import (
+    ArchivedApprovedEvidence,
+    ArchivedApprovedWeek,
     StrictModel,
     TopicAssignment,
     TopicRelation,
@@ -65,8 +67,12 @@ class JsonWikiStore:
             "weeks",
             "history/topics",
             "history/weeks",
+            "history/evidence",
+            "transitions",
         ):
             (self.root / name).mkdir(parents=True, exist_ok=True)
+        if any(self.root.joinpath("transitions").glob("*.json")):
+            self.recover_review_transitions()
 
     def _atomic_replace(self, path: Path, payload: str) -> None:
         if self._lock_owner != threading.get_ident():
@@ -151,14 +157,18 @@ class JsonWikiStore:
         topic_id = _safe_id(topic.topic_id)
         revision_id = _safe_id(revision.revision_id)
         with self._mutation_lock():
-            self._atomic_write(
+            revision_path = (
                 self.root
                 / "history"
                 / "topics"
                 / topic_id
-                / f"{revision_id}.json",
-                revision,
+                / f"{revision_id}.json"
             )
+            if revision_path.exists():
+                if _load(revision_path, TopicRevision) != revision:
+                    raise ValueError("Topic revision history is immutable")
+            else:
+                self._atomic_write(revision_path, revision)
             self._atomic_write(self.root / "topics" / f"{topic_id}.json", topic)
 
     def assignment(self, agenda_id: str) -> TopicAssignment | None:
@@ -171,6 +181,106 @@ class JsonWikiStore:
                 self.root / "assignments" / f"{_safe_id(value.agenda_id)}.json",
                 value,
             )
+
+    def archive_evidence(self, value: ArchivedApprovedEvidence) -> ArchivedApprovedEvidence:
+        parts = value.evidence_ref.split("/")
+        if len(parts) != 3:
+            raise ValueError("Evidence ref must be week/run/agenda")
+        week, run_id, agenda_id = map(_safe_id, parts)
+        if (week, run_id, agenda_id) != (
+            value.week, value.classification_run_id, value.item.agenda_id
+        ):
+            raise ValueError("Evidence ref identity mismatch")
+        path = self.root / "history" / "evidence" / week / run_id / f"{agenda_id}.json"
+        with self._mutation_lock():
+            if path.exists():
+                return _load(path, ArchivedApprovedEvidence)
+            self._atomic_write(path, value)
+        return value
+
+    def archived_evidence(self, evidence_ref: str) -> ArchivedApprovedEvidence:
+        parts = evidence_ref.split("/")
+        if len(parts) != 3:
+            raise ValueError("Evidence ref must be week/run/agenda")
+        week, run_id, agenda_id = map(_safe_id, parts)
+        return _load(
+            self.root / "history" / "evidence" / week / run_id / f"{agenda_id}.json",
+            ArchivedApprovedEvidence,
+        )
+
+    def archive_approved_week(self, value: ArchivedApprovedWeek) -> ArchivedApprovedWeek:
+        path = (
+            self.root / "history" / "evidence" / _safe_id(value.week)
+            / _safe_id(value.classification_run_id) / "_week.json"
+        )
+        with self._mutation_lock():
+            if path.exists():
+                return _load(path, ArchivedApprovedWeek)
+            self._atomic_write(path, value)
+        return value
+
+    def archived_week(self, week: str, classification_run_id: str) -> ArchivedApprovedWeek:
+        return _load(
+            self.root / "history" / "evidence" / _safe_id(week)
+            / _safe_id(classification_run_id) / "_week.json",
+            ArchivedApprovedWeek,
+        )
+
+    def apply_review_transition(
+        self,
+        review: WikiReview,
+        *,
+        assignment: TopicAssignment | None = None,
+        relation: TopicRelation | None = None,
+    ) -> None:
+        if (assignment is None) == (relation is None):
+            raise ValueError("Review transition requires one target")
+        target_kind = "assignment" if assignment is not None else "relation"
+        target = assignment or relation
+        journal = self.root / "transitions" / f"{_safe_id(review.review_id)}.json"
+        payload = json.dumps(
+            {
+                "target_kind": target_kind,
+                "target": target.model_dump(mode="json"),
+                "review": review.model_dump(mode="json"),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        with self._mutation_lock():
+            self._atomic_replace(journal, payload)
+            self._apply_transition_payload(json.loads(payload))
+            journal.unlink(missing_ok=True)
+
+    def _apply_transition_payload(self, payload: dict[str, Any]) -> None:
+        review = WikiReview.model_validate(payload["review"])
+        if payload["target_kind"] == "assignment":
+            target = TopicAssignment.model_validate(payload["target"])
+            self._atomic_write(
+                self.root / "assignments" / f"{_safe_id(target.agenda_id)}.json",
+                target,
+            )
+        elif payload["target_kind"] == "relation":
+            target = TopicRelation.model_validate(payload["target"])
+            self._atomic_write(
+                self.root / "relations" / f"{_safe_id(target.relation_id)}.json",
+                target,
+            )
+        else:
+            raise ValueError("Unknown review transition target")
+        self._atomic_write(
+            self.root / "reviews" / f"{_safe_id(review.review_id)}.json", review
+        )
+
+    def recover_review_transitions(self) -> list[str]:
+        recovered: list[str] = []
+        with self._mutation_lock():
+            for path in sorted(self.root.joinpath("transitions").glob("*.json")):
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                self._apply_transition_payload(payload)
+                recovered.append(path.stem)
+                path.unlink(missing_ok=True)
+        return recovered
 
     def save_relation(self, value: TopicRelation) -> None:
         with self._mutation_lock():
@@ -227,10 +337,12 @@ class JsonWikiStore:
         )
 
     def assignment_digest(self) -> str:
-        payload = [
-            path.read_text(encoding="utf-8")
-            for path in sorted(self.root.joinpath("assignments").glob("*.json"))
-        ]
+        payload = []
+        for directory in ("assignments", "relations", "reviews"):
+            payload.extend(
+                path.read_text(encoding="utf-8")
+                for path in sorted(self.root.joinpath(directory).glob("*.json"))
+            )
         return hashlib.sha256("\n".join(payload).encode("utf-8")).hexdigest()
 
     def start_build(
@@ -291,6 +403,9 @@ class JsonWikiStore:
         return _load(
             self.root / "weeks" / f"{_safe_id(week)}.json", WeekWikiView
         )
+
+    def weeks(self) -> list[str]:
+        return sorted(path.stem for path in self.root.joinpath("weeks").glob("*.json"))
 
     def rebuild_catalog(self) -> list[dict[str, Any]]:
         with self._mutation_lock():

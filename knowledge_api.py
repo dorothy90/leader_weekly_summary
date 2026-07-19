@@ -36,6 +36,7 @@ from knowledge_models import (
     WikiReview,
     WikiReviewResolution,
     WikiTopicDetail,
+    WikiIndex,
     WorkbenchCorrection,
 )
 from topic_linker import build_link_decider, resolve_wiki_review
@@ -326,6 +327,13 @@ def wiki_team(team: str) -> TeamWikiView:
     return build_team_view(get_wiki_store(), get_store(), team)
 
 
+@router.get("/wiki/teams", response_model=WikiIndex)
+def wiki_teams() -> WikiIndex:
+    return WikiIndex(values=sorted({
+        team for topic in get_wiki_store().topics() for team in topic.teams
+    }))
+
+
 @router.get("/wiki/weeks/{week}", response_model=WeekWikiView)
 def wiki_week(week: str) -> WeekWikiView:
     try:
@@ -334,6 +342,11 @@ def wiki_week(week: str) -> WeekWikiView:
         raise HTTPException(
             status_code=404, detail=f"Unknown Wiki week: {week}"
         ) from exc
+
+
+@router.get("/wiki/weeks", response_model=WikiIndex)
+def wiki_weeks() -> WikiIndex:
+    return WikiIndex(values=get_wiki_store().weeks())
 
 
 @router.get("/wiki/reviews", response_model=list[WikiReview])

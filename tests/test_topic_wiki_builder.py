@@ -268,7 +268,7 @@ def test_each_semicolon_or_unicode_delimited_claim_requires_citation(body):
         )
 
 
-def test_claim_with_incompatible_taxonomy_path_is_rejected():
+def test_cross_lotcd_accepted_attachment_extends_topic_path_without_fanout():
     cited = draft(
         sections=[
             TopicSection(
@@ -284,15 +284,17 @@ def test_claim_with_incompatible_taxonomy_path_is_rejected():
         }
     )
 
-    with pytest.raises(ValueError, match="incompatible taxonomy path"):
-        build_topic_revision(
-            topic(),
-            [item(agenda_id="A-002", lotcd="8HBM")],
-            [assignment(agenda_id="A-002")],
-            analyzed,
-            cited,
-            model="test-model",
-        )
+    updated, revision, _ = build_topic_revision(
+        topic(),
+        [item(agenda_id="A-002", lotcd="8HBM")],
+        [assignment(agenda_id="A-002")],
+        analyzed,
+        cited,
+        model="test-model",
+    )
+
+    assert updated.target_paths == [path(), path("8HBM")]
+    assert revision.source_agenda_ids == ["A-002"]
 
 
 def test_unapproved_classification_item_is_rejected():
@@ -567,3 +569,26 @@ def test_revision_builder_invokes_analysis_then_draft_with_previous_revision():
         ("draft", "4SA 수율 하락", "T-001"),
     ]
     assert revision.model == "injected-model"
+
+
+def test_second_week_update_retains_prior_claim_and_citation():
+    old = item(agenda_id="A-old")
+    new = item(agenda_id="A-new")
+    analyzed = analysis().model_copy(update={
+        "claims": [SupportedClaim(text="새 관찰", agenda_ids=["A-new"])]
+    })
+    drafted = draft(sections=[TopicSection(
+        key="observations", title="관찰", body="새 관찰. [agenda:A-new]"
+    )])
+
+    updated, revision, _ = build_topic_revision(
+        topic(), [old, new],
+        [assignment(agenda_id="A-old"), assignment(agenda_id="A-new")],
+        analyzed, drafted, previous_revision=previous_revision(), model="test-model",
+        added_agenda_ids=["A-new"],
+    )
+
+    assert {claim.text for claim in revision.claims} == {"기존 관찰", "새 관찰"}
+    assert "[agenda:A-old]" in revision.body_markdown
+    assert revision.added_agenda_ids == ["A-new"]
+    assert updated.source_agenda_ids == ["A-new", "A-old"]

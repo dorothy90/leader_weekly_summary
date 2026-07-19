@@ -201,21 +201,21 @@ export function WikiReviewPage() {
   }
 
   if (loading || !session) return (
-    <main className="review-page">
+    <div className="review-page">
       <header className="review-page__header">
         <div><p className="review-page__eyebrow">OPERATOR REVIEW · HIDDEN ROUTE</p><h1>분류 검토</h1></div>
       </header>
       <p className={`review-page-status${loading ? '' : ' review-page-status--error'}`} role={loading ? 'status' : 'alert'}>
         {loading ? '검토 대기열을 불러오는 중입니다.' : '검토 대기열을 불러오지 못했습니다.'}
       </p>
-    </main>
+    </div>
   )
 
   const assignments = reviews.filter((review) => review.kind === 'assignment')
   const relations = reviews.filter((review) => review.kind === 'relation')
 
   return (
-    <main className="review-page">
+    <div className="review-page">
       <header className="review-page__header">
         <div>
           <p className="review-page__eyebrow">OPERATOR REVIEW · HIDDEN ROUTE</p>
@@ -266,6 +266,6 @@ export function WikiReviewPage() {
         </form>
         {build ? <BuildStatusBanner key={build.run_id} run={build} onRunChange={setBuild} /> : null}
       </section>
-    </main>
+    </div>
   )
 }

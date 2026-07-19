@@ -10,7 +10,10 @@ from typing import Any, Literal
 from pydantic import Field
 
 from knowledge_models import (
+    ArchivedApprovedEvidence,
+    ArchivedApprovedWeek,
     CategoryPath,
+    ClaimChange,
     ClassificationItem,
     KnowledgeArea,
     RelationKind,
@@ -19,6 +22,7 @@ from knowledge_models import (
     TopicAssignment,
     TopicKind,
     TopicRelation,
+    TopicRelationChange,
     TopicRevision,
     TopicSection,
     TopicState,
@@ -252,6 +256,30 @@ def build_week(
             ),
             key=lambda item: item.agenda_id,
         )
+        archived_at = datetime.now(UTC)
+        current_refs: dict[str, str] = {}
+        for item in eligible:
+            evidence_ref = f"{week}/{document.active_run_id}/{item.agenda_id}"
+            current_refs[item.agenda_id] = evidence_ref
+            wiki_store.archive_evidence(ArchivedApprovedEvidence(
+                evidence_ref=evidence_ref,
+                week=week,
+                classification_run_id=document.active_run_id,
+                item=item,
+                archived_at=archived_at,
+            ))
+        wiki_store.archive_approved_week(ArchivedApprovedWeek(
+            week=week,
+            classification_run_id=document.active_run_id,
+            taxonomy_version=taxonomy_version,
+            approved_at=document.approved_at,
+            approved_by=document.approved_by,
+            runs=document.runs,
+            items=document.items,
+            revisions=document.revisions,
+            evidence_refs=sorted(current_refs.values()),
+            archived_at=archived_at,
+        ))
         for item in eligible:
             if wiki_store.assignment(item.agenda_id) is not None:
                 continue
@@ -302,15 +330,26 @@ def build_week(
                     if topic_id in existing_topics
                     else None
                 )
+                archived_items: dict[str, ClassificationItem] = {}
+                archived_refs: dict[str, str] = {}
+                if previous_revision is not None:
+                    for evidence_ref in previous_revision.evidence_refs:
+                        archived = wiki_store.archived_evidence(evidence_ref)
+                        archived_items[archived.item.agenda_id] = archived.item
+                        archived_refs[archived.item.agenda_id] = evidence_ref
+                for item in items:
+                    archived_items[item.agenda_id] = item
+                    archived_refs[item.agenda_id] = current_refs[item.agenda_id]
+                accumulated_items = [archived_items[key] for key in sorted(archived_items)]
                 assignments = [
                     assignment
-                    for item in items
+                    for item in accumulated_items
                     if (assignment := wiki_store.assignment(item.agenda_id))
                     is not None
                 ]
                 updated, revision, relations = build_topic_revision(
                     current,
-                    items,
+                    accumulated_items,
                     assignments,
                     analysis_fn,
                     draft_fn,
@@ -318,7 +357,34 @@ def build_week(
                     week=week,
                     model=model,
                     existing_topic_ids=known_topic_ids,
+                    evidence_refs=archived_refs,
+                    added_agenda_ids=[item.agenda_id for item in items],
+                    build_run_id=run.run_id,
                 )
+                relation_changes: list[TopicRelationChange] = []
+                previous_relation_actions = {
+                    change.relation_id: change.action
+                    for change in (previous_revision.relation_changes if previous_revision else [])
+                }
+                for relation in relations:
+                    try:
+                        stored = wiki_store.relation(relation.relation_id)
+                        action = (
+                            stored.review_state
+                            if stored.review_state in {"accepted", "rejected"}
+                            else "proposed"
+                        )
+                    except KeyError:
+                        action = "proposed"
+                    if previous_relation_actions.get(relation.relation_id) == action:
+                        continue
+                    relation_changes.append(TopicRelationChange(
+                        relation_id=relation.relation_id,
+                        action=action,
+                    ))
+                revision = revision.model_copy(update={
+                    "relation_changes": relation_changes
+                })
                 wiki_store.publish_topic(updated, revision)
                 for relation in relations:
                     try:
@@ -513,6 +579,7 @@ def _revision_id(
     body_markdown: str,
     claims: Sequence[SupportedClaim],
     model: str,
+    build_run_id: str = "",
 ) -> str:
     payload = {
         "topic_id": topic_id,
@@ -520,6 +587,7 @@ def _revision_id(
         "body_markdown": body_markdown,
         "claims": [claim.model_dump(mode="json") for claim in claims],
         "model": model,
+        "build_run_id": build_run_id,
     }
     digest = hashlib.sha256(
         json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
@@ -532,6 +600,7 @@ def _build_relations(
     proposals: Sequence[RelationProposal],
     evidence: Mapping[str, ClassificationItem],
     existing_topic_ids: set[str] | None,
+    build_run_id: str = "",
 ) -> list[TopicRelation]:
     if proposals and existing_topic_ids is None:
         raise ValueError("existing Topic IDs are required for relation proposals")
@@ -563,6 +632,10 @@ def _build_relations(
                 agenda_ids=sorted(set(proposal.agenda_ids)),
                 confidence=proposal.confidence,
                 review_state="pending",
+                creation_source="llm",
+                created_by="topic-wiki-builder",
+                created_at=datetime.now(UTC),
+                created_build_run_id=build_run_id,
             )
         )
     return relations
@@ -579,6 +652,9 @@ def build_topic_revision(
     week: str | None = None,
     model: str | None = None,
     existing_topic_ids: set[str] | None = None,
+    evidence_refs: Mapping[str, str] | None = None,
+    added_agenda_ids: Sequence[str] | None = None,
+    build_run_id: str = "",
 ) -> tuple[WikiTopic, TopicRevision, list[TopicRelation]]:
     evidence = {item.agenda_id: item for item in items}
     if len(evidence) != len(items):
@@ -587,10 +663,34 @@ def build_topic_revision(
         if item.decision.status not in APPROVED_EVIDENCE_STATUSES:
             raise ValueError(f"unapproved Agenda ID: {item.agenda_id}")
     _validate_assignments(topic, items, assignments)
-    context = _build_context(topic, items, previous_revision)
+    proposed_paths = sorted(
+        {
+            *( (path.domain, path.tech, path.lotcd) for path in topic.target_paths ),
+            *( (item.decision.target_path.domain, item.decision.target_path.tech,
+                item.decision.target_path.lotcd) for item in items
+               if item.decision.target_path is not None ),
+        },
+        key=lambda value: tuple(part or "" for part in value),
+    )
+    topic_for_build = topic.model_copy(update={
+        "target_paths": [CategoryPath(domain=d, tech=t, lotcd=l) for d, t, l in proposed_paths]
+    })
+    context = _build_context(topic_for_build, items, previous_revision)
     analysis = TopicAnalysis.model_validate(
         analysis_source(context) if callable(analysis_source) else analysis_source
     )
+    if previous_revision is not None:
+        stale = {value.strip() for value in analysis.stale_claims}
+        claims_by_text = {
+            claim.text: claim
+            for claim in previous_revision.claims
+            if claim.text not in stale
+            and set(claim.agenda_ids) <= set(evidence)
+        }
+        claims_by_text.update({claim.text: claim for claim in analysis.claims})
+        analysis = analysis.model_copy(update={
+            "claims": [claims_by_text[key] for key in sorted(claims_by_text)]
+        })
     if (
         topic.state != "resolved"
         and analysis.next_state == "resolved"
@@ -603,16 +703,42 @@ def build_topic_revision(
     draft = TopicDraft.model_validate(
         draft_source(context, analysis) if callable(draft_source) else draft_source
     )
+    if previous_revision is not None:
+        retained_ids = {
+            agenda_id for claim in analysis.claims for agenda_id in claim.agenda_ids
+        } & set(evidence)
+        next_sections = list(draft.sections)
+        by_key = {section.key: index for index, section in enumerate(next_sections)}
+        current_citations = {
+            agenda_id for section in next_sections
+            for agenda_id in CITATION_PATTERN.findall(section.body)
+        }
+        for previous_section in previous_revision.sections:
+            previous_ids = set(CITATION_PATTERN.findall(previous_section.body))
+            if not (previous_ids & retained_ids - current_citations):
+                continue
+            if previous_section.key in by_key:
+                index = by_key[previous_section.key]
+                current = next_sections[index]
+                next_sections[index] = current.model_copy(update={
+                    "body": f"{previous_section.body}\n\n{current.body}".strip()
+                })
+            else:
+                by_key[previous_section.key] = len(next_sections)
+                next_sections.append(previous_section)
+            current_citations.update(previous_ids)
+        draft = draft.model_copy(update={"sections": next_sections})
     cited_ids = validate_topic_draft(draft, evidence)
-    _validate_evidence_ids(sorted(cited_ids), evidence, topic)
+    _validate_evidence_ids(sorted(cited_ids), evidence, topic_for_build)
     for claim in analysis.claims:
-        _validate_evidence_ids(claim.agenda_ids, evidence, topic)
+        _validate_evidence_ids(claim.agenda_ids, evidence, topic_for_build)
 
     relations = _build_relations(
-        topic,
+        topic_for_build,
         analysis.relation_proposals,
         evidence,
         existing_topic_ids,
+        build_run_id,
     )
     model_name = _model_name(analysis_source, draft_source, model)
     revision_week = week or topic.last_updated_week
@@ -623,20 +749,25 @@ def build_topic_revision(
         body_markdown,
         analysis.claims,
         model_name,
+        build_run_id,
     )
     source_agenda_ids = sorted(
         cited_ids
-        | {
-            agenda_id
-            for claim in analysis.claims
-            for agenda_id in claim.agenda_ids
-        }
+        | {agenda_id for claim in analysis.claims for agenda_id in claim.agenda_ids}
         | {
             agenda_id
             for proposal in analysis.relation_proposals
             for agenda_id in proposal.agenda_ids
         }
     )
+    previous_claims = previous_revision.claims if previous_revision else []
+    previous_by_text = {claim.text: claim for claim in previous_claims}
+    next_by_text = {claim.text: claim for claim in analysis.claims}
+    changed_claims = [
+        ClaimChange(before=previous_by_text[text], after=next_by_text[text])
+        for text in sorted(previous_by_text.keys() & next_by_text.keys())
+        if previous_by_text[text].agenda_ids != next_by_text[text].agenda_ids
+    ]
     revision = TopicRevision(
         revision_id=revision_id,
         topic_id=topic.topic_id,
@@ -645,6 +776,26 @@ def build_topic_revision(
         sections=draft.sections,
         claims=analysis.claims,
         source_agenda_ids=source_agenda_ids,
+        evidence_refs=sorted(
+            (evidence_refs or {}).get(agenda_id, "")
+            for agenda_id in sorted(evidence)
+            if (evidence_refs or {}).get(agenda_id)
+        ),
+        previous_state=topic.state,
+        new_state=analysis.next_state,
+        added_agenda_ids=sorted(added_agenda_ids or source_agenda_ids),
+        added_claims=[next_by_text[key] for key in sorted(next_by_text.keys() - previous_by_text.keys())],
+        removed_claims=[previous_by_text[key] for key in sorted(previous_by_text.keys() - next_by_text.keys())],
+        changed_claims=changed_claims,
+        relation_changes=[
+            TopicRelationChange(relation_id=relation.relation_id, action="proposed")
+            for relation in sorted(relations, key=lambda value: value.relation_id)
+        ],
+        build_run_id=build_run_id,
+        prompt_version=TOPIC_PROMPT_VERSION,
+        builder_version=WIKI_BUILDER_VERSION,
+        summary=(draft.sections[0].body if draft.sections else analysis.title),
+        validation_results=["approved-evidence:ok", "citations:ok", "taxonomy:ok"],
         created_at=datetime.now(UTC),
         model=model_name,
     )
@@ -657,9 +808,10 @@ def build_topic_revision(
             "state": analysis.next_state,
             "importance": analysis.importance,
             "last_updated_week": revision_week,
+            "target_paths": topic_for_build.target_paths,
             "teams": sorted({*topic.teams, *(item.team for item in items)}),
             "source_agenda_ids": sorted(
-                {*topic.source_agenda_ids, *source_agenda_ids}
+                {*topic.source_agenda_ids, *evidence}
             ),
             "current_revision_id": revision_id,
         }

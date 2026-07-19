@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 
-import { fetchTeamWiki } from '../api/knowledge'
+import { fetchTeamWiki, fetchWikiTeams } from '../api/knowledge'
 import { formatTargetPath, TopicList } from '../components/TopicList'
 import type { TeamWikiView } from '../types'
 
@@ -17,6 +17,7 @@ export function TeamWikiPage() {
   const team = selectedTeam(params)
   const [view, setView] = useState<TeamWikiView | null>(null)
   const [error, setError] = useState(false)
+  const [index, setIndex] = useState<string[]>([])
 
   useEffect(() => {
     if (!team) return
@@ -30,12 +31,22 @@ export function TeamWikiPage() {
     return () => controller.abort()
   }, [team])
 
+  useEffect(() => {
+    if (team) return
+    const controller = new AbortController()
+    fetchWikiTeams(controller.signal).then((value) => setIndex(value.values)).catch(() => setError(true))
+    return () => controller.abort()
+  }, [team])
+
   if (!team) {
     return (
       <section className="projection-page projection-page--empty">
         <p className="projection-page__eyebrow">TEAM CONTRIBUTION PROJECTION</p>
         <h1>팀 기여 보기</h1>
-        <p>Topic에서 기여 팀을 선택해 팀별 운영 기록을 확인하세요.</p>
+        <p>게시된 Topic의 기여 팀을 선택하세요.</p>
+        {index.length > 0 ? <ul>{index.map((value) => (
+          <li key={value}><button type="button" onClick={() => navigate(`/wiki/teams/${encodeURIComponent(value)}`)}>{value}</button></li>
+        ))}</ul> : <p>선택할 팀이 없습니다.</p>}
       </section>
     )
   }

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 
-import { fetchWeekWiki, fetchWikiBuild } from '../api/knowledge'
+import { fetchWeekWiki, fetchWikiBuild, fetchWikiWeeks } from '../api/knowledge'
 import { TopicList } from '../components/TopicList'
 import type { WeekWikiView, WikiBuildRun } from '../types'
 
@@ -46,6 +46,7 @@ export function WeekWikiPage() {
   const [view, setView] = useState<WeekWikiView | null>(null)
   const [build, setBuild] = useState<WikiBuildRun | null>(null)
   const [error, setError] = useState(false)
+  const [index, setIndex] = useState<string[]>([])
 
   useEffect(() => {
     if (!week) return
@@ -69,12 +70,22 @@ export function WeekWikiPage() {
     return () => controller.abort()
   }, [week])
 
+  useEffect(() => {
+    if (week) return
+    const controller = new AbortController()
+    fetchWikiWeeks(controller.signal).then((value) => setIndex(value.values)).catch(() => setError(true))
+    return () => controller.abort()
+  }, [week])
+
   if (!week) {
     return (
       <section className="projection-page projection-page--empty">
         <p className="projection-page__eyebrow">VERSIONED WEEK SNAPSHOT</p>
         <h1>주차 변경 보기</h1>
-        <p>주차 경로를 선택해 게시된 변경 스냅샷을 확인하세요.</p>
+        <p>게시된 변경 스냅샷을 선택하세요.</p>
+        {index.length > 0 ? <ul>{index.map((value) => (
+          <li key={value}><button type="button" onClick={() => navigate(`/wiki/weeks/${value}`)}>{value}</button></li>
+        ))}</ul> : <p>게시된 주차가 없습니다.</p>}
       </section>
     )
   }
