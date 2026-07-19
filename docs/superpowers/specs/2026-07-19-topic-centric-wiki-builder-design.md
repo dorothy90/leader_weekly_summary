@@ -1,7 +1,7 @@
 # Topic-Centric Wiki Builder Design
 
 **Date:** 2026-07-19
-**Status:** Proposed for implementation planning
+**Status:** Approved for implementation planning
 **Scope:** Approved weekly Agenda classification through Wiki build and read APIs
 
 ## 1. Objective
@@ -38,6 +38,8 @@ The builder consumes only an approved classification run. It does not:
 - replace weekly or monthly report generation;
 - rewrite raw mail or Agenda evidence;
 - use the old assumption that every taxonomy node owns one monolithic narrative page.
+
+The default LLM for Agenda splitting and Topic Wiki analysis/generation is `z-ai/glm-5.2` through the existing OpenAI-compatible connection. Explicit `KNOWLEDGE_LLM_MODEL` or `LLM_MODEL` environment overrides remain supported, and external transmission still requires `KNOWLEDGE_LLM_DATA_POLICY_ACK=true`.
 
 The implementation extends the JSON-only `codex/lotcd-classification` branch. It does not restore the removed SQLite Knowledge Store, Agenda OpenSearch index, legacy Category Wiki Builder, Explorer, Mapping, or Wiki graph code. Existing weekly and monthly report paths remain unchanged while the new Wiki is protected by its own feature flag.
 
@@ -355,7 +357,7 @@ Rules:
 
 Within each section, ordering uses importance, unresolved state, recent material change, number of contributing teams, evidence count, and reviewed relation degree. The API returns the reasons used for ranking.
 
-Domain and Tech use the same projection mechanism at broader scope. They are taxonomy navigation levels, not additional canonical narrative documents.
+In the first implementation, Domain and Tech are hierarchy navigation and filtering levels that lead to LOTCD views; they do not receive separate aggregate Wiki pages. Broader Domain or Tech projections are deferred until the Topic and LOTCD workflow is validated.
 
 ### 7.3 Team mode
 
