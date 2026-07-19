@@ -138,6 +138,19 @@ def link_agenda(
     decider: DecisionFn,
 ) -> TopicLinkProposal:
     candidates = rank_topic_candidates(item, topics)
+    topics_by_id = {topic.topic_id: topic for topic in topics}
+    if item.item_kind == "aggregate" and any(
+        any(path.lotcd is not None for path in topics_by_id[value.topic_id].target_paths)
+        for value in candidates
+    ):
+        ranked_topics = [topics_by_id[value.topic_id] for value in candidates]
+        decision = TopicLinkDecision.model_validate(decider(item, ranked_topics))
+        return _review(
+            candidates,
+            decision,
+            "Aggregate Agenda cannot be auto-attached to a LOTCD-specific Topic.",
+        )
+
     plausible = [candidate for candidate in candidates if candidate.score >= 2.0]
     if not plausible:
         return TopicLinkProposal(
@@ -149,19 +162,8 @@ def link_agenda(
             candidates=candidates,
         )
 
-    topics_by_id = {topic.topic_id: topic for topic in topics}
     ranked_topics = [topics_by_id[candidate.topic_id] for candidate in candidates]
     decision = TopicLinkDecision.model_validate(decider(item, ranked_topics))
-
-    if item.item_kind == "aggregate" and any(
-        any(path.lotcd is not None for path in topics_by_id[value.topic_id].target_paths)
-        for value in plausible
-    ):
-        return _review(
-            candidates,
-            decision,
-            "Aggregate Agenda cannot be auto-attached to a LOTCD-specific Topic.",
-        )
 
     top = candidates[0]
     runner_up_score = candidates[1].score if len(candidates) > 1 else 0.0
@@ -256,7 +258,9 @@ def resolve_wiki_review(
     else:
         if not resolution.title:
             raise ValueError("Create resolution requires title")
-        topic_id = resolution.topic_id or _stable_id("T", review.agenda_id)
+        if resolution.topic_id is not None:
+            raise ValueError("Create resolution must not supply topic_id")
+        topic_id = _stable_id("T", review.agenda_id)
     store.save_assignment(
         TopicAssignment(
             agenda_id=review.agenda_id,

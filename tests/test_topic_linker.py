@@ -2,6 +2,8 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
 from knowledge_models import (
     CategoryPath,
     ClassificationDecision,
@@ -174,6 +176,17 @@ def test_aggregate_item_against_lotcd_topic_forces_review():
     assert proposal.action == "review"
 
 
+def test_low_overlap_aggregate_against_lotcd_topic_forces_review():
+    proposal = link_agenda(
+        item("Spica 종합 출하 계획", None, kind="aggregate"),
+        [topic("D1 불량 증가")],
+        fake_decider("create"),
+    )
+
+    assert proposal.candidates[0].score < 2.0
+    assert proposal.action == "review"
+
+
 def test_decider_receives_only_the_five_ranked_topics():
     seen = []
     topics = [topic("D1 불량", topic_id=f"T-{number:03}") for number in range(8)]
@@ -237,6 +250,53 @@ def test_hold_resolution_keeps_review_blocking_and_unassigned(tmp_path):
 
     assert held.status == "held"
     assert store.assignment(agenda.agenda_id) is None
+
+
+def test_manual_create_rejects_caller_supplied_topic_id(tmp_path):
+    store = JsonWikiStore(tmp_path / "wiki_data")
+    agenda = item("4SA 출하 일정")
+    proposal = link_agenda(
+        agenda,
+        [topic("4SA D1 불량")],
+        fake_decider("attach", "T-001"),
+    )
+    review = persist_link_proposal(store, agenda, proposal)
+
+    with pytest.raises(ValueError, match="must not supply topic_id"):
+        resolve_wiki_review(
+            store,
+            review.review_id,
+            WikiReviewResolution(
+                action="create", topic_id="T-CALLER", title="새 Topic"
+            ),
+            "operator@example.com",
+        )
+
+    assert store.assignment(agenda.agenda_id) is None
+    assert store.reviews()[0].status == "pending"
+
+
+def test_manual_create_always_uses_stable_new_topic_id(tmp_path):
+    store = JsonWikiStore(tmp_path / "wiki_data")
+    agenda = item("4SA 출하 일정")
+    expected_topic_id = link_agenda(agenda, [], fake_decider("review")).topic_id
+    proposal = link_agenda(
+        agenda,
+        [topic("4SA D1 불량")],
+        fake_decider("attach", "T-001"),
+    )
+    review = persist_link_proposal(store, agenda, proposal)
+
+    resolve_wiki_review(
+        store,
+        review.review_id,
+        WikiReviewResolution(action="create", title="새 Topic"),
+        "operator@example.com",
+    )
+
+    assignment = store.assignment(agenda.agenda_id)
+    assert assignment is not None
+    assert assignment.topic_id == expected_topic_id
 
 
 def test_gold_fixture_has_zero_incorrect_auto_merges():
