@@ -1,0 +1,33 @@
+{
+  "topics": [
+    {"title": "D1 불량 증가", "lotcd": "4SA", "topic_id": "T-001"},
+    {"title": "고객 출하 일정", "lotcd": "4SA", "topic_id": "T-002"}
+  ],
+  "cases": [
+    {
+      "name": "same defect identity",
+      "summary": "D1 불량 증가",
+      "lotcd": "4SA",
+      "topic_hint": "D1 불량",
+      "decision": "attach",
+      "decision_topic_id": "T-001",
+      "expected_action": "attach",
+      "expected_topic_id": "T-001"
+    },
+    {
+      "name": "same lotcd different subject",
+      "summary": "원가 절감 검토",
+      "lotcd": "4SA",
+      "decision": "attach",
+      "decision_topic_id": "T-001",
+      "expected_action": "review"
+    },
+    {
+      "name": "distinct new subject",
+      "summary": "신규 장비 반입",
+      "lotcd": "4SA",
+      "decision": "create",
+      "expected_action": "create"
+    }
+  ]
+}
