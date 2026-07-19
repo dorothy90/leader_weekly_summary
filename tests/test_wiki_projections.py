@@ -156,6 +156,59 @@ def test_projection_activity_uses_canonical_topic_agenda_evidence(stores):
     assert team.recent_activity[1].source_quote == "8HBM 수율이 개선됐다."
 
 
+def test_team_recent_activity_uses_four_week_iso_window_across_year(tmp_path):
+    data_dir = tmp_path / "classification_data"
+    data_dir.mkdir()
+    base = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    source = base["items"]["A-001"]
+    for week, agenda_id in (
+        ("2025-W48", "A-stale"),
+        ("2025-W52", "A-year-end"),
+        ("2026-W02", "A-recent"),
+        ("2026-W03", "A-latest"),
+    ):
+        document = {**base, "week": week}
+        document["items"] = {
+            agenda_id: {
+                **source,
+                "agenda_id": agenda_id,
+                "mail_id": f"M-{agenda_id}",
+                "subject": week,
+                "source_quote": f"evidence from {week}",
+                "classification_context": f"evidence from {week}",
+            }
+        }
+        (data_dir / f"{week}.json").write_text(
+            json.dumps(document, ensure_ascii=False), encoding="utf-8"
+        )
+    rules_path = tmp_path / "classification_rules.json"
+    shutil.copy(RULES, rules_path)
+    classification = JsonClassificationStore(data_dir, rules_path)
+    wiki = JsonWikiStore(tmp_path / "wiki_data")
+    value = topic(week="2026-W03").model_copy(
+        update={
+            "first_seen_week": "2025-W48",
+            "target_paths": [path()],
+            "teams": ["Yield"],
+            "source_agenda_ids": [
+                "A-latest",
+                "A-recent",
+                "A-stale",
+                "A-year-end",
+            ],
+        }
+    )
+    wiki.publish_topic(value, revision(value))
+
+    view = build_team_view(wiki, classification, "Yield")
+
+    assert [(item.week, item.agenda_id) for item in view.recent_activity] == [
+        ("2026-W03", "A-latest"),
+        ("2026-W02", "A-recent"),
+        ("2025-W52", "A-year-end"),
+    ]
+
+
 def test_pending_relation_review_does_not_block_publication(stores):
     classification, wiki = stores
     wiki.save_review(

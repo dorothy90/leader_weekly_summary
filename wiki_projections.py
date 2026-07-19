@@ -186,6 +186,24 @@ def _source_agenda_ids(topics: list[WikiTopic]) -> list[str]:
     )
 
 
+def _four_week_activity(
+    evidence: list[WikiEvidence],
+    projection_week: str,
+) -> list[WikiEvidence]:
+    anchor = max(
+        [_week_date(projection_week), *(_week_date(item.week) for item in evidence)]
+    )
+    recent = [
+        item
+        for item in evidence
+        if 0 <= (anchor - _week_date(item.week)).days < 28
+    ]
+    return sorted(
+        recent,
+        key=lambda item: (-_week_date(item.week).toordinal(), item.agenda_id),
+    )
+
+
 def build_topic_detail(
     store: JsonWikiStore,
     classification_store: Any,
@@ -305,15 +323,19 @@ def build_team_view(
         for topic in topics
         for path in topic.target_paths
     }
+    team_evidence = _evidence(
+        classification_store,
+        _source_agenda_ids(topics),
+        lambda item: item.team == team,
+    )
+    projection_week = max(
+        (topic.last_updated_week for topic in topics), default=reference_week
+    )
     return TeamWikiView(
         team=team,
         topics=ranked,
         topic_ids=sorted(topic.topic_id for topic in topics),
-        recent_activity=_evidence(
-            classification_store,
-            _source_agenda_ids(topics),
-            lambda item: item.team == team,
-        ),
+        recent_activity=_four_week_activity(team_evidence, projection_week),
         partner_teams=sorted(
             {partner for topic in topics for partner in topic.teams if partner != team}
         ),
