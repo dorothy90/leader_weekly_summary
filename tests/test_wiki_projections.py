@@ -12,9 +12,10 @@ from knowledge_models import (
     TopicRevision,
     TopicSection,
     WikiReview,
+    WikiReviewResolution,
     WikiTopic,
 )
-from topic_linker import TopicLinkDecision
+from topic_linker import TopicLinkDecision, resolve_wiki_review
 from topic_wiki_builder import RelationProposal, TopicAnalysis, TopicDraft, build_week
 from wiki_projections import (
     LOTCD_SECTION_ORDER,
@@ -272,6 +273,97 @@ def test_build_creates_typed_nonblocking_review_for_relation_proposal(stores):
     assert reviews[0].relation_agenda_ids == ["A-001"]
     assert reviews[0].relation_id == wiki.relation(reviews[0].relation_id).relation_id
     assert reviews[0].review_id == f"R-{reviews[0].relation_id}"
+
+
+def _build_with_relation(classification, wiki):
+    def analysis_with_relation(_context):
+        return fake_analysis(_context).model_copy(
+            update={
+                "relation_proposals": [
+                    RelationProposal(
+                        target_topic_id="T-002",
+                        kind="possible_cause",
+                        agenda_ids=["A-001"],
+                        confidence=0.8,
+                    )
+                ]
+            }
+        )
+
+    analysis_with_relation.model = "test-model"
+    return build_week(
+        "2026-W30",
+        classification,
+        wiki,
+        lambda *_: None,
+        analysis_with_relation,
+        fake_draft,
+    )
+
+
+def _change_assignment_digest(wiki):
+    wiki.save_assignment(
+        TopicAssignment(
+            agenda_id="A-rebuild-marker",
+            topic_id="T-002",
+            decision="attach",
+            confidence=1,
+            rationale="force deterministic rebuild",
+            decision_source="manual",
+            decided_by="tester",
+            decided_at=datetime(2026, 7, 20, tzinfo=UTC),
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    ("action", "expected_state"),
+    [("accept", "accepted"), ("reject", "rejected")],
+)
+def test_rebuild_preserves_resolved_relation_and_review(
+    stores, action, expected_state
+):
+    classification, wiki = stores
+    target = topic("T-002")
+    wiki.publish_topic(target, revision(target))
+    _build_with_relation(classification, wiki)
+    review = wiki.reviews("pending")[0]
+    resolve_wiki_review(
+        wiki,
+        review.review_id,
+        WikiReviewResolution(action=action),
+        "operator@example.com",
+    )
+    _change_assignment_digest(wiki)
+
+    _build_with_relation(classification, wiki)
+
+    assert wiki.relation(review.relation_id).review_state == expected_state
+    preserved = next(
+        value for value in wiki.reviews() if value.review_id == review.review_id
+    )
+    assert preserved.status == "resolved"
+
+
+def test_rebuild_preserves_pending_relation_and_review_metadata(stores):
+    classification, wiki = stores
+    target = topic("T-002")
+    wiki.publish_topic(target, revision(target))
+    _build_with_relation(classification, wiki)
+    review = wiki.reviews("pending")[0]
+    relation = wiki.relation(review.relation_id)
+    wiki.save_relation(relation.model_copy(update={"confidence": 0.91}))
+    wiki.save_review(review.model_copy(update={"rationale": "operator context"}))
+    _change_assignment_digest(wiki)
+
+    _build_with_relation(classification, wiki)
+
+    assert wiki.relation(review.relation_id).confidence == 0.91
+    preserved = next(
+        value for value in wiki.reviews() if value.review_id == review.review_id
+    )
+    assert preserved.status == "pending"
+    assert preserved.rationale == "operator context"
 
 
 def test_identical_successful_build_is_reused(stores):

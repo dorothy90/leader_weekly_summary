@@ -307,6 +307,11 @@ def build_week(
                 )
                 wiki_store.publish_topic(updated, revision)
                 for relation in relations:
+                    try:
+                        wiki_store.relation(relation.relation_id)
+                        continue
+                    except KeyError:
+                        pass
                     wiki_store.save_relation(relation)
                     wiki_store.save_review(
                         WikiReview(
