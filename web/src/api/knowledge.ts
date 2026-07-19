@@ -7,8 +7,19 @@ import type {
   ClassificationRunComparison,
   ClassificationSplitPart,
   ClassificationWeek,
+  DomainName,
+  KnowledgeArea,
   KnowledgeSession,
+  LotcdWikiView,
   Taxonomy,
+  TeamWikiView,
+  TopicListItem,
+  TopicState,
+  WeekWikiView,
+  WikiBuildRun,
+  WikiReview,
+  WikiReviewResolution,
+  WikiTopicDetail,
 } from '../types'
 
 async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
@@ -116,3 +127,76 @@ export const fetchTaxonomy = (signal?: AbortSignal) =>
 
 export const fetchSession = (signal?: AbortSignal) =>
   getJson<KnowledgeSession>('/api/knowledge/session', signal)
+
+export function fetchTopics(
+  filters: {
+    q?: string
+    state?: TopicState
+    area?: KnowledgeArea
+    team?: string
+    lotcd?: string
+  } = {},
+  signal?: AbortSignal,
+) {
+  const params = new URLSearchParams()
+  Object.entries(filters).forEach(([key, value]) => {
+    if (value) params.set(key, value)
+  })
+  const query = params.toString()
+  return getJson<TopicListItem[]>(
+    `/api/knowledge/wiki/topics${query ? `?${query}` : ''}`,
+    signal,
+  )
+}
+
+export const fetchTopic = (topicId: string, signal?: AbortSignal) =>
+  getJson<WikiTopicDetail>(
+    `/api/knowledge/wiki/topics/${encodeURIComponent(topicId)}`,
+    signal,
+  )
+
+export const fetchLotcdWiki = (
+  domain: DomainName,
+  tech: string,
+  lotcd: string,
+  signal?: AbortSignal,
+) => getJson<LotcdWikiView>(
+  `/api/knowledge/wiki/lotcd/${encodeURIComponent(domain)}/${encodeURIComponent(tech)}/${encodeURIComponent(lotcd)}`,
+  signal,
+)
+
+export const resolveWikiReview = (
+  reviewId: string,
+  input: WikiReviewResolution,
+) => mutate<WikiReview>(
+  `/api/knowledge/wiki/reviews/${encodeURIComponent(reviewId)}/resolve`,
+  'POST',
+  input,
+)
+
+export const fetchTeamWiki = (team: string, signal?: AbortSignal) =>
+  getJson<TeamWikiView>(
+    `/api/knowledge/wiki/teams/${encodeURIComponent(team)}`,
+    signal,
+  )
+
+export const fetchWeekWiki = (week: string, signal?: AbortSignal) =>
+  getJson<WeekWikiView>(
+    `/api/knowledge/wiki/weeks/${encodeURIComponent(week)}`,
+    signal,
+  )
+
+export const fetchWikiReviews = (signal?: AbortSignal) =>
+  getJson<WikiReview[]>('/api/knowledge/wiki/reviews?status=pending', signal)
+
+export const startWikiBuild = (week: string) =>
+  mutate<WikiBuildRun>(
+    `/api/knowledge/wiki/builds/${encodeURIComponent(week)}`,
+    'POST',
+  )
+
+export const fetchWikiBuild = (runId: string, signal?: AbortSignal) =>
+  getJson<WikiBuildRun>(
+    `/api/knowledge/wiki/builds/${encodeURIComponent(runId)}`,
+    signal,
+  )

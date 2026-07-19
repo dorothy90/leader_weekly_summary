@@ -144,3 +144,183 @@ export interface ClassificationRunComparison {
   changed: RunItemChange[]
   unchanged_count: number
 }
+
+export type TopicKind =
+  | 'issue'
+  | 'observation'
+  | 'change'
+  | 'experiment'
+  | 'action'
+  | 'decision'
+  | 'plan'
+  | 'knowledge'
+
+export type KnowledgeArea =
+  | 'yield_defect'
+  | 'process_equipment'
+  | 'quality_analysis'
+  | 'experiment_validation'
+  | 'product_production'
+  | 'schedule_delivery'
+  | 'decision_action'
+  | 'other'
+
+export type TopicState =
+  | 'new'
+  | 'investigating'
+  | 'action_in_progress'
+  | 'monitoring'
+  | 'resolved'
+  | 'reopened'
+  | 'closed'
+  | 'review_required'
+
+export interface WikiTopic {
+  topic_id: string
+  title: string
+  topic_kind: TopicKind
+  primary_area: KnowledgeArea
+  secondary_areas: KnowledgeArea[]
+  state: TopicState
+  importance: 'low' | 'medium' | 'high' | 'critical'
+  first_seen_week: string
+  last_updated_week: string
+  target_paths: CategoryPath[]
+  teams: string[]
+  source_agenda_ids: string[]
+  related_topic_ids: string[]
+  current_revision_id: string
+}
+
+export type RelationKind =
+  | 'possible_cause'
+  | 'affects'
+  | 'measurement_effect'
+  | 'comparison'
+  | 'follow_up'
+  | 'supports'
+  | 'contradicts'
+  | 'shares_condition'
+
+export interface TopicRelation {
+  relation_id: string
+  source_topic_id: string
+  target_topic_id: string
+  kind: RelationKind
+  agenda_ids: string[]
+  confidence: number
+  review_state: 'pending' | 'accepted' | 'rejected'
+}
+
+export interface WikiTopicDetail {
+  topic: WikiTopic
+  body_markdown: string
+  sections: Array<{ key: string; title: string; body: string }>
+  claims: Array<{ text: string; agenda_ids: string[] }>
+  evidence: WikiEvidence[]
+  relations: TopicRelation[]
+}
+
+export interface TopicListItem {
+  topic_id: string
+  title: string
+  state: TopicState
+  importance: 'low' | 'medium' | 'high' | 'critical'
+  primary_area: KnowledgeArea
+  target_paths: CategoryPath[]
+  teams: string[]
+  last_updated_week: string
+  evidence_count: number
+  rank_reasons: string[]
+}
+
+export interface WikiEvidence {
+  agenda_id: string
+  mail_id: string
+  team: string
+  week: string
+  subject: string
+  source_quote: string
+  source_path: string | null
+}
+
+export interface LotcdWikiView {
+  domain: DomainName
+  tech: string
+  lotcd: string
+  summary: string
+  recent_changes: TopicListItem[]
+  active_topics: TopicListItem[]
+  knowledge_areas: Partial<Record<KnowledgeArea, TopicListItem[]>>
+  actions_and_decisions: TopicListItem[]
+  related_lotcds: string[]
+  closed_topics: Record<string, TopicListItem[]>
+  activity: WikiEvidence[]
+  topic_ids: string[]
+}
+
+export interface TeamWikiView {
+  team: string
+  topics: TopicListItem[]
+  topic_ids: string[]
+  recent_activity: WikiEvidence[]
+  partner_teams: string[]
+  target_paths: CategoryPath[]
+  actions_and_decisions: TopicListItem[]
+}
+
+export interface WeekWikiView {
+  week: string
+  revision_id: string
+  published_at: string
+  build_run_id: string
+  new_topic_ids: string[]
+  changed_topic_ids: string[]
+  resolved_topic_ids: string[]
+  reopened_topic_ids: string[]
+  new_relation_ids: string[]
+  pending_assignment_count: number
+  contradictions: string[]
+  teams: string[]
+}
+
+export interface WikiReview {
+  review_id: string
+  kind: 'assignment' | 'relation'
+  agenda_id: string | null
+  candidates: Array<{
+    topic_id: string
+    score: number
+    rank_reasons: string[]
+  }>
+  relation_id: string | null
+  rationale: string
+  status: 'pending' | 'resolved' | 'held'
+}
+
+export interface WikiBuildRun {
+  run_id: string
+  week: string
+  classification_run_id: string
+  status:
+    | 'linking'
+    | 'review_required'
+    | 'generating'
+    | 'validating'
+    | 'published'
+    | 'partially_failed'
+    | 'failed'
+  input_hash: string
+  model: string
+  affected_topic_ids: string[]
+  failed_topic_ids: string[]
+  started_at: string
+  completed_at: string | null
+  error: string | null
+}
+
+export interface WikiReviewResolution {
+  action: 'attach' | 'create' | 'hold' | 'accept' | 'reject'
+  topic_id?: string
+  title?: string
+}
