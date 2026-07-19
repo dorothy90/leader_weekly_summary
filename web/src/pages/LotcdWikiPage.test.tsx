@@ -41,7 +41,7 @@ const lotcdView: LotcdWikiView = {
   active_topics: [activeTopic],
   knowledge_areas: { yield_defect: [activeTopic], quality_analysis: [closedTopic] },
   actions_and_decisions: [activeTopic],
-  related_lotcds: ['8HBM'],
+  related_lotcds: ['8HBM', 'DUP', 'GHOST'],
   closed_topics: { '2026-Q2': [closedTopic] },
   activity: [
     {
@@ -60,14 +60,24 @@ const taxonomy: Taxonomy = {
   version: 7,
   is_dummy: false,
   notice: '',
-  domains: [{
-    id: 'dram', name: 'DRAM', techs: [{
-      id: 'spica', name: 'Spica', aliases: [], lotcds: [
-        { code: '4SA', fab_id: 'F4', product_code: '4SA', product: '4SA Product', aliases: [] },
-        { code: '8HBM', fab_id: 'F8', product_code: '8HBM', product: '8HBM Product', aliases: [] },
-      ],
-    }],
-  }],
+  domains: [
+    {
+      id: 'dram', name: 'DRAM', techs: [{
+        id: 'spica', name: 'Spica', aliases: [], lotcds: [
+          { code: '4SA', fab_id: 'F4', product_code: '4SA', product: '4SA Product', aliases: [] },
+          { code: 'DUP', fab_id: 'FD', product_code: 'DUP', product: 'Duplicate DRAM', aliases: [] },
+        ],
+      }],
+    },
+    {
+      id: 'nand', name: 'NAND', techs: [{
+        id: 'orion', name: 'Orion X', aliases: [], lotcds: [
+          { code: '8HBM', fab_id: 'F8', product_code: '8HBM', product: '8HBM Product', aliases: [] },
+          { code: 'DUP', fab_id: 'FN', product_code: 'DUP', product: 'Duplicate NAND', aliases: [] },
+        ],
+      }],
+    },
+  ],
   group_aliases: [],
 }
 
@@ -110,10 +120,35 @@ it('uses backend projection fields without duplicating Topic narrative', async (
     'href',
     '/wiki/topics/T-001?from=%2Fwiki%2Flotcd%2FDRAM%2FSpica%2F4SA',
   )
-  expect(screen.getByRole('link', { name: '8HBM' })).toHaveAttribute(
+})
+
+it('resolves unique related LOTCDs across the full taxonomy and preserves return context', async () => {
+  renderPage()
+
+  expect(await screen.findByRole('link', { name: '8HBM' })).toHaveAttribute(
     'href',
-    '/wiki/lotcd/DRAM/Spica/8HBM',
+    '/wiki/lotcd/NAND/Orion%20X/8HBM?from=%2Fwiki%2Flotcd%2FDRAM%2FSpica%2F4SA',
   )
+})
+
+it('shows every canonical path when a related LOTCD code is ambiguous', async () => {
+  renderPage()
+
+  expect(await screen.findByRole('link', { name: 'DRAM / Spica / DUP' })).toHaveAttribute(
+    'href',
+    '/wiki/lotcd/DRAM/Spica/DUP?from=%2Fwiki%2Flotcd%2FDRAM%2FSpica%2F4SA',
+  )
+  expect(screen.getByRole('link', { name: 'NAND / Orion X / DUP' })).toHaveAttribute(
+    'href',
+    '/wiki/lotcd/NAND/Orion%20X/DUP?from=%2Fwiki%2Flotcd%2FDRAM%2FSpica%2F4SA',
+  )
+})
+
+it('marks a related LOTCD unavailable when taxonomy has no matching path', async () => {
+  renderPage()
+
+  expect(await screen.findByText('GHOST · 경로 확인 불가')).toBeInTheDocument()
+  expect(screen.queryByRole('link', { name: /GHOST/ })).not.toBeInTheDocument()
 })
 
 it('groups activity first by week and then by team', async () => {

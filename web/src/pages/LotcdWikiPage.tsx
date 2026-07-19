@@ -6,6 +6,12 @@ import { TaxonomyTree } from '../components/TaxonomyTree'
 import { knowledgeAreaLabels, TopicList } from '../components/TopicList'
 import type { DomainName, LotcdWikiView, Taxonomy, WikiEvidence } from '../types'
 
+interface CanonicalLotcdPath {
+  domain: DomainName
+  tech: string
+  lotcd: string
+}
+
 function routePath(params: Readonly<Record<string, string | undefined>>) {
   const parts = params['*']?.split('/').map((part) => decodeURIComponent(part)) ?? []
   return {
@@ -29,6 +35,18 @@ function groupActivity(activity: WikiEvidence[]) {
     weeks.set(evidence.week, teams)
   })
   return weeks
+}
+
+function relatedPaths(taxonomy: Taxonomy, lotcdCode: string): CanonicalLotcdPath[] {
+  return taxonomy.domains.flatMap((domain) => domain.techs.flatMap((tech) => (
+    tech.lotcds.some((lotcd) => lotcd.code === lotcdCode)
+      ? [{ domain: domain.name, tech: tech.name, lotcd: lotcdCode }]
+      : []
+  )))
+}
+
+function lotcdLink(path: CanonicalLotcdPath, from: string) {
+  return `/wiki/lotcd/${encodeURIComponent(path.domain)}/${encodeURIComponent(path.tech)}/${encodeURIComponent(path.lotcd)}?from=${encodeURIComponent(from)}`
 }
 
 function RankedTopics({ topics, from }: { topics: LotcdWikiView['active_topics']; from: string }) {
@@ -141,13 +159,26 @@ export function LotcdWikiPage() {
               <h2>연관 LOTCD</h2>
               {view.related_lotcds.length > 0 ? (
                 <ul className="lotcd-related">
-                  {view.related_lotcds.map((related) => (
-                    <li key={related}>
-                      <Link to={`/wiki/lotcd/${encodeURIComponent(view.domain)}/${encodeURIComponent(view.tech)}/${encodeURIComponent(related)}`}>
-                        {related}
-                      </Link>
-                    </li>
-                  ))}
+                  {view.related_lotcds.map((related) => {
+                    const paths = relatedPaths(taxonomy, related)
+                    if (paths.length === 0) {
+                      return <li key={related} className="lotcd-related__unavailable">{related} · 경로 확인 불가</li>
+                    }
+                    if (paths.length === 1) {
+                      return <li key={related}><Link to={lotcdLink(paths[0], from)}>{related}</Link></li>
+                    }
+                    return (
+                      <li key={related} className="lotcd-related__ambiguous">
+                        <span>{related} · 경로 {paths.length}개</span>
+                        <ul>
+                          {paths.map((path) => {
+                            const label = `${path.domain} / ${path.tech} / ${path.lotcd}`
+                            return <li key={label}><Link to={lotcdLink(path, from)}>{label}</Link></li>
+                          })}
+                        </ul>
+                      </li>
+                    )
+                  })}
                 </ul>
               ) : <p className="lotcd-empty">연관 LOTCD가 없습니다.</p>}
             </section>
