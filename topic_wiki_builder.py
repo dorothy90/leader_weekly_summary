@@ -16,6 +16,7 @@ from knowledge_models import (
     RelationKind,
     StrictModel,
     SupportedClaim,
+    TopicAssignment,
     TopicKind,
     TopicRelation,
     TopicRevision,
@@ -134,8 +135,11 @@ def _factual_chunks(section: TopicSection) -> list[str]:
             continue
         chunks.extend(
             value.strip()
-            for value in re.split(r"(?<=[.!?])\s+(?=(?!\[agenda:)\S)", stripped)
-            if value.strip() and not value.rstrip().endswith("?")
+            for value in re.split(
+                r"(?<=[.!?;。！？；])\s*(?=(?!\[agenda:)\S)",
+                stripped,
+            )
+            if value.strip() and not value.rstrip().endswith(("?", "？"))
         )
     return chunks
 
@@ -216,6 +220,24 @@ def _build_context(
     }
 
 
+def _validate_assignments(
+    topic: WikiTopic,
+    evidence: Sequence[ClassificationItem],
+    assignments: Sequence[TopicAssignment],
+) -> None:
+    by_agenda_id = {assignment.agenda_id: assignment for assignment in assignments}
+    if len(by_agenda_id) != len(assignments):
+        raise ValueError("duplicate Topic assignment")
+    for item in evidence:
+        assignment = by_agenda_id.get(item.agenda_id)
+        if assignment is None:
+            raise ValueError(f"missing accepted assignment: {item.agenda_id}")
+        if assignment.topic_id != topic.topic_id:
+            raise ValueError(
+                f"assignment targets another Topic: {item.agenda_id}"
+            )
+
+
 def _model_name(
     analysis_source: TopicAnalysis | AnalysisFn,
     draft_source: TopicDraft | DraftFn,
@@ -262,6 +284,8 @@ def _build_relations(
     evidence: Mapping[str, ClassificationItem],
     existing_topic_ids: set[str] | None,
 ) -> list[TopicRelation]:
+    if proposals and existing_topic_ids is None:
+        raise ValueError("existing Topic IDs are required for relation proposals")
     relations: list[TopicRelation] = []
     for proposal in proposals:
         if proposal.target_topic_id == topic.topic_id:
@@ -298,6 +322,7 @@ def _build_relations(
 def build_topic_revision(
     topic: WikiTopic,
     items: Sequence[ClassificationItem],
+    assignments: Sequence[TopicAssignment],
     analysis_source: TopicAnalysis | AnalysisFn,
     draft_source: TopicDraft | DraftFn,
     *,
@@ -312,6 +337,7 @@ def build_topic_revision(
     for item in items:
         if item.decision.status not in APPROVED_EVIDENCE_STATUSES:
             raise ValueError(f"unapproved Agenda ID: {item.agenda_id}")
+    _validate_assignments(topic, items, assignments)
     context = _build_context(topic, items, previous_revision)
     analysis = TopicAnalysis.model_validate(
         analysis_source(context) if callable(analysis_source) else analysis_source
@@ -349,7 +375,19 @@ def build_topic_revision(
         analysis.claims,
         model_name,
     )
-    source_agenda_ids = sorted(evidence)
+    source_agenda_ids = sorted(
+        cited_ids
+        | {
+            agenda_id
+            for claim in analysis.claims
+            for agenda_id in claim.agenda_ids
+        }
+        | {
+            agenda_id
+            for proposal in analysis.relation_proposals
+            for agenda_id in proposal.agenda_ids
+        }
+    )
     revision = TopicRevision(
         revision_id=revision_id,
         topic_id=topic.topic_id,

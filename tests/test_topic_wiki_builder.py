@@ -7,6 +7,7 @@ from knowledge_models import (
     ClassificationDecision,
     ClassificationItem,
     SupportedClaim,
+    TopicAssignment,
     TopicSection,
     TopicRevision,
     WikiTopic,
@@ -49,6 +50,23 @@ def item(
         team="Yield",
         received_at=datetime(2026, 7, 19, tzinfo=UTC),
         state_hint=state_hint,
+    )
+
+
+def assignment(
+    *,
+    agenda_id: str = "A-001",
+    topic_id: str = "T-001",
+) -> TopicAssignment:
+    return TopicAssignment(
+        agenda_id=agenda_id,
+        topic_id=topic_id,
+        decision="attach",
+        confidence=1,
+        rationale="accepted assignment",
+        decision_source="manual",
+        decided_by="reviewer@example.com",
+        decided_at=datetime(2026, 7, 19, tzinfo=UTC),
     )
 
 
@@ -129,6 +147,7 @@ def test_resolved_state_requires_terminal_evidence():
         build_topic_revision(
             topic(state="investigating"),
             [item(state_hint="open")],
+            [assignment()],
             analysis(state="resolved"),
             draft(),
         )
@@ -164,6 +183,26 @@ def test_each_factual_sentence_requires_its_own_citation():
         validate_topic_draft(cited_once, {"A-001": item()})
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        "사실 A [agenda:A-001]; 사실 B",
+        "사실 A [agenda:A-001]；사실 B",
+        "사실 A [agenda:A-001]。사실 B",
+    ],
+)
+def test_each_semicolon_or_unicode_delimited_claim_requires_citation(body):
+    with pytest.raises(ValueError, match="uncited factual claim: 사실 B"):
+        validate_topic_draft(
+            draft(
+                sections=[
+                    TopicSection(key="observations", title="관찰", body=body)
+                ]
+            ),
+            {"A-001": item()},
+        )
+
+
 def test_claim_with_incompatible_taxonomy_path_is_rejected():
     cited = draft(
         sections=[
@@ -184,6 +223,7 @@ def test_claim_with_incompatible_taxonomy_path_is_rejected():
         build_topic_revision(
             topic(),
             [item(agenda_id="A-002", lotcd="8HBM")],
+            [assignment(agenda_id="A-002")],
             analyzed,
             cited,
             model="test-model",
@@ -195,6 +235,7 @@ def test_unapproved_classification_item_is_rejected():
         build_topic_revision(
             topic(),
             [item(status="review_required")],
+            [assignment()],
             analysis(),
             draft(
                 sections=[
@@ -205,6 +246,28 @@ def test_unapproved_classification_item_is_rejected():
                     )
                 ]
             ),
+            model="test-model",
+        )
+
+
+def test_evidence_requires_an_accepted_assignment_for_this_topic():
+    with pytest.raises(ValueError, match="missing accepted assignment: A-001"):
+        build_topic_revision(
+            topic(),
+            [item()],
+            [],
+            analysis(),
+            draft(),
+            model="test-model",
+        )
+
+    with pytest.raises(ValueError, match="assignment targets another Topic: A-001"):
+        build_topic_revision(
+            topic(),
+            [item()],
+            [assignment(topic_id="T-002")],
+            analysis(),
+            draft(),
             model="test-model",
         )
 
@@ -227,10 +290,36 @@ def test_relation_proposal_requires_an_existing_target_topic():
         build_topic_revision(
             topic(),
             [item()],
+            [assignment()],
             analyzed,
             draft(),
             model="test-model",
             existing_topic_ids={"T-001"},
+        )
+
+
+def test_relation_proposal_requires_explicit_known_topics():
+    analyzed = analysis().model_copy(
+        update={
+            "relation_proposals": [
+                RelationProposal(
+                    target_topic_id="T-002",
+                    kind="supports",
+                    agenda_ids=["A-001"],
+                    confidence=0.8,
+                )
+            ]
+        }
+    )
+
+    with pytest.raises(ValueError, match="existing Topic IDs are required"):
+        build_topic_revision(
+            topic(),
+            [item()],
+            [assignment()],
+            analyzed,
+            draft(),
+            model="test-model",
         )
 
 
@@ -267,10 +356,12 @@ def test_revision_is_rendered_deterministically_and_records_model():
     updated, revision, relations = build_topic_revision(
         topic(),
         [evidence],
+        [assignment()],
         analyzed,
         drafted,
         week="2026-W29",
         model="z-ai/glm-5.2",
+        existing_topic_ids={"T-001", "T-002"},
     )
 
     assert revision.body_markdown == (
@@ -286,6 +377,34 @@ def test_revision_is_rendered_deterministically_and_records_model():
     assert relations[0].review_state == "pending"
 
 
+def test_revision_sources_include_only_referenced_agendas():
+    analyzed = analysis().model_copy(
+        update={
+            "claims": [SupportedClaim(text="수율 하락", agenda_ids=["A-001"])]
+        }
+    )
+    cited = draft(
+        sections=[
+            TopicSection(
+                key="observations",
+                title="관찰",
+                body="수율이 하락했다. [agenda:A-001]",
+            )
+        ]
+    )
+
+    _, revision, _ = build_topic_revision(
+        topic(),
+        [item(), item(agenda_id="A-unused")],
+        [assignment(), assignment(agenda_id="A-unused")],
+        analyzed,
+        cited,
+        model="test-model",
+    )
+
+    assert revision.source_agenda_ids == ["A-001"]
+
+
 def test_failed_revision_does_not_change_previous_current_pointer():
     previous = topic()
 
@@ -293,6 +412,7 @@ def test_failed_revision_does_not_change_previous_current_pointer():
         build_topic_revision(
             previous,
             [item()],
+            [assignment()],
             analysis(),
             draft(
                 sections=[
@@ -371,6 +491,7 @@ def test_revision_builder_invokes_analysis_then_draft_with_previous_revision():
     _, revision, _ = build_topic_revision(
         topic(),
         [item()],
+        [assignment()],
         analyze,
         write,
         previous_revision=previous_revision(),
