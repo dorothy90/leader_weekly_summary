@@ -214,6 +214,20 @@ def _group_assigned_items(
     return dict(sorted(grouped.items()))
 
 
+def _pending_relation_review(relation: TopicRelation) -> WikiReview:
+    return WikiReview(
+        review_id=f"R-{relation.relation_id}",
+        kind="relation",
+        relation_id=relation.relation_id,
+        relation_kind=relation.kind,
+        relation_agenda_ids=relation.agenda_ids,
+        rationale=(
+            f"{relation.source_topic_id} -> {relation.target_topic_id} "
+            f"{relation.kind} relation proposed from Agenda evidence."
+        ),
+    )
+
+
 def build_week(
     week: str,
     classification_store: Any,
@@ -308,25 +322,22 @@ def build_week(
                 wiki_store.publish_topic(updated, revision)
                 for relation in relations:
                     try:
-                        wiki_store.relation(relation.relation_id)
-                        continue
+                        stored_relation = wiki_store.relation(relation.relation_id)
                     except KeyError:
-                        pass
-                    wiki_store.save_relation(relation)
-                    wiki_store.save_review(
-                        WikiReview(
-                            review_id=f"R-{relation.relation_id}",
-                            kind="relation",
-                            relation_id=relation.relation_id,
-                            relation_kind=relation.kind,
-                            relation_agenda_ids=relation.agenda_ids,
-                            rationale=(
-                                f"{relation.source_topic_id} -> "
-                                f"{relation.target_topic_id} {relation.kind} relation "
-                                "proposed from Agenda evidence."
-                            ),
+                        wiki_store.save_relation(relation)
+                        wiki_store.save_review(_pending_relation_review(relation))
+                        continue
+                    review_id = f"R-{stored_relation.relation_id}"
+                    if (
+                        stored_relation.review_state == "pending"
+                        and not any(
+                            review.review_id == review_id
+                            for review in wiki_store.reviews()
                         )
-                    )
+                    ):
+                        wiki_store.save_review(
+                            _pending_relation_review(stored_relation)
+                        )
             except Exception:
                 failed.append(topic_id)
         wiki_store.rebuild_catalog()

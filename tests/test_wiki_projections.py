@@ -366,6 +366,28 @@ def test_rebuild_preserves_pending_relation_and_review_metadata(stores):
     assert preserved.rationale == "operator context"
 
 
+def test_rebuild_backfills_missing_review_for_pending_relation(stores):
+    classification, wiki = stores
+    target = topic("T-002")
+    wiki.publish_topic(target, revision(target))
+    _build_with_relation(classification, wiki)
+    review = wiki.reviews("pending")[0]
+    relation = wiki.relation(review.relation_id)
+    (wiki.root / "reviews" / f"{review.review_id}.json").unlink()
+    _change_assignment_digest(wiki)
+
+    _build_with_relation(classification, wiki)
+
+    backfilled = wiki.reviews("pending")
+    assert wiki.relation(relation.relation_id) == relation
+    assert len(backfilled) == 1
+    assert backfilled[0].review_id == f"R-{relation.relation_id}"
+    assert backfilled[0].relation_id == relation.relation_id
+    assert backfilled[0].relation_kind == relation.kind
+    assert backfilled[0].relation_agenda_ids == relation.agenda_ids
+    assert backfilled[0].rationale
+
+
 def test_identical_successful_build_is_reused(stores):
     classification, wiki = stores
     calls = []
