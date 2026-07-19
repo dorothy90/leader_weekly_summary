@@ -1,19 +1,45 @@
+import { useEffect, useRef } from 'react'
+import type { RefObject } from 'react'
+
 import type { WikiEvidence } from '../types'
 
 interface EvidenceDrawerProps {
   evidence: WikiEvidence
   onClose: () => void
+  triggerRef: RefObject<HTMLButtonElement | null>
 }
 
-export function EvidenceDrawer({ evidence, onClose }: EvidenceDrawerProps) {
+export function EvidenceDrawer({ evidence, onClose, triggerRef }: EvidenceDrawerProps) {
+  const dialogRef = useRef<HTMLDialogElement>(null)
+  const closeButtonRef = useRef<HTMLButtonElement>(null)
+
+  useEffect(() => {
+    if (dialogRef.current && !dialogRef.current.open) dialogRef.current.showModal()
+    closeButtonRef.current?.focus()
+  }, [])
+
+  function closeDrawer() {
+    dialogRef.current?.close()
+    onClose()
+    triggerRef.current?.focus()
+  }
+
   return (
-    <dialog className="evidence-drawer" aria-label="Agenda 근거" open>
+    <dialog
+      ref={dialogRef}
+      className="evidence-drawer"
+      aria-label="Agenda 근거"
+      onCancel={(event) => {
+        event.preventDefault()
+        closeDrawer()
+      }}
+    >
       <header className="evidence-drawer__header">
         <div>
           <span className="evidence-drawer__eyebrow">AGENDA / {evidence.agenda_id}</span>
           <h2>{evidence.subject}</h2>
         </div>
-        <button type="button" onClick={onClose} aria-label="근거 닫기">닫기</button>
+        <button ref={closeButtonRef} type="button" onClick={closeDrawer} aria-label="근거 닫기">닫기</button>
       </header>
       <dl className="evidence-drawer__metadata">
         <div><dt>팀</dt><dd>{evidence.team}</dd></div>
@@ -31,4 +57,3 @@ export function EvidenceDrawer({ evidence, onClose }: EvidenceDrawerProps) {
     </dialog>
   )
 }
-

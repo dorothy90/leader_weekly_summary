@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useLocation, useParams, useSearchParams } from 'react-router-dom'
 
 import { fetchTopic } from '../api/knowledge'
@@ -17,6 +17,7 @@ export function TopicPage() {
   const [searchParams] = useSearchParams()
   const [detail, setDetail] = useState<WikiTopicDetail | null>(null)
   const [selectedEvidence, setSelectedEvidence] = useState<WikiEvidence | null>(null)
+  const citationTriggerRef = useRef<HTMLButtonElement | null>(null)
   const [error, setError] = useState(false)
   const from = searchParams.get('from')
   const previousPath = from?.startsWith('/wiki/') ? from : '/wiki/topics'
@@ -65,14 +66,14 @@ export function TopicPage() {
       </header>
 
       <div className="topic-document__layout">
-        <main className="topic-document__main">
+        <section className="topic-document__main" aria-label="주제 본문">
           {detail.sections.map((section) => (
             <section key={section.key} className="topic-document__section">
               <h2>{section.title}</h2>
               <p className="topic-document__section-body">{section.body}</p>
             </section>
           ))}
-        </main>
+        </section>
 
         <aside className="topic-document__rail" aria-label="주제 근거와 관계">
           <section>
@@ -85,7 +86,14 @@ export function TopicPage() {
                     {claim.agenda_ids.map((agendaId) => {
                       const evidence = evidenceById.get(agendaId)
                       return evidence ? (
-                        <button key={agendaId} type="button" onClick={() => setSelectedEvidence(evidence)}>
+                        <button
+                          key={agendaId}
+                          type="button"
+                          onClick={(event) => {
+                            citationTriggerRef.current = event.currentTarget
+                            setSelectedEvidence(evidence)
+                          }}
+                        >
                           근거 {agendaId} 보기
                         </button>
                       ) : <span key={agendaId}>{agendaId} · 원문 없음</span>
@@ -118,7 +126,13 @@ export function TopicPage() {
         </aside>
       </div>
 
-      {selectedEvidence ? <EvidenceDrawer evidence={selectedEvidence} onClose={() => setSelectedEvidence(null)} /> : null}
+      {selectedEvidence ? (
+        <EvidenceDrawer
+          evidence={selectedEvidence}
+          onClose={() => setSelectedEvidence(null)}
+          triggerRef={citationTriggerRef}
+        />
+      ) : null}
     </article>
   )
 }

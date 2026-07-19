@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { vi } from 'vitest'
 
@@ -7,6 +7,20 @@ import type { WikiTopicDetail } from '../types'
 import { TopicPage } from './TopicPage'
 
 vi.mock('../api/knowledge', () => ({ fetchTopic: vi.fn() }))
+
+const showModal = vi.fn(function (this: HTMLDialogElement) {
+  this.setAttribute('open', '')
+})
+const closeDialog = vi.fn(function (this: HTMLDialogElement) {
+  this.removeAttribute('open')
+})
+
+beforeAll(() => {
+  Object.defineProperties(HTMLDialogElement.prototype, {
+    showModal: { configurable: true, value: showModal },
+    close: { configurable: true, value: closeDialog },
+  })
+})
 
 const topicDetail: WikiTopicDetail = {
   topic: {
@@ -43,10 +57,22 @@ it('opens cited Agenda evidence without duplicating the Topic', async () => {
   render(<MemoryRouter initialEntries={['/wiki/topics/T-001?from=%2Fwiki%2Flotcd%2FDRAM%2FSpica%2F4SA']}>
     <Routes><Route path="/wiki/topics/:topicId" element={<TopicPage />} /></Routes>
   </MemoryRouter>)
-  fireEvent.click(await screen.findByRole('button', { name: '근거 A-001 보기' }))
+  const citation = await screen.findByRole('button', { name: '근거 A-001 보기' })
+  fireEvent.click(citation)
   expect(screen.getByRole('dialog', { name: 'Agenda 근거' })).toHaveTextContent('4SA D1 불량')
+  expect(showModal).toHaveBeenCalledOnce()
+  await waitFor(() => expect(screen.getByRole('button', { name: '근거 닫기' })).toHaveFocus())
   expect(screen.getByText('/mail/archive/2026-04.eml')).not.toHaveAttribute('href')
   expect(screen.getByRole('link', { name: '이전 화면' })).toHaveAttribute('href', '/wiki/lotcd/DRAM/Spica/4SA')
+
+  fireEvent(screen.getByRole('dialog', { name: 'Agenda 근거' }), new Event('cancel', { cancelable: true }))
+  expect(screen.queryByRole('dialog', { name: 'Agenda 근거' })).not.toBeInTheDocument()
+  expect(citation).toHaveFocus()
+
+  fireEvent.click(citation)
+  fireEvent.click(await screen.findByRole('button', { name: '근거 닫기' }))
+  expect(screen.queryByRole('dialog', { name: 'Agenda 근거' })).not.toBeInTheDocument()
+  expect(citation).toHaveFocus()
 })
 
 it('renders current revision sections and only accepted related Topics', async () => {
@@ -61,4 +87,5 @@ it('renders current revision sections and only accepted related Topics', async (
   )
   expect(screen.queryByRole('link', { name: 'T-003' })).not.toBeInTheDocument()
   expect(screen.queryByText('# export only')).not.toBeInTheDocument()
+  expect(screen.queryByRole('main')).not.toBeInTheDocument()
 })
