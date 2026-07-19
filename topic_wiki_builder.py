@@ -36,6 +36,7 @@ TERMINAL_STATE_HINTS = {
 }
 APPROVED_EVIDENCE_STATUSES = {"confirmed", "manually_corrected", "aggregate"}
 CITATION_PATTERN = re.compile(r"\[agenda:([^\]\s]+)\]")
+CLAIM_PUNCTUATION = ".!?;。！？；"
 
 
 class RelationProposal(StrictModel):
@@ -125,6 +126,28 @@ def build_draft_fn(wiki_llm: WikiLlm | None = None) -> DraftFn:
     return draft
 
 
+def _split_after_citations(value: str) -> list[str]:
+    chunks: list[str] = []
+    chunk_start = 0
+    for citation in CITATION_PATTERN.finditer(value):
+        next_claim_start = citation.end()
+        while (
+            next_claim_start < len(value)
+            and value[next_claim_start].isspace()
+        ):
+            next_claim_start += 1
+        if (
+            next_claim_start == len(value)
+            or CITATION_PATTERN.match(value, next_claim_start)
+            or value[next_claim_start] in CLAIM_PUNCTUATION
+        ):
+            continue
+        chunks.append(value[chunk_start:citation.end()].strip())
+        chunk_start = next_claim_start
+    chunks.append(value[chunk_start:].strip())
+    return [chunk for chunk in chunks if chunk]
+
+
 def _factual_chunks(section: TopicSection) -> list[str]:
     if section.key == "open_questions":
         return []
@@ -133,15 +156,16 @@ def _factual_chunks(section: TopicSection) -> list[str]:
         stripped = line.strip()
         if not stripped:
             continue
-        chunks.extend(
-            value.strip()
-            for value in re.split(
-                r"(?:(?<=[.!?;。！？；])\s*(?=(?!\[agenda:)\S)"
-                r"|(?<=\])\s+(?=(?!\[agenda:)\S))",
-                stripped,
-            )
-            if value.strip() and not value.rstrip().endswith(("?", "？"))
+        punctuation_chunks = re.split(
+            rf"(?<=[{CLAIM_PUNCTUATION}])\s*(?=(?!\[agenda:)\S)",
+            stripped,
         )
+        for value in punctuation_chunks:
+            chunks.extend(
+                chunk
+                for chunk in _split_after_citations(value)
+                if not chunk.rstrip().endswith(("?", "？"))
+            )
     return chunks
 
 

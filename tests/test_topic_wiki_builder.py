@@ -199,6 +199,37 @@ def test_prose_after_a_post_punctuation_citation_requires_its_own_citation():
         )
 
 
+def test_prose_immediately_after_a_citation_requires_its_own_citation():
+    with pytest.raises(ValueError, match="uncited factual claim: 사실 B"):
+        validate_topic_draft(
+            draft(
+                sections=[
+                    TopicSection(
+                        key="observations",
+                        title="관찰",
+                        body="사실 A. [agenda:A-001]사실 B.",
+                    )
+                ]
+            ),
+            {"A-001": item()},
+        )
+
+
+def test_non_citation_brackets_do_not_start_a_claim_boundary():
+    validate_topic_draft(
+        draft(
+            sections=[
+                TopicSection(
+                    key="observations",
+                    title="관찰",
+                    body="수율은 [정상 범위] 안이다. [agenda:A-001]",
+                )
+            ]
+        ),
+        {"A-001": item()},
+    )
+
+
 @pytest.mark.parametrize(
     "body",
     [
