@@ -22,11 +22,31 @@ from knowledge_models import (
     ItemSplitRequest,
     KnowledgeSession,
     LearnedAliasCreate,
+    LotcdWikiView,
     RunComparison,
     TaxonomyDocument,
+    TeamWikiView,
+    TopicListItem,
+    TopicState,
+    KnowledgeArea,
+    DomainName,
     WeekClassificationSummary,
+    WeekWikiView,
+    WikiBuildRun,
+    WikiReview,
+    WikiReviewResolution,
+    WikiTopicDetail,
     WorkbenchCorrection,
 )
+from topic_linker import build_link_decider, resolve_wiki_review
+from topic_wiki_builder import build_analysis_fn, build_draft_fn, build_week
+from wiki_projections import (
+    build_lotcd_view,
+    build_team_view,
+    build_topic_detail,
+    list_topics,
+)
+from wiki_store import DEFAULT_WIKI_DATA_DIR, JsonWikiStore
 
 
 router = APIRouter(
@@ -43,6 +63,13 @@ def get_store() -> JsonClassificationStore:
         rules_path=Path(
             os.getenv("CLASSIFICATION_RULES_PATH", str(DEFAULT_RULES_PATH))
         ),
+    )
+
+
+@lru_cache(maxsize=1)
+def get_wiki_store() -> JsonWikiStore:
+    return JsonWikiStore(
+        Path(os.getenv("WIKI_DATA_DIR", str(DEFAULT_WIKI_DATA_DIR)))
     )
 
 
@@ -258,3 +285,106 @@ def alias(
         )
     except ValueError as exc:
         raise _value_error(exc) from exc
+
+
+@router.get("/wiki/topics", response_model=list[TopicListItem])
+def wiki_topics(
+    q: str | None = None,
+    state: TopicState | None = None,
+    area: KnowledgeArea | None = None,
+    team: str | None = None,
+    lotcd: str | None = None,
+) -> list[TopicListItem]:
+    return list_topics(
+        get_wiki_store(), q=q, state=state, area=area, team=team, lotcd=lotcd
+    )
+
+
+@router.get("/wiki/topics/{topic_id}", response_model=WikiTopicDetail)
+def wiki_topic(topic_id: str) -> WikiTopicDetail:
+    try:
+        return build_topic_detail(get_wiki_store(), get_store(), topic_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Unknown Topic: {topic_id}") from exc
+
+
+@router.get("/wiki/lotcd/{domain}/{tech}/{lotcd}", response_model=LotcdWikiView)
+def wiki_lotcd(domain: DomainName, tech: str, lotcd: str) -> LotcdWikiView:
+    try:
+        return build_lotcd_view(
+            get_wiki_store(), get_store(), domain, tech, lotcd
+        )
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Unknown LOTCD: {domain}/{tech}/{lotcd}",
+        ) from exc
+
+
+@router.get("/wiki/teams/{team}", response_model=TeamWikiView)
+def wiki_team(team: str) -> TeamWikiView:
+    return build_team_view(get_wiki_store(), get_store(), team)
+
+
+@router.get("/wiki/weeks/{week}", response_model=WeekWikiView)
+def wiki_week(week: str) -> WeekWikiView:
+    try:
+        return get_wiki_store().week(week)
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404, detail=f"Unknown Wiki week: {week}"
+        ) from exc
+
+
+@router.get("/wiki/reviews", response_model=list[WikiReview])
+def wiki_reviews(status: str | None = "pending") -> list[WikiReview]:
+    return get_wiki_store().reviews(status)
+
+
+@router.post("/wiki/reviews/{review_id}/resolve", response_model=WikiReview)
+def resolve_review(
+    review_id: str,
+    resolution: WikiReviewResolution,
+    user: UserContext = Depends(require_editor),
+) -> WikiReview:
+    try:
+        return resolve_wiki_review(
+            get_wiki_store(), review_id, resolution, user.user_id
+        )
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404, detail=f"Unknown Wiki review: {review_id}"
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/wiki/builds/{week}", response_model=WikiBuildRun)
+def start_wiki_build(
+    week: str, _user: UserContext = Depends(require_editor)
+) -> WikiBuildRun:
+    classification_store = get_store()
+    try:
+        classification_store.approved_week(week)
+        return build_week(
+            week,
+            classification_store,
+            get_wiki_store(),
+            build_link_decider(),
+            build_analysis_fn(),
+            build_draft_fn(),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Unknown week: {week}") from exc
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/wiki/builds/{run_id}", response_model=WikiBuildRun)
+def wiki_build(run_id: str) -> WikiBuildRun:
+    try:
+        return get_wiki_store().build(run_id)
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404, detail=f"Unknown Wiki build: {run_id}"
+        ) from exc

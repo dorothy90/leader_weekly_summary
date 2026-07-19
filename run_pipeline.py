@@ -21,6 +21,7 @@ import fetch_mail
 import process_attachment
 import process_vision
 import embed_vectordb
+import process_wiki
 import wiki_export
 import generate_outlook_report
 import send_report
@@ -63,6 +64,13 @@ def main() -> int:
     # 3. embed (+ wiki_build 자동) — 해당 주차만, 인덱스 보존(upsert)
     print(f"\n[3/6] 임베딩 + wiki 생성 (embed, week={week})")
     embed_vectordb.process_all(recreate_index=False, week=week)
+    if os.getenv("ENABLE_TOPIC_WIKI", "").lower() == "true":
+        try:
+            process_wiki.process_week(week=week)
+        except ValueError as exc:
+            if "not approved" not in str(exc):
+                raise
+            print("Wiki build skipped: week not approved")
 
     # 4. wiki_export → overview md
     print(f"\n[4/6] wiki export (week={week})")
