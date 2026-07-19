@@ -240,3 +240,19 @@ Run the focused Topic Wiki recovery, storage, projection, and API checks:
 ```bash
 pytest tests/test_topic_wiki_models.py tests/test_wiki_store.py tests/test_topic_linker.py tests/test_topic_wiki_builder.py tests/test_wiki_projections.py tests/test_knowledge_api.py -q
 ```
+
+## Release verification
+
+Run the complete backend, Web regression, and production build gates before
+deployment:
+
+```bash
+cd web
+npm test
+npm run build
+cd ..
+pytest -q
+```
+
+In the build metadata, verify that the configured default model is
+`z-ai/glm-5.2` unless the deployment intentionally overrides it.

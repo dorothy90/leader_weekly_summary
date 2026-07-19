@@ -34,7 +34,7 @@ def test_mount_knowledge_web_serves_spa_routes_and_assets(tmp_path):
     assert get(app, "/assets/app.js").status_code == 200
 
 
-def test_topic_wiki_deep_links_serve_spa(tmp_path):
+def test_classification_and_topic_wiki_deep_links_serve_spa(tmp_path):
     dist = tmp_path / "dist"
     (dist / "assets").mkdir(parents=True)
     (dist / "index.html").write_text("<main>Knowledge Web</main>", encoding="utf-8")
@@ -42,12 +42,17 @@ def test_topic_wiki_deep_links_serve_spa(tmp_path):
 
     assert mount_knowledge_web(app, dist)
     for path in (
+        "/classification",
+        "/wiki",
         "/wiki/topics/T-001",
         "/wiki/lotcd/DRAM/Spica/4SA",
         "/wiki/teams/Yield",
         "/wiki/weeks/2026-W30",
+        "/wiki/reviews",
     ):
-        assert get(app, path).status_code == 200
+        response = get(app, path)
+        assert response.status_code == 200
+        assert "Knowledge Web" in response.text
 
 
 def test_mount_knowledge_web_skips_missing_build(tmp_path):
