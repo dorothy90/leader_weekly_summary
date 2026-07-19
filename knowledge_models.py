@@ -436,6 +436,8 @@ class TeamWikiView(StrictModel):
 
 class WeekRelationReviewEvent(StrictModel):
     relation_id: str
+    relation_kind: RelationKind | None = None
+    origin_week: str = ""
     action: Literal["accepted", "rejected"]
     actor: str
     reviewed_at: datetime

@@ -18,6 +18,7 @@ from knowledge_models import (
     TopicAssignment,
     TopicRelation,
     TopicRevision,
+    WeekRelationReviewEvent,
     WeekWikiView,
     WikiBuildRun,
     WikiReview,
@@ -232,7 +233,7 @@ class JsonWikiStore:
         *,
         assignment: TopicAssignment | None = None,
         relation: TopicRelation | None = None,
-        week: WeekWikiView | None = None,
+        relation_event: WeekRelationReviewEvent | None = None,
     ) -> None:
         if (assignment is None) == (relation is None):
             raise ValueError("Review transition requires one target")
@@ -244,7 +245,11 @@ class JsonWikiStore:
                 "target_kind": target_kind,
                 "target": target.model_dump(mode="json"),
                 "review": review.model_dump(mode="json"),
-                "week": week.model_dump(mode="json") if week is not None else None,
+                "relation_event": (
+                    relation_event.model_dump(mode="json")
+                    if relation_event is not None
+                    else None
+                ),
             },
             ensure_ascii=False,
             indent=2,
@@ -256,6 +261,10 @@ class JsonWikiStore:
 
     def _apply_transition_payload(self, payload: dict[str, Any]) -> None:
         review = WikiReview.model_validate(payload["review"])
+        if payload.get("relation_event") is not None:
+            self._merge_relation_event(
+                WeekRelationReviewEvent.model_validate(payload["relation_event"])
+            )
         if payload["target_kind"] == "assignment":
             target = TopicAssignment.model_validate(payload["target"])
             self._atomic_write(
@@ -273,20 +282,68 @@ class JsonWikiStore:
         self._atomic_write(
             self.root / "reviews" / f"{_safe_id(review.review_id)}.json", review
         )
-        if payload.get("week") is not None:
-            week = WeekWikiView.model_validate(payload["week"])
-            current_path = self.root / "weeks" / f"{_safe_id(week.week)}.json"
-            if current_path.exists():
-                current = _load(current_path, WeekWikiView)
-                if current.revision_id == week.revision_id:
-                    return
-                history_path = (
-                    self.root / "history" / "weeks" / _safe_id(week.week)
-                    / f"{_safe_id(current.revision_id)}.json"
-                )
-                if not history_path.exists():
-                    self._atomic_write(history_path, current)
-            self._atomic_write(current_path, week)
+
+    def _merge_relation_event(self, event: WeekRelationReviewEvent) -> None:
+        if not event.origin_week:
+            return
+        current_path = (
+            self.root / "weeks" / f"{_safe_id(event.origin_week)}.json"
+        )
+        if not current_path.exists():
+            return
+        current = _load(current_path, WeekWikiView)
+        if any(
+            value.relation_id == event.relation_id
+            and value.action == event.action
+            for value in current.relation_review_events
+        ):
+            return
+        events = sorted(
+            [*current.relation_review_events, event],
+            key=lambda value: (
+                value.reviewed_at, value.relation_id, value.action
+            ),
+        )
+        relation_ids = sorted({
+            *current.new_relation_ids,
+            *([event.relation_id] if event.action == "accepted" else []),
+        })
+        contradictions = sorted({
+            *current.contradictions,
+            *(
+                [event.relation_id]
+                if event.action == "accepted"
+                and event.relation_kind == "contradicts"
+                else []
+            ),
+        })
+        hash_payload = current.model_dump(
+            mode="json", exclude={"revision_id", "published_at"}
+        )
+        hash_payload.update({
+            "new_relation_ids": relation_ids,
+            "contradictions": contradictions,
+            "relation_review_events": [
+                value.model_dump(mode="json") for value in events
+            ],
+        })
+        revision_id = "WREV-" + hashlib.sha256(
+            json.dumps(hash_payload, sort_keys=True).encode("utf-8")
+        ).hexdigest()[:16].upper()
+        updated = current.model_copy(update={
+            "revision_id": revision_id,
+            "published_at": max(current.published_at, event.reviewed_at),
+            "new_relation_ids": relation_ids,
+            "contradictions": contradictions,
+            "relation_review_events": events,
+        })
+        history_path = (
+            self.root / "history" / "weeks" / _safe_id(event.origin_week)
+            / f"{_safe_id(current.revision_id)}.json"
+        )
+        if not history_path.exists():
+            self._atomic_write(history_path, current)
+        self._atomic_write(current_path, updated)
 
     def recover_review_transitions(self) -> list[str]:
         recovered: list[str] = []

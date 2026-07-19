@@ -163,24 +163,82 @@ def test_relation_review_transition_recovers_week_snapshot_write(tmp_path, monke
         status="resolved", resolved_by="operator", resolved_at=now,
         resolution_action="accept",
     )
-    updated = base.model_copy(update={
-        "revision_id": "WREV-NEW", "new_relation_ids": ["REL-1"],
-        "relation_review_events": [WeekRelationReviewEvent(
-            relation_id="REL-1", action="accepted", actor="operator", reviewed_at=now,
-        )],
-    })
+    event = WeekRelationReviewEvent(
+        relation_id="REL-1", relation_kind="supports", origin_week="2026-W30",
+        action="accepted", actor="operator", reviewed_at=now,
+    )
     original = store._atomic_write
 
     def fail_week(path, value):
-        if path == root / "weeks" / "2026-W30.json" and getattr(value, "revision_id", None) == "WREV-NEW":
+        if path == root / "weeks" / "2026-W30.json" and getattr(value, "revision_id", None) != "WREV-OLD":
             raise OSError("injected week fault")
         original(path, value)
 
     monkeypatch.setattr(store, "_atomic_write", fail_week)
     with pytest.raises(OSError, match="week fault"):
-        store.apply_review_transition(review, relation=relation, week=updated)
+        store.apply_review_transition(review, relation=relation, relation_event=event)
 
     recovered = JsonWikiStore(root)
     assert recovered.relation("REL-1").review_state == "accepted"
     assert recovered.reviews()[0].status == "resolved"
-    assert recovered.week("2026-W30").revision_id == "WREV-NEW"
+    assert recovered.week("2026-W30").revision_id != "WREV-OLD"
+    assert recovered.week("2026-W30").new_relation_ids == ["REL-1"]
+
+
+def test_concurrent_relation_events_merge_latest_week_without_lost_update(tmp_path):
+    root = tmp_path / "wiki"
+    store = JsonWikiStore(root)
+    now = datetime(2026, 7, 20, tzinfo=UTC)
+    base = WeekWikiView(
+        week="2026-W30", revision_id="WREV-BASE", published_at=now,
+        build_run_id="RUN-1", new_topic_ids=[], changed_topic_ids=[],
+        resolved_topic_ids=[], reopened_topic_ids=[], actions_and_decisions=[],
+        new_relation_ids=[], pending_assignment_count=0, contradictions=[], teams=[],
+    )
+    store.save_week(base)
+
+    prepared = []
+    for relation_id, kind in (("REL-1", "supports"), ("REL-2", "contradicts")):
+        relation = TopicRelation(
+            relation_id=relation_id, source_topic_id="T-1", target_topic_id="T-2",
+            kind=kind, agenda_ids=["A-001"], confidence=.8,
+            review_state="accepted", creation_week="2026-W30",
+        )
+        review = WikiReview(
+            review_id=f"R-{relation_id}", kind="relation", relation_id=relation_id,
+            status="resolved", resolved_by="operator", resolved_at=now,
+            resolution_action="accept",
+        )
+        event = WeekRelationReviewEvent(
+            relation_id=relation_id, relation_kind=kind, origin_week="2026-W30",
+            action="accepted", actor="operator", reviewed_at=now,
+        )
+        prepared.append((relation, review, event))
+
+    for relation, review, event in prepared:
+        store.apply_review_transition(
+            review, relation=relation, relation_event=event
+        )
+    relation, review, event = prepared[0]
+    store.apply_review_transition(review, relation=relation, relation_event=event)
+
+    current = store.week("2026-W30")
+    assert current.new_relation_ids == ["REL-1", "REL-2"]
+    assert current.contradictions == ["REL-2"]
+    assert [value.relation_id for value in current.relation_review_events] == [
+        "REL-1", "REL-2"
+    ]
+    history = list((root / "history" / "weeks" / "2026-W30").glob("*.json"))
+    assert len(history) == 2
+    assert "WREV-BASE" in {path.stem for path in history}
+
+    reverse = JsonWikiStore(tmp_path / "wiki-reverse")
+    reverse.save_week(base)
+    for relation, review, event in reversed(prepared):
+        reverse.apply_review_transition(
+            review, relation=relation, relation_event=event
+        )
+    reverse_current = reverse.week("2026-W30")
+    assert reverse_current.revision_id == current.revision_id
+    assert reverse_current.new_relation_ids == current.new_relation_ids
+    assert reverse_current.contradictions == current.contradictions

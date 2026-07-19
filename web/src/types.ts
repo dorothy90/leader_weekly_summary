@@ -284,6 +284,8 @@ export interface WeekWikiView {
   new_relation_ids: string[]
   relation_review_events?: Array<{
     relation_id: string
+    relation_kind?: RelationKind | null
+    origin_week?: string
     action: 'accepted' | 'rejected'
     actor: string
     reviewed_at: string

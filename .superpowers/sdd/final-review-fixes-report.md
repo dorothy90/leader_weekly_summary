@@ -68,3 +68,26 @@ DONE
 ### Migration note
 
 - The immutable-evidence rollout remains rebuild-only for pre-contract Wiki data. The runbook now requires an explicit backup move of `/srv/weekly-mail-agent/wiki_data`, a separately created replacement directory, chronological rebuild of a verified approved-week list, and a reversible rollback move. No recursive deletion is part of the procedure.
+
+## Third focused re-review wave
+
+### Claim/prose identity
+
+- Retained claims now use a deterministic identity of normalized claim text plus ordered Agenda IDs. Citation union alone never satisfies retention.
+- If the LLM draft lacks that exact identity, the application renders the exact structured claim text followed by its ordered evidence citations in the observations section. It never copies prior free-form prose.
+- Final validation recomputes rendered claim identities and requires every retained claim independently. A stale claim sharing the same Agenda neither suppresses nor satisfies a retained claim.
+- RED captured: the shared-Agenda regression produced no retained claim text while a different claim's citation incorrectly satisfied the old check.
+
+### Concurrent relation review events
+
+- Review journals now store only a relation acceptance/rejection event delta: relation ID/kind, origin Week, actor, action, and review time. They no longer carry a precomputed complete Week snapshot.
+- Under the exclusive store lock, replay loads the latest Week, idempotently sorts/merges events and relation/contradiction sets, versions the latest current snapshot, then finishes relation/review records. Recovery uses the same merge.
+- The interleaving regression prepares two deltas from the same base Week, commits both in forward and reverse order, replays one, and proves both orders reach the same final revision containing both relations, one contradiction, no duplicate events, and valid historical predecessors.
+- RED captured: the old API rejected event deltas and could only accept a stale complete Week document.
+
+### Runbook and verification
+
+- Every rollout invocation passes `--wiki-data-dir` explicitly.
+- The rollout script parses the emitted build JSON, advances only on `published`, pauses on `review_required`, and rejects every other status. The operator must resolve and rerun the same Week before advancing.
+- A bounded target verification checks the resolved path, exact Week list, Topics, revision evidence refs, and archive resolution before writers restart.
+- GREEN backend affected tests: 92 passed. Week Web contract test: 5 passed. TypeScript/Vite production build passed. Python compile, rollout-doc assertions, and `git diff --check` passed.

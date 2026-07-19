@@ -71,19 +71,83 @@ mkdir -p "$WIKI_DATA_PATH"
 ```
 
 The move is the rollback copy and is recoverable; do not delete it during rollout.
-Set `WIKI_DATA_DIR` to the new explicit directory, then rebuild every approved week
-in chronological order. Replace the sample list below with the deployment's
-verified approved-week list from `classification_data`; do not include an
-unapproved week.
+Rebuild every approved week in chronological order. Replace the sample list in
+the script below with the deployment's verified approved-week list from
+`classification_data`; do not include an unapproved week. The target directory is
+passed explicitly to every command.
 
 ```bash
-export WIKI_DATA_DIR=/srv/weekly-mail-agent/wiki_data
-for APPROVED_WEEK in 2026-W28 2026-W29 2026-W30; do
-  python process_wiki.py --week "$APPROVED_WEEK" --allow-external-llm || exit 1
-done
+python - <<'PY'
+import json
+import subprocess
+
+wiki_data_path = "/srv/weekly-mail-agent/wiki_data"
+approved_weeks = ["2026-W28", "2026-W29", "2026-W30"]
+
+for approved_week in approved_weeks:
+    completed = subprocess.run(
+        [
+            "python", "process_wiki.py", "--week", approved_week,
+            "--wiki-data-dir", wiki_data_path, "--allow-external-llm",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode not in {0, 1} or not completed.stdout.strip():
+        raise SystemExit(
+            f"{approved_week}: command failed: {completed.stderr.strip()}"
+        )
+    result = json.loads(completed.stdout.strip().splitlines()[-1])
+    status = result["status"]
+    print(approved_week, status, result["run_id"])
+    if status == "review_required":
+        raise SystemExit(
+            f"{approved_week}: pause; resolve assignment reviews, rerun this same "
+            "week until published, then resume with the following week"
+        )
+    if status != "published":
+        raise SystemExit(f"{approved_week}: refusing to advance after {status}")
+PY
 ```
 
-Verify Topic evidence and Week snapshots before restarting writers. Roll back by
+When a run stops at `review_required`, resolve its assignment queue and run the
+same command with the same `--week` and `--wiki-data-dir` until the parsed status
+is `published`; only then remove that Week from the front of the script's list and
+resume.
+
+Verify the exact target before restarting writers. This check requires all three
+sample Week snapshots, at least one Topic, and resolvable immutable evidence for
+every current revision:
+
+```bash
+python - /srv/weekly-mail-agent/wiki_data <<'PY'
+import sys
+from pathlib import Path
+from wiki_store import JsonWikiStore
+
+target = Path(sys.argv[1]).resolve()
+expected = Path("/srv/weekly-mail-agent/wiki_data")
+if target != expected:
+    raise SystemExit(f"unexpected Wiki target: {target}")
+store = JsonWikiStore(target)
+expected_weeks = ["2026-W28", "2026-W29", "2026-W30"]
+if store.weeks() != expected_weeks:
+    raise SystemExit(f"Week verification failed: {store.weeks()}")
+topics = store.topics()
+if not topics:
+    raise SystemExit("Topic verification failed: no Topics")
+for topic in topics:
+    revision = store.topic_revision(topic.topic_id, topic.current_revision_id)
+    if not revision.evidence_refs:
+        raise SystemExit(f"missing evidence refs: {topic.topic_id}")
+    for evidence_ref in revision.evidence_refs:
+        store.archived_evidence(evidence_ref)
+print(target, len(topics), store.weeks())
+PY
+```
+
+Restart writers only after this command succeeds. Roll back by
 stopping writers, moving the new `/srv/weekly-mail-agent/wiki_data` aside to a
 separately named diagnostic path, and moving
 `/srv/weekly-mail-agent/wiki_data.pre-evidence-backup` back to

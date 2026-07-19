@@ -623,9 +623,48 @@ def test_retention_does_not_resurrect_stale_prose_from_same_section():
         previous_revision=previous, model="test-model",
     )
 
-    assert "기존 관찰. [agenda:A-old]" in revision.body_markdown
+    assert "기존 관찰 [agenda:A-old]" in revision.body_markdown
     assert "폐기 관찰" not in revision.body_markdown
     assert "A-stale" not in revision.body_markdown
+
+
+def test_retained_claim_identity_is_not_satisfied_by_shared_agenda_citation():
+    shared = item(agenda_id="A-shared")
+    new = item(agenda_id="A-new")
+    previous = previous_revision().model_copy(update={
+        "claims": [
+            SupportedClaim(text="유지할 주장", agenda_ids=["A-shared"]),
+            SupportedClaim(text="폐기할 주장", agenda_ids=["A-shared"]),
+        ],
+        "source_agenda_ids": ["A-shared"],
+        "sections": [TopicSection(
+            key="observations", title="관찰",
+            body=(
+                "유지할 주장. [agenda:A-shared] "
+                "폐기할 주장. [agenda:A-shared]"
+            ),
+        )],
+    })
+    analyzed = analysis().model_copy(update={
+        "claims": [SupportedClaim(text="새로운 다른 주장", agenda_ids=["A-shared"])],
+        "stale_claims": ["폐기할 주장"],
+    })
+
+    _, revision, _ = build_topic_revision(
+        topic(), [shared, new],
+        [assignment(agenda_id="A-shared"), assignment(agenda_id="A-new")],
+        analyzed,
+        draft(sections=[TopicSection(
+            key="observations", title="관찰",
+            body="새로운 다른 주장. [agenda:A-shared]",
+        )]),
+        previous_revision=previous, model="test-model",
+    )
+
+    assert revision.body_markdown.count("유지할 주장") == 1
+    assert "유지할 주장 [agenda:A-shared]" in revision.body_markdown
+    assert "폐기할 주장" not in revision.body_markdown
+    assert "새로운 다른 주장. [agenda:A-shared]" in revision.body_markdown
 
 
 def test_old_terminal_evidence_cannot_resolve_or_close_topic():

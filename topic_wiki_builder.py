@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import unicodedata
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -462,6 +463,37 @@ def _factual_chunks(section: TopicSection) -> list[str]:
     return chunks
 
 
+def _normalize_claim_text(value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", CITATION_PATTERN.sub("", value))
+    normalized = " ".join(normalized.casefold().split())
+    while normalized and unicodedata.category(normalized[0])[0] in {"P", "S"}:
+        normalized = normalized[1:].lstrip()
+    while normalized and unicodedata.category(normalized[-1])[0] in {"P", "S"}:
+        normalized = normalized[:-1].rstrip()
+    return normalized
+
+
+def _claim_identity(claim: SupportedClaim) -> tuple[str, tuple[str, ...]]:
+    return _normalize_claim_text(claim.text), tuple(claim.agenda_ids)
+
+
+def _draft_claim_identities(draft: TopicDraft) -> set[tuple[str, tuple[str, ...]]]:
+    return {
+        (
+            _normalize_claim_text(chunk),
+            tuple(CITATION_PATTERN.findall(chunk)),
+        )
+        for section in draft.sections
+        for chunk in _factual_chunks(section)
+        if CITATION_PATTERN.search(chunk)
+    }
+
+
+def _render_retained_claim(claim: SupportedClaim) -> str:
+    citations = " ".join(f"[agenda:{agenda_id}]" for agenda_id in claim.agenda_ids)
+    return f"{claim.text.strip()} {citations}"
+
+
 def validate_topic_draft(
     draft: TopicDraft,
     evidence: Mapping[str, ClassificationItem],
@@ -741,53 +773,38 @@ def build_topic_revision(
         draft_source(context, analysis) if callable(draft_source) else draft_source
     )
     if previous_revision is not None:
-        retained_ids = {
-            agenda_id for claim in analysis.claims for agenda_id in claim.agenda_ids
-        } & set(evidence)
-        stale_ids = {
-            agenda_id
-            for claim in previous_revision.claims
-            if claim.text in stale
-            for agenda_id in claim.agenda_ids
-        }
         next_sections = list(draft.sections)
-        by_key = {section.key: index for index, section in enumerate(next_sections)}
-        current_citations = {
-            agenda_id for section in next_sections
-            for agenda_id in CITATION_PATTERN.findall(section.body)
-        }
-        for previous_section in previous_revision.sections:
-            retained_chunks = []
-            for chunk in _factual_chunks(previous_section):
-                chunk_ids = set(CITATION_PATTERN.findall(chunk))
-                if (
-                    chunk_ids
-                    and chunk_ids <= retained_ids
-                    and not chunk_ids & stale_ids
-                    and not chunk_ids <= current_citations
-                ):
-                    retained_chunks.append(chunk)
-            if not retained_chunks:
-                continue
-            retained_body = "\n".join(retained_chunks)
-            if previous_section.key in by_key:
-                index = by_key[previous_section.key]
-                current = next_sections[index]
-                next_sections[index] = current.model_copy(update={
-                    "body": f"{retained_body}\n\n{current.body}".strip()
-                })
+        rendered_identities = _draft_claim_identities(draft)
+        missing_claims = [
+            claim for claim in retained_previous_claims
+            if _claim_identity(claim) not in rendered_identities
+        ]
+        if missing_claims:
+            retained_body = "\n".join(
+                _render_retained_claim(claim) for claim in missing_claims
+            )
+            observations_index = next(
+                (
+                    index for index, section in enumerate(next_sections)
+                    if section.key == "observations"
+                ),
+                None,
+            )
+            if observations_index is None:
+                next_sections.append(TopicSection(
+                    key="observations",
+                    title="이전 리비전에서 유지된 주장",
+                    body=retained_body,
+                ))
             else:
-                by_key[previous_section.key] = len(next_sections)
-                next_sections.append(previous_section.model_copy(update={"body": retained_body}))
-            current_citations.update(CITATION_PATTERN.findall(retained_body))
+                current = next_sections[observations_index]
+                next_sections[observations_index] = current.model_copy(update={
+                    "body": f"{current.body}\n\n{retained_body}".strip()
+                })
         draft = draft.model_copy(update={"sections": next_sections})
-        rendered_ids = {
-            agenda_id
-            for section in draft.sections
-            for agenda_id in CITATION_PATTERN.findall(section.body)
-        }
+        rendered_identities = _draft_claim_identities(draft)
         for claim in retained_previous_claims:
-            if not set(claim.agenda_ids) <= rendered_ids:
+            if _claim_identity(claim) not in rendered_identities:
                 raise ValueError(f"retained claim missing citation prose: {claim.text}")
     cited_ids = validate_topic_draft(draft, evidence)
     _validate_evidence_ids(sorted(cited_ids), evidence, topic_for_build)

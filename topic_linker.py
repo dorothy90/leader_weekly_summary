@@ -17,7 +17,6 @@ from knowledge_models import (
     TopicCandidate,
     TopicRelation,
     WeekRelationReviewEvent,
-    WeekWikiView,
     WikiReview,
     WikiReviewResolution,
     WikiTopic,
@@ -261,11 +260,11 @@ def resolve_wiki_review(
             "status": "resolved", "resolved_by": user_id,
             "resolved_at": now, "resolution_action": resolution.action,
         })
-        updated_week = _relation_review_week(
+        relation_event = _relation_review_event(
             store, updated_relation, resolution.action, user_id, now
         )
         store.apply_review_transition(
-            resolved, relation=updated_relation, week=updated_week
+            resolved, relation=updated_relation, relation_event=relation_event
         )
         return resolved
     if review.agenda_id is None:
@@ -312,13 +311,13 @@ def resolve_wiki_review(
     return resolved
 
 
-def _relation_review_week(
+def _relation_review_event(
     store: JsonWikiStore,
     relation: TopicRelation,
     action: Literal["accept", "reject"],
     actor: str,
     reviewed_at: datetime,
-) -> WeekWikiView | None:
+) -> WeekRelationReviewEvent | None:
     origin_week = relation.creation_week
     if not origin_week and relation.created_build_run_id:
         try:
@@ -327,52 +326,15 @@ def _relation_review_week(
             return None
     if not origin_week:
         return None
-    try:
-        current = store.week(origin_week)
-    except KeyError:
-        return None
     event_action = "accepted" if action == "accept" else "rejected"
-    if any(
-        event.relation_id == relation.relation_id
-        and event.action == event_action
-        for event in current.relation_review_events
-    ):
-        return current
-    event = WeekRelationReviewEvent(
+    return WeekRelationReviewEvent(
         relation_id=relation.relation_id,
+        relation_kind=relation.kind,
+        origin_week=origin_week,
         action=event_action,
         actor=actor,
         reviewed_at=reviewed_at,
     )
-    events = [*current.relation_review_events, event]
-    relation_ids = sorted({
-        *current.new_relation_ids,
-        *([relation.relation_id] if action == "accept" else []),
-    })
-    contradictions = sorted({
-        *current.contradictions,
-        *(
-            [relation.relation_id]
-            if action == "accept" and relation.kind == "contradicts"
-            else []
-        ),
-    })
-    hash_payload = current.model_dump(mode="json", exclude={"revision_id", "published_at"})
-    hash_payload.update({
-        "new_relation_ids": relation_ids,
-        "contradictions": contradictions,
-        "relation_review_events": [value.model_dump(mode="json") for value in events],
-    })
-    revision_id = "WREV-" + hashlib.sha256(
-        json.dumps(hash_payload, sort_keys=True).encode("utf-8")
-    ).hexdigest()[:16].upper()
-    return current.model_copy(update={
-        "revision_id": revision_id,
-        "published_at": reviewed_at,
-        "new_relation_ids": relation_ids,
-        "contradictions": contradictions,
-        "relation_review_events": events,
-    })
 
 
 def build_link_decider() -> DecisionFn:
