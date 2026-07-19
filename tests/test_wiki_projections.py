@@ -1,3 +1,4 @@
+import json
 import shutil
 from datetime import UTC, datetime
 from pathlib import Path
@@ -44,9 +45,9 @@ def topic(topic_id="T-001", *, week="2026-W30", state="investigating"):
         importance="high",
         first_seen_week="2026-W29",
         last_updated_week=week,
-        target_paths=[path()],
+        target_paths=[path(), path("8HBM")],
         teams=["Yield", "Process"],
-        source_agenda_ids=["A-001"],
+        source_agenda_ids=["A-001", "A-002", "A-003"],
         current_revision_id=f"REV-{topic_id}",
     )
 
@@ -76,22 +77,25 @@ def stores(tmp_path, monkeypatch):
     data_dir = tmp_path / "classification_data"
     data_dir.mkdir()
     shutil.copy(FIXTURE, data_dir / "2026-W30.json")
-    classification = JsonClassificationStore(data_dir, RULES)
+    rules_path = tmp_path / "classification_rules.json"
+    shutil.copy(RULES, rules_path)
+    classification = JsonClassificationStore(data_dir, rules_path)
     wiki = JsonWikiStore(tmp_path / "wiki_data")
     value = topic()
     wiki.publish_topic(value, revision(value))
-    wiki.save_assignment(
-        TopicAssignment(
-            agenda_id="A-001",
-            topic_id="T-001",
-            decision="attach",
-            confidence=1,
-            rationale="accepted",
-            decision_source="manual",
-            decided_by="tester",
-            decided_at=datetime(2026, 7, 19, tzinfo=UTC),
+    for agenda_id in ("A-001", "A-002", "A-003"):
+        wiki.save_assignment(
+            TopicAssignment(
+                agenda_id=agenda_id,
+                topic_id="T-001",
+                decision="attach",
+                confidence=1,
+                rationale="accepted",
+                decision_source="manual",
+                decided_by="tester",
+                decided_at=datetime(2026, 7, 19, tzinfo=UTC),
+            )
         )
-    )
     monkeypatch.setenv("KNOWLEDGE_LLM_BASE_URL", "http://localhost:8000/v1")
     monkeypatch.setenv("KNOWLEDGE_LLM_MODEL", "test-model")
     return classification, wiki
@@ -103,15 +107,19 @@ def test_four_views_share_canonical_topic_ids(stores):
     assert [item.topic_id for item in list_topics(wiki)] == ["T-001"]
     detail = build_topic_detail(wiki, classification, "T-001")
     assert detail.topic.topic_id == "T-001"
-    assert "T-001" in build_lotcd_view(wiki, "DRAM", "Spica", "4SA").topic_ids
-    assert "T-001" in build_team_view(wiki, "Yield").topic_ids
+    lotcd = build_lotcd_view(wiki, classification, "DRAM", "Spica", "4SA")
+    team = build_team_view(wiki, classification, "Yield")
+    assert "T-001" in lotcd.topic_ids
+    assert "T-001" in team.topic_ids
     assert "T-001" in build_week_view(wiki, "2026-W30").changed_topic_ids
 
 
 def test_lotcd_projection_has_fixed_sections_and_one_primary_area_membership(stores):
-    _, wiki = stores
+    classification, wiki = stores
 
-    view = build_lotcd_view(wiki, "DRAM", "Spica", "4SA")
+    view = build_lotcd_view(
+        wiki, classification, "DRAM", "Spica", "4SA"
+    )
 
     assert LOTCD_SECTION_ORDER == (
         "summary",
@@ -127,6 +135,25 @@ def test_lotcd_projection_has_fixed_sections_and_one_primary_area_membership(sto
         "T-001"
     ]
     assert view.active_topics[0].rank_reasons
+
+
+def test_projection_activity_uses_canonical_topic_agenda_evidence(stores):
+    classification, wiki = stores
+
+    lotcd = build_lotcd_view(
+        wiki, classification, "DRAM", "Spica", "4SA"
+    )
+    team = build_team_view(wiki, classification, "Yield")
+
+    assert [item.agenda_id for item in lotcd.activity] == ["A-001", "A-002"]
+    assert [item.agenda_id for item in team.recent_activity] == [
+        "A-001",
+        "A-003",
+    ]
+    assert lotcd.activity[1].team == "Process"
+    assert lotcd.activity[1].week == "2026-W30"
+    assert lotcd.activity[1].source_path == "mail/M-002"
+    assert team.recent_activity[1].source_quote == "8HBM 수율이 개선됐다."
 
 
 def test_pending_relation_review_does_not_block_publication(stores):
@@ -183,6 +210,27 @@ def test_identical_successful_build_is_reused(stores):
 
     assert second.run_id == first.run_id
     assert len(calls) == 1
+
+
+def test_build_records_approved_run_taxonomy_version_after_rules_change(stores):
+    classification, wiki = stores
+    rules = json.loads(classification.rules_path.read_text(encoding="utf-8"))
+    rules["version"] = 99
+    classification.rules_path.write_text(
+        json.dumps(rules, ensure_ascii=False), encoding="utf-8"
+    )
+
+    result = build_week(
+        "2026-W30",
+        classification,
+        wiki,
+        lambda *_: None,
+        fake_analysis,
+        fake_draft,
+    )
+
+    assert result.classification_run_id == "CLASS-001"
+    assert result.taxonomy_version == 1
 
 
 def test_pending_assignment_review_blocks_publication(stores):

@@ -240,6 +240,7 @@ def test_recover_incomplete_builds_only_fails_stale_transient_runs(tmp_path):
         run_id="RUN-stale",
         week="2026-W30",
         classification_run_id="CLASS-001",
+        taxonomy_version=1,
         status="generating",
         input_hash="stale",
         model="test-model",
@@ -281,7 +282,13 @@ def test_recover_incomplete_builds_only_fails_stale_transient_runs(tmp_path):
 
 def test_build_lifecycle_and_success_lookup(tmp_path):
     store = JsonWikiStore(tmp_path / "wiki_data")
-    run = store.start_build("2026-W30", "CLASS-001", "hash", "test-model")
+    run = store.start_build(
+        "2026-W30",
+        "CLASS-001",
+        "hash",
+        "test-model",
+        taxonomy_version=1,
+    )
 
     assert store.successful_build("hash") is None
     finished = store.finish_build(run, "published")

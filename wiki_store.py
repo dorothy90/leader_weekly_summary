@@ -233,11 +233,14 @@ class JsonWikiStore:
         classification_run_id: str,
         input_hash: str,
         model: str,
+        *,
+        taxonomy_version: int,
     ) -> WikiBuildRun:
         run = WikiBuildRun(
             run_id=uuid.uuid4().hex,
             week=week,
             classification_run_id=classification_run_id,
+            taxonomy_version=taxonomy_version,
             status="linking",
             input_hash=input_hash,
             model=model,

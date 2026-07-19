@@ -41,6 +41,50 @@
       "source_path": "mail/M-001",
       "topic_hint": "4SA 수율 하락",
       "state_hint": "monitoring"
+    },
+    "A-002": {
+      "agenda_id": "A-002",
+      "mail_id": "M-002",
+      "summary": "4SA 공정 조건을 점검했다.",
+      "source_quote": "4SA 공정 조건을 점검했다.",
+      "classification_context": "4SA 공정 조건을 점검했다.",
+      "item_kind": "lotcd_specific",
+      "decision": {
+        "status": "confirmed",
+        "target_path": {"domain": "DRAM", "tech": "Spica", "lotcd": "4SA"},
+        "matches": [],
+        "diagnostics": [],
+        "confidence": 1.0
+      },
+      "revision_count": 0,
+      "team": "Process",
+      "subject": "Weekly process",
+      "received_at": "2026-07-19T01:00:00Z",
+      "source_path": "mail/M-002",
+      "topic_hint": "4SA 수율 하락",
+      "state_hint": "investigating"
+    },
+    "A-003": {
+      "agenda_id": "A-003",
+      "mail_id": "M-003",
+      "summary": "8HBM 수율이 개선됐다.",
+      "source_quote": "8HBM 수율이 개선됐다.",
+      "classification_context": "8HBM 수율이 개선됐다.",
+      "item_kind": "lotcd_specific",
+      "decision": {
+        "status": "confirmed",
+        "target_path": {"domain": "DRAM", "tech": "Spica", "lotcd": "8HBM"},
+        "matches": [],
+        "diagnostics": [],
+        "confidence": 1.0
+      },
+      "revision_count": 0,
+      "team": "Yield",
+      "subject": "Weekly yield",
+      "received_at": "2026-07-19T02:00:00Z",
+      "source_path": "mail/M-003",
+      "topic_hint": "수율 추세",
+      "state_hint": "monitoring"
     }
   },
   "revisions": {}

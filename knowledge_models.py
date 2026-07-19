@@ -390,6 +390,7 @@ class WikiBuildRun(StrictModel):
     run_id: str
     week: str
     classification_run_id: str
+    taxonomy_version: int = Field(ge=1)
     status: Literal[
         "linking", "review_required", "generating", "validating", "published",
         "partially_failed", "failed",

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable
 from datetime import UTC, date, datetime
 from typing import Any
 
@@ -151,10 +152,16 @@ def list_topics(
     return _ranked_items(store, topics, reference_week)
 
 
-def _evidence(classification_store: Any, agenda_ids: list[str]) -> list[WikiEvidence]:
+def _evidence(
+    classification_store: Any,
+    agenda_ids: list[str],
+    include: Callable[[Any], bool] | None = None,
+) -> list[WikiEvidence]:
     values: list[WikiEvidence] = []
     for agenda_id in sorted(set(agenda_ids)):
         week, item = classification_store.classification_item(agenda_id)
+        if include is not None and not include(item):
+            continue
         values.append(
             WikiEvidence(
                 agenda_id=item.agenda_id,
@@ -167,6 +174,16 @@ def _evidence(classification_store: Any, agenda_ids: list[str]) -> list[WikiEvid
             )
         )
     return values
+
+
+def _source_agenda_ids(topics: list[WikiTopic]) -> list[str]:
+    return sorted(
+        {
+            agenda_id
+            for topic in topics
+            for agenda_id in topic.source_agenda_ids
+        }
+    )
 
 
 def build_topic_detail(
@@ -198,6 +215,7 @@ def _has_actions(store: JsonWikiStore, topic: WikiTopic) -> bool:
 
 def build_lotcd_view(
     store: JsonWikiStore,
+    classification_store: Any,
     domain: str,
     tech: str,
     lotcd: str,
@@ -262,12 +280,21 @@ def build_lotcd_view(
         ],
         related_lotcds=sorted(related_lotcds),
         closed_topics=closed,
-        activity=[],
+        activity=_evidence(
+            classification_store,
+            _source_agenda_ids(topics),
+            lambda item: item.decision.target_path
+            == CategoryPath(domain=domain, tech=tech, lotcd=lotcd),
+        ),
         topic_ids=sorted(by_id),
     )
 
 
-def build_team_view(store: JsonWikiStore, team: str) -> TeamWikiView:
+def build_team_view(
+    store: JsonWikiStore,
+    classification_store: Any,
+    team: str,
+) -> TeamWikiView:
     topics = [topic for topic in store.topics() if team in topic.teams]
     reference_week = max(
         (topic.last_updated_week for topic in store.topics()), default="1970-W01"
@@ -282,7 +309,11 @@ def build_team_view(store: JsonWikiStore, team: str) -> TeamWikiView:
         team=team,
         topics=ranked,
         topic_ids=sorted(topic.topic_id for topic in topics),
-        recent_activity=[],
+        recent_activity=_evidence(
+            classification_store,
+            _source_agenda_ids(topics),
+            lambda item: item.team == team,
+        ),
         partner_teams=sorted(
             {partner for topic in topics for partner in topic.teams if partner != team}
         ),

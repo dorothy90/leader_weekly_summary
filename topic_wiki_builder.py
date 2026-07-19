@@ -224,6 +224,8 @@ def build_week(
     from wiki_projections import build_week_view
 
     document = classification_store.approved_week(week)
+    active_run = document.runs[document.active_run_id]
+    taxonomy_version = active_run.taxonomy_version
     model = llm_connection().model
     with wiki_store.build_lock():
         eligible = sorted(
@@ -242,7 +244,7 @@ def build_week(
             persist_link_proposal(wiki_store, item, proposal)
         input_hash = build_input_hash(
             document,
-            taxonomy_version=classification_store.taxonomy.version,
+            taxonomy_version=taxonomy_version,
             assignment_digest=wiki_store.assignment_digest(),
             prompt_version=TOPIC_PROMPT_VERSION,
             builder_version=WIKI_BUILDER_VERSION,
@@ -256,6 +258,7 @@ def build_week(
             document.active_run_id,
             input_hash,
             model,
+            taxonomy_version=taxonomy_version,
         )
         eligible_ids = {item.agenda_id for item in eligible}
         if any(
