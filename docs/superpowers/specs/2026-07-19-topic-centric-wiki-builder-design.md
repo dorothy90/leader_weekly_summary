@@ -23,10 +23,9 @@ The existing pipeline remains authoritative through classification:
 
 ```text
 combined.txt
-  → existing mail ingestion and embedding
-  → weekly_mail
   → Agenda extraction
   → deterministic Domain / Tech / LOTCD classification
+  → classification_data/{week}.json
   → operator review and week approval
   → Topic-Centric Wiki Builder
 ```
@@ -40,7 +39,7 @@ The builder consumes only an approved classification run. It does not:
 - rewrite raw mail or Agenda evidence;
 - use the old assumption that every taxonomy node owns one monolithic narrative page.
 
-The existing `category_wiki_builder.py` remains available during migration. The new builder runs in parallel until its outputs and APIs are verified.
+The implementation extends the JSON-only `codex/lotcd-classification` branch. It does not restore the removed SQLite Knowledge Store, Agenda OpenSearch index, legacy Category Wiki Builder, Explorer, Mapping, or Wiki graph code. Existing weekly and monthly report paths remain unchanged while the new Wiki is protected by its own feature flag.
 
 ## 3. Options considered
 
@@ -67,7 +66,7 @@ A team report for one week. It remains immutable source material.
 Required identity:
 
 ```text
-report_id, week, team, source_doc_ids
+mail_id, week, team, subject, received_at
 ```
 
 ### 4.2 Agenda
@@ -81,17 +80,31 @@ agenda_id: A-2026-W30-YIELD-003
 week: 2026-W30
 team: Yield
 summary: 4SA D1 불량이 조건 원복 후 일부 감소
-state: monitoring
-target_paths:
-  - domain: DRAM
+state_hint: monitoring
+decision:
+  status: confirmed
+  target_path:
+    domain: DRAM
     tech: Spica
     lotcd: 4SA
-source_mail_ids: [MAIL-001]
+mail_id: MAIL-001
 source_quote: "..."
-review_status: confirmed
 ```
 
-An Agenda can target multiple taxonomy paths only when the approved classification explicitly represents a shared or aggregate item. The Wiki Builder does not fan out an ambiguous aggregate into unsupported LOTCD facts.
+An approved classification item has at most one exact `target_path`. A shared or aggregate item targets an approved Tech or Domain parent, or remains excluded until corrected; it is never fanned out to several LOTCDs. A Topic can still span several LOTCDs by accumulating separately approved Agenda items from those LOTCDs.
+
+The current JSON classification implementation already extracts `topic` and `state` but does not persist them in `ClassificationItem`; it also keeps team and received time only in the transient `Mail`. Before Wiki linking, extend each stored classification item additively with:
+
+```yaml
+team: Yield
+subject: 4SA 주간 수율 보고
+received_at: 2026-07-20T09:00:00+09:00
+source_path: data/2026-W30/Yield/MAIL-001/combined.txt
+topic_hint: d1_defect
+state_hint: monitoring
+```
+
+These fields preserve extraction evidence and candidate hints. They do not change Domain, Tech, or LOTCD classification behavior, and `topic_hint` is never treated as a canonical Topic ID.
 
 ### 4.3 Topic
 
@@ -187,12 +200,12 @@ For each new confirmed Agenda, retrieve a small set of existing Topic candidates
 
 1. taxonomy overlap;
 2. normalized terms and aliases;
-3. title and body BM25 match;
+3. deterministic lexical similarity over Topic title, current summary, entities, equipment, defects, and actions;
 4. topic kind and primary area compatibility;
 5. shared entities, equipment, defect names, actions, or issue identifiers;
 6. recency as a weak signal, not a merge requirement.
 
-No second embedding stage is introduced in the first implementation. Existing search infrastructure and structured metadata provide candidates. Semantic embeddings can be evaluated later without changing Topic identity contracts.
+No OpenSearch or embedding stage is introduced in the first implementation. The JSON Topic catalog is loaded in memory, filtered by taxonomy compatibility, and ranked with a small deterministic scorer. Semantic search can be evaluated later without changing Topic identity contracts.
 
 ### 5.2 Structured link decision
 
@@ -278,6 +291,16 @@ Before publication:
 8. the rendered Markdown and structured fields agree.
 
 Each affected Topic revision publishes atomically and independently. If one Topic fails validation, its previous revision remains current while other valid Topic revisions may publish. The weekly build records `partially_failed`, and projections use only the latest valid revision of each Topic. Dependent summaries exclude failed drafts and expose the stale Topic status to operators.
+
+### 6.4 Approval gates
+
+Approval is exception-based; an operator does not approve every Agenda individually.
+
+Gate 1 is the existing classification week approval. `JsonClassificationStore.approve_week()` is allowed only from `ready_for_approval`, after unclassified, conflict, and review-required items have been corrected, split, excluded, or explicitly dispositioned. The Wiki Builder reads only the approved active run and records that run ID and rule version in its input hash.
+
+Gate 2 handles uncertain Agenda-to-Topic identity. Clear attachments and clearly distinct new Topics may proceed automatically. Ambiguous attachment candidates create a blocking review for that Agenda with three operator actions: attach to an existing Topic, create a new Topic, or hold. Held or unresolved Agenda assignments are excluded from Topic prose until resolved; they do not silently contaminate another Topic.
+
+Topic relation candidates are non-blocking. A pending relation remains hidden from factual prose and graph navigation while otherwise valid Topic revisions may publish.
 
 ## 7. Four read modes
 
@@ -365,15 +388,45 @@ Unlike LOTCD and Team views, a published Week view is retained as an audit snaps
 
 ### 8.1 Authoritative records
 
-- Existing source and Agenda stores remain authoritative for evidence and classification.
-- SQLite knowledge workflow tables store build runs, Topic assignment decisions, review decisions, negative-match rules, and current revision pointers.
-- OpenSearch stores searchable canonical Topic revisions and relation documents.
-- LOTCD and Team views are computed from structured fields and may use invalidatable summary caches.
-- Week views are versioned stored snapshots.
+- `config/classification_rules.json` remains authoritative for Domain, Tech, LOTCD, and aliases.
+- `classification_data/{week}.json` remains authoritative for the approved classification run and Agenda evidence. The Wiki store never edits it.
+- `wiki_data/topics/{topic_id}.json` stores the current canonical Topic and its current revision pointer.
+- `wiki_data/history/topics/{topic_id}/{revision_id}.json` stores immutable prior Topic revisions.
+- `wiki_data/assignments/{agenda_id}.json` stores the Agenda-to-Topic decision and provenance.
+- `wiki_data/relations/{relation_id}.json` stores typed Topic relations and review state.
+- `wiki_data/reviews/{review_id}.json` stores blocking assignment reviews and non-blocking relation reviews.
+- `wiki_data/builds/{run_id}.json` stores build status, versions, input hash, diagnostics, and affected Topic IDs.
+- `wiki_data/weeks/{week}.json` stores versioned Week projection snapshots.
+- LOTCD and Team views are computed from current Topic and assignment JSON files. Their optional summaries are rebuildable caches, never sources of truth.
+- `wiki_data/catalog.json` is a rebuildable search catalog for Topic candidate retrieval and list APIs.
 
-This separation keeps operator workflow transactional while using OpenSearch for full-text search and aggregations.
+All documents are validated with strict Pydantic models before saving. The Wiki JSON store reuses the classification store's temporary sibling plus `os.replace` pattern for atomic file replacement. Multi-file builds also use an exclusive build lock and a manifest: revisions are written first, the build manifest records validation success, and current Topic pointers are replaced last. A crash before pointer replacement leaves the previous valid Topic current. Stale temporary files and incomplete manifests are recoverable on the next startup.
 
-### 8.2 Initial APIs
+The first implementation performs no SQLite migration and creates no OpenSearch Wiki index.
+
+### 8.2 JSON layout
+
+```text
+wiki_data/
+├── catalog.json
+├── topics/
+│   └── T-000123.json
+├── assignments/
+│   └── A-2026-W30-YIELD-003.json
+├── relations/
+│   └── R-000045.json
+├── reviews/
+│   └── RV-000078.json
+├── builds/
+│   └── RUN-2026-W30-001.json
+├── weeks/
+│   └── 2026-W30.json
+└── history/
+    ├── topics/T-000123/REV-000004.json
+    └── weeks/2026-W30/REV-000002.json
+```
+
+### 8.3 Initial APIs
 
 ```text
 GET  /api/knowledge/wiki/topics
@@ -413,9 +466,9 @@ Stable routes:
 /wiki/weeks/{week}
 ```
 
-The existing Domain → Tech → LOTCD tree is reused in LOTCD mode. Selecting a Topic from any mode opens the same Topic detail route, preserving the current mode as return context.
+LOTCD mode adds a Domain → Tech → LOTCD tree built from the same classification rules endpoint used by the Workbench. Selecting a Topic from any mode opens the same Topic detail route, preserving the current mode as return context.
 
-The first implementation extends the existing React/Vite knowledge Web app. It does not introduce a separate desktop shell or copy the `llm_wiki` Tauri application.
+The first implementation extends the current classification-only React/Vite app with a Wiki shell and four new route families. It reuses authentication, API conventions, tokens, and the existing classification evidence route, but does not restore deleted legacy Wiki components or copy the `llm_wiki` Tauri application.
 
 ## 10. Failure handling and review
 
@@ -451,6 +504,8 @@ failed
 - Topic state transitions including resolved and reopened;
 - citation and relation validation;
 - input hashing and idempotent reruns;
+- JSON atomic replacement, exclusive build locking, and incomplete-manifest recovery;
+- rebuildable catalog generation from canonical Topic JSON files;
 - LOTCD table-of-contents grouping and ranking;
 - Team and Week projection aggregation.
 
@@ -505,4 +560,4 @@ The design is successful when:
 6. uncertain Topic assignments and relations are reviewable and reproducible;
 7. rerunning identical inputs is idempotent;
 8. partial failure never replaces a previously valid Topic revision;
-9. the previous classification, report, embedding, and legacy Wiki paths continue to work during migration.
+9. the JSON classification Workbench and existing report and embedding paths continue to work unchanged while the new Wiki remains feature-flagged.
