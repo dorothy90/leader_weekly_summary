@@ -62,7 +62,8 @@ it('opens cited Agenda evidence without duplicating the Topic', async () => {
   expect(screen.getByRole('dialog', { name: 'Agenda 근거' })).toHaveTextContent('4SA D1 불량')
   expect(showModal).toHaveBeenCalledOnce()
   await waitFor(() => expect(screen.getByRole('button', { name: '근거 닫기' })).toHaveFocus())
-  expect(screen.getByText('/mail/archive/2026-04.eml')).not.toHaveAttribute('href')
+  expect(screen.queryByText('/mail/archive/2026-04.eml')).not.toBeInTheDocument()
+  expect(screen.getByText('보관된 원본 HTML이 없습니다.')).toBeInTheDocument()
   expect(screen.getByRole('link', { name: '이전 화면' })).toHaveAttribute('href', '/wiki/lotcd/DRAM/Spica/4SA')
 
   fireEvent(screen.getByRole('dialog', { name: 'Agenda 근거' }), new Event('cancel', { cancelable: true }))

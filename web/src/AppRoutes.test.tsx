@@ -43,8 +43,8 @@ function renderRoute(path: string) {
 it('redirects /wiki to the persistent Wiki workspace', async () => {
   renderRoute('/wiki')
 
-  expect(await screen.findByRole('navigation', { name: 'Wiki 도구' })).toBeInTheDocument()
-  expect(screen.getByRole('navigation', { name: '지식 탐색' })).toBeInTheDocument()
+  expect(await screen.findByRole('navigation', { name: 'Wiki Library 모드' })).toBeInTheDocument()
+  expect(await screen.findByRole('navigation', { name: '주제 Library' })).toBeInTheDocument()
   expect(screen.getByRole('region', { name: 'Wiki 탐색' })).toBeInTheDocument()
   expect(screen.getByRole('article', { name: 'Wiki 문서' })).toBeInTheDocument()
 })
@@ -53,7 +53,7 @@ it('loads a topic route without leaving the Wiki workspace', async () => {
   renderRoute('/wiki/topics/T-001')
 
   expect(await screen.findByRole('article', { name: 'Wiki 문서' })).toBeInTheDocument()
-  expect(screen.getByRole('navigation', { name: '지식 탐색' })).toBeInTheDocument()
+  expect(screen.getByRole('navigation', { name: '주제 Library' })).toBeInTheDocument()
 })
 
 it('keeps the operator review route available', async () => {
