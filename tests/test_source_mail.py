@@ -15,6 +15,9 @@ def test_resolve_mail_html_accepts_only_files_under_mail_root(tmp_path):
     assert resolve_mail_html(
         "2026-W30/Yield/M-001/combined.txt", root
     ) == body.resolve()
+    assert resolve_mail_html(
+        "data/2026-W30/Yield/M-001/combined.txt", root
+    ) == body.resolve()
     assert resolve_mail_html(body, root) == body.resolve()
 
     outside = tmp_path / "private" / "combined.txt"

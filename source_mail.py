@@ -19,7 +19,15 @@ _ALLOWED_ATTRIBUTES = {"class", "title", "alt", "width", "height", "colspan", "r
 def resolve_mail_html(source_path: str | Path, mail_data_root: Path) -> Path:
     root = mail_data_root.resolve()
     source = Path(source_path)
-    candidate = source.resolve() if source.is_absolute() else (root / source).resolve()
+    if source.is_absolute():
+        candidate = source.resolve()
+    else:
+        relative_source = (
+            Path(*source.parts[1:])
+            if source.parts and source.parts[0] == root.name
+            else source
+        )
+        candidate = (root / relative_source).resolve()
     try:
         candidate.relative_to(root)
     except ValueError as exc:
