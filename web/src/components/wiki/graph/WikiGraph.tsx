@@ -76,7 +76,7 @@ export function WikiGraph({ scopeIds, selectedTopicId, onSelectTopic }: WikiGrap
       edges: model.edges.filter((edge) => visible.has(edge.source) && visible.has(edge.target)),
     }
   }, [areaFilter, model, query, stateFilter])
-  const colors = colorMap(colorMode, filteredModel)
+  const colors = useMemo(() => colorMap(colorMode, filteredModel), [colorMode, filteredModel])
   const insights = useMemo(() => buildGraphInsights(model), [model])
 
   useEffect(() => {
@@ -97,7 +97,6 @@ export function WikiGraph({ scopeIds, selectedTopicId, onSelectTopic }: WikiGrap
         layout: { name: 'cose', animate: false, randomize: true, nodeRepulsion: () => 6500, idealEdgeLength: () => 92, fit: true, padding: 42 },
         minZoom: .25,
         maxZoom: 2.5,
-        wheelSensitivity: .22,
         style: [
           { selector: 'node', style: {
             'background-color': 'data(color)', width: 'data(size)', height: 'data(size)', label: 'data(label)',

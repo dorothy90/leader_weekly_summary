@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 
-import { fetchTaxonomy, fetchWikiTeams, fetchWikiWeeks } from '../../api/knowledge'
-import type { Taxonomy } from '../../types'
+import { fetchTaxonomy, fetchWeekWiki, fetchWikiBuild, fetchWikiTeams, fetchWikiWeeks } from '../../api/knowledge'
+import type { Taxonomy, WikiBuildRun } from '../../types'
 
 interface KnowledgeTreeProps {
   activePath: string
@@ -17,10 +17,16 @@ const areaLinks = [
   ['quality_analysis', '품질·분석'], ['experiment_validation', '실험·검증'],
 ] as const
 
+const buildStatusLabels: Record<WikiBuildRun['status'], string> = {
+  linking: '연결 중', review_required: '검토 필요', generating: '생성 중', validating: '검증 중',
+  published: '게시 완료', partially_failed: '부분 실패', failed: '실패',
+}
+
 export function KnowledgeTree({ activePath, mode, onModeChange, collapsed, onCollapse }: KnowledgeTreeProps) {
   const [taxonomy, setTaxonomy] = useState<Taxonomy | null>(null)
   const [teams, setTeams] = useState<string[]>([])
   const [weeks, setWeeks] = useState<string[]>([])
+  const [latestBuild, setLatestBuild] = useState<WikiBuildRun | null>(null)
 
   useEffect(() => {
     const controller = new AbortController()
@@ -29,7 +35,17 @@ export function KnowledgeTree({ activePath, mode, onModeChange, collapsed, onCol
     ]).then(([taxonomyResult, teamResult, weekResult]) => {
       if (taxonomyResult.status === 'fulfilled') setTaxonomy(taxonomyResult.value)
       if (teamResult.status === 'fulfilled') setTeams(teamResult.value.values)
-      if (weekResult.status === 'fulfilled') setWeeks([...weekResult.value.values].reverse())
+      if (weekResult.status === 'fulfilled') {
+        const sourceWeeks = weekResult.value.values
+        setWeeks([...sourceWeeks].reverse())
+        const latestWeek = sourceWeeks[sourceWeeks.length - 1]
+        if (latestWeek) {
+          fetchWeekWiki(latestWeek, controller.signal)
+            .then((week) => week.build_run_id ? fetchWikiBuild(week.build_run_id, controller.signal) : null)
+            .then((build) => setLatestBuild(build))
+            .catch(() => setLatestBuild(null))
+        }
+      }
     })
     return () => controller.abort()
   }, [])
@@ -85,6 +101,12 @@ export function KnowledgeTree({ activePath, mode, onModeChange, collapsed, onCol
             </details>
           </>}
         </div>
+        {latestBuild ? <aside className={`knowledge-tree__activity is-${latestBuild.status}`} aria-label="최근 빌드 상태">
+          <div><strong>최근 빌드</strong><span>{latestBuild.week}</span></div>
+          <b>{buildStatusLabels[latestBuild.status]}</b>
+          <small>{latestBuild.model}</small>
+          {latestBuild.failed_topic_ids.length ? <small>실패 Topic {latestBuild.failed_topic_ids.length}</small> : null}
+        </aside> : null}
       </>}
     </nav>
   )

@@ -18,6 +18,7 @@ export function parseWikiLocation(pathname: string, search: string): WikiLocatio
   const params = new URLSearchParams(search)
   const topicMatch = pathname.match(/^\/wiki\/topics\/([^/]+)$/)
   const from = params.get('from')
+  const view = params.get('view') === 'graph' ? 'graph' : 'docs'
   params.delete('view')
   const currentCollection = `${pathname}${params.size ? `?${params}` : ''}`
   const collectionPath = topicMatch && from?.startsWith('/wiki/') && !from.startsWith('/wiki/reviews')
@@ -29,6 +30,6 @@ export function parseWikiLocation(pathname: string, search: string): WikiLocatio
     collectionPath,
     topicId: topicMatch ? decodeURIComponent(topicMatch[1]) : null,
     kind: collectionKind(collectionUrl.pathname),
-    view: params.get('view') === 'graph' ? 'graph' : 'docs',
+    view,
   }
 }
