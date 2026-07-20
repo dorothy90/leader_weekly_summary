@@ -261,10 +261,43 @@ def build_lotcd_view(
     tech: str,
     lotcd: str,
 ) -> LotcdWikiView:
+    return build_category_view(
+        store, classification_store, domain, tech, lotcd
+    )
+
+
+def _path_in_scope(
+    path: CategoryPath,
+    domain: str,
+    tech: str | None,
+    lotcd: str | None,
+) -> bool:
+    if path.domain != domain:
+        return False
+    if tech is not None and path.tech != tech:
+        return False
+    if lotcd is not None and path.lotcd != lotcd:
+        return False
+    return True
+
+
+def build_category_view(
+    store: JsonWikiStore,
+    classification_store: Any,
+    domain: str,
+    tech: str | None = None,
+    lotcd: str | None = None,
+) -> LotcdWikiView:
+    if lotcd is not None and tech is None:
+        raise ValueError("LOTCD scope requires a Tech")
+    selected_path = CategoryPath(domain=domain, tech=tech, lotcd=lotcd)
     topics = [
         topic
         for topic in store.topics()
-        if CategoryPath(domain=domain, tech=tech, lotcd=lotcd) in topic.target_paths
+        if any(
+            _path_in_scope(path, domain, tech, lotcd)
+            for path in topic.target_paths
+        )
     ]
     reference_week = max(
         (topic.last_updated_week for topic in store.topics()), default="1970-W01"
@@ -302,11 +335,35 @@ def build_lotcd_view(
         week_date = _week_date(item.last_updated_week)
         quarter = f"{week_date.year}-Q{(week_date.month - 1) // 3 + 1}"
         closed.setdefault(quarter, []).append(item)
+    activity = _evidence(
+        store,
+        classification_store,
+        _source_agenda_ids(topics),
+        _evidence_refs(store, topics),
+        lambda item: item.decision.target_path is not None
+        and _path_in_scope(item.decision.target_path, domain, tech, lotcd),
+    )
+    direct_activity = [
+        item
+        for item in activity
+        if store.archived_evidence(
+            next(
+                ref
+                for ref in _evidence_refs(store, topics)
+                if ref.endswith(f"/{item.agenda_id}")
+            )
+        ).item.decision.target_path == selected_path
+    ]
+    direct_ids = {item.agenda_id for item in direct_activity}
+    scope_level = "lotcd" if lotcd is not None else "tech" if tech is not None else "domain"
+    label = lotcd or tech or domain
     return LotcdWikiView(
         domain=domain,
         tech=tech,
         lotcd=lotcd,
-        summary=f"{lotcd}: {len(ranked)} Topics",
+        scope_level=scope_level,
+        breadcrumb=[part for part in (domain, tech, lotcd) if part is not None],
+        summary=f"{label}: {len(ranked)} Topics",
         recent_changes=[
             item
             for item in ranked
@@ -321,14 +378,11 @@ def build_lotcd_view(
         ],
         related_lotcds=sorted(related_lotcds),
         closed_topics=closed,
-        activity=_evidence(
-            store,
-            classification_store,
-            _source_agenda_ids(topics),
-            _evidence_refs(store, topics),
-            lambda item: item.decision.target_path
-            == CategoryPath(domain=domain, tech=tech, lotcd=lotcd),
-        ),
+        activity=activity,
+        direct_activity=direct_activity,
+        rolled_up_activity=[
+            item for item in activity if item.agenda_id not in direct_ids
+        ],
         topic_ids=sorted(by_id),
     )
 

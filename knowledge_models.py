@@ -416,8 +416,10 @@ class WikiGraphView(StrictModel):
 
 class LotcdWikiView(StrictModel):
     domain: Literal["DRAM", "NAND"]
-    tech: str
-    lotcd: str
+    tech: str | None = None
+    lotcd: str | None = None
+    scope_level: Literal["domain", "tech", "lotcd"] = "lotcd"
+    breadcrumb: list[str] = Field(default_factory=list)
     summary: str
     recent_changes: list[TopicListItem]
     active_topics: list[TopicListItem]
@@ -426,6 +428,8 @@ class LotcdWikiView(StrictModel):
     related_lotcds: list[str]
     closed_topics: dict[str, list[TopicListItem]]
     activity: list[WikiEvidence]
+    direct_activity: list[WikiEvidence] = Field(default_factory=list)
+    rolled_up_activity: list[WikiEvidence] = Field(default_factory=list)
     topic_ids: list[str]
 
 

@@ -20,6 +20,7 @@ from topic_linker import TopicLinkDecision, resolve_wiki_review
 from topic_wiki_builder import RelationProposal, TopicAnalysis, TopicDraft, build_week
 from wiki_projections import (
     LOTCD_SECTION_ORDER,
+    build_category_view,
     build_lotcd_view,
     build_team_view,
     build_topic_detail,
@@ -167,6 +168,83 @@ def test_projection_activity_uses_canonical_topic_agenda_evidence(stores):
     assert lotcd.activity[1].week == "2026-W30"
     assert lotcd.activity[1].source_path == "mail/M-002"
     assert team.recent_activity[1].source_quote == "8HBM 수율이 개선됐다."
+
+
+def test_category_projection_rolls_descendants_into_domain_and_tech(stores):
+    classification, wiki = stores
+
+    domain = build_category_view(wiki, classification, "DRAM")
+    tech = build_category_view(wiki, classification, "DRAM", "Spica")
+    lotcd = build_category_view(wiki, classification, "DRAM", "Spica", "4SA")
+
+    assert domain.scope_level == "domain"
+    assert domain.breadcrumb == ["DRAM"]
+    assert [item.agenda_id for item in domain.activity] == [
+        "A-001", "A-002", "A-003",
+    ]
+    assert domain.direct_activity == []
+    assert [item.agenda_id for item in domain.rolled_up_activity] == [
+        "A-001", "A-002", "A-003",
+    ]
+
+    assert tech.scope_level == "tech"
+    assert tech.breadcrumb == ["DRAM", "Spica"]
+    assert [item.agenda_id for item in tech.rolled_up_activity] == [
+        "A-001", "A-002", "A-003",
+    ]
+
+    assert lotcd.scope_level == "lotcd"
+    assert lotcd.breadcrumb == ["DRAM", "Spica", "4SA"]
+    assert [item.agenda_id for item in lotcd.direct_activity] == ["A-001", "A-002"]
+    assert lotcd.rolled_up_activity == []
+    assert lotcd.summary == "4SA: 1 Topics"
+
+
+def test_category_projection_includes_agenda_classified_directly_to_parent(stores):
+    classification, wiki = stores
+    archived = wiki.archived_evidence("2026-W30/CLASS-001/A-003")
+    direct = archived.item.model_copy(
+        update={
+            "agenda_id": "A-TECH",
+            "mail_id": "M-TECH",
+            "summary": "Spica 공통 현황",
+            "decision": archived.item.decision.model_copy(
+                update={"target_path": CategoryPath(domain="DRAM", tech="Spica", lotcd=None)}
+            ),
+        }
+    )
+    wiki.archive_evidence(ArchivedApprovedEvidence(
+        evidence_ref="2026-W30/CLASS-001/A-TECH",
+        week="2026-W30",
+        classification_run_id="CLASS-001",
+        item=direct,
+        archived_at=datetime(2026, 7, 19, tzinfo=UTC),
+    ))
+    value = topic("T-TECH").model_copy(
+        update={
+            "title": "Spica 공통 현황",
+            "target_paths": [CategoryPath(domain="DRAM", tech="Spica", lotcd=None)],
+            "source_agenda_ids": ["A-TECH"],
+        }
+    )
+    wiki.publish_topic(
+        value,
+        revision(value).model_copy(
+            update={
+                "source_agenda_ids": ["A-TECH"],
+                "evidence_refs": ["2026-W30/CLASS-001/A-TECH"],
+            }
+        ),
+    )
+
+    domain = build_category_view(wiki, classification, "DRAM")
+    tech = build_category_view(wiki, classification, "DRAM", "Spica")
+    lotcd = build_category_view(wiki, classification, "DRAM", "Spica", "4SA")
+
+    assert [item.agenda_id for item in domain.direct_activity] == []
+    assert [item.agenda_id for item in tech.direct_activity] == ["A-TECH"]
+    assert "T-TECH" in tech.topic_ids
+    assert "T-TECH" not in lotcd.topic_ids
 
 
 def test_team_recent_activity_uses_four_week_iso_window_across_year(tmp_path):
