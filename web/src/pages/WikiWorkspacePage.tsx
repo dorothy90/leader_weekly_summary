@@ -3,11 +3,12 @@ import { useLocation, useNavigate } from 'react-router-dom'
 
 import { fetchWikiReviews } from '../api/knowledge'
 import { KnowledgeTree } from '../components/wiki/KnowledgeTree'
+import { CollectionExplorer } from '../components/wiki/CollectionExplorer'
 import { ResizablePane } from '../components/wiki/ResizablePane'
+import { WikiDocumentPane } from '../components/wiki/WikiDocumentPane'
 import { WikiUtilityRail } from '../components/wiki/WikiUtilityRail'
 import { useWikiCollection } from '../components/wiki/useWikiCollection'
 import { parseWikiLocation } from '../components/wiki/wikiLocation'
-import { TopicList } from '../components/TopicList'
 
 const LAYOUT_KEY = 'weekly-wiki:layout:v1'
 
@@ -56,6 +57,13 @@ export function WikiWorkspacePage() {
     navigate(`${location.pathname}${params.size ? `?${params}` : ''}`)
   }
 
+  function selectTopic(topicId: string) {
+    const params = new URLSearchParams()
+    params.set('from', wikiLocation.collectionPath)
+    if (wikiLocation.view === 'graph') params.set('view', 'graph')
+    navigate(`/wiki/topics/${encodeURIComponent(topicId)}?${params}`)
+  }
+
   return (
     <div className="wiki-workspace">
       <WikiUtilityRail view={wikiLocation.view} treeMode={treeMode} reviewCount={reviewCount} onViewChange={changeView} onTreeModeChange={setTreeMode} />
@@ -71,27 +79,14 @@ export function WikiWorkspacePage() {
           </div>
         </header>
         {wikiLocation.view === 'docs' ? <div className="wiki-explorer__body">
-          {collection.status === 'loading' ? <p className="topic-page-status" role="status">Wiki 컬렉션을 불러오는 중입니다.</p> : null}
-          {collection.status === 'error' ? <p className="topic-page-status topic-page-status--error" role="alert">Wiki 컬렉션을 불러오지 못했습니다.</p> : null}
-          {collection.status === 'ready' ? <>
-            <div className="wiki-collection-summary"><span>{collection.summary}</span><b>{collection.topics.length} TOPICS</b></div>
-            <TopicList topics={collection.topics} from={wikiLocation.collectionPath} />
-          </> : null}
+          <CollectionExplorer collection={collection} selectedTopicId={wikiLocation.topicId} onSelectTopic={selectTopic} />
         </div> : <div className="wiki-graph-placeholder" role="status">관계 그래프를 준비하는 중입니다.</div>}
       </section>
       <ResizablePane side="right" width={layout.documentWidth} min={320} max={720} collapsed={layout.documentCollapsed} onWidthChange={(documentWidth) => setLayout((current) => ({ ...current, documentWidth }))}>
-        <article className="wiki-document-pane" aria-label="Wiki 문서">
+        <div className="wiki-document-pane">
           <header><button type="button" onClick={() => setLayout((current) => ({ ...current, documentCollapsed: !current.documentCollapsed }))} aria-label={layout.documentCollapsed ? 'Wiki 문서 열기' : 'Wiki 문서 접기'}>{layout.documentCollapsed ? '‹' : '›'}</button></header>
-          {layout.documentCollapsed ? null : <div className="wiki-document-pane__overview">
-            <small>COLLECTION OVERVIEW</small>
-            <h1>{collection.title}</h1>
-            <p>{collection.summary || '좌측 트리에서 분류 축을 선택하거나 중앙에서 Topic을 선택하세요.'}</p>
-            <dl>
-              <div><dt>표시 Topic</dt><dd>{collection.topics.length}</dd></div>
-              <div><dt>선택 모드</dt><dd>{wikiLocation.view === 'graph' ? 'Wiki Graph' : 'Wiki Docs'}</dd></div>
-            </dl>
-          </div>}
-        </article>
+          {layout.documentCollapsed ? null : <WikiDocumentPane topicId={wikiLocation.topicId} collection={collection} onSelectTopic={selectTopic} />}
+        </div>
       </ResizablePane>
     </div>
   )
