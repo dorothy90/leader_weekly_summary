@@ -130,6 +130,36 @@ def test_topic_and_lotcd_routes_read_same_topic(api_app):
     assert topic["topic"]["topic_id"] in lotcd["topic_ids"]
 
 
+def test_category_routes_synthesize_domain_tech_and_lotcd_documents(api_app):
+    domain = request(api_app, "/api/knowledge/wiki/lotcd/DRAM")
+    tech = request(api_app, "/api/knowledge/wiki/lotcd/DRAM/Spica")
+    lotcd = request(api_app, "/api/knowledge/wiki/lotcd/DRAM/Spica/4SA")
+
+    assert domain.status_code == tech.status_code == lotcd.status_code == 200
+    assert domain.json()["scope_level"] == "domain"
+    assert tech.json()["scope_level"] == "tech"
+    assert lotcd.json()["scope_level"] == "lotcd"
+    assert domain.json()["breadcrumb"] == ["DRAM"]
+    assert tech.json()["breadcrumb"] == ["DRAM", "Spica"]
+    assert lotcd.json()["breadcrumb"] == ["DRAM", "Spica", "4SA"]
+    assert domain.json()["topic_ids"] == tech.json()["topic_ids"] == ["T-001"]
+
+
+@pytest.mark.parametrize(
+    "path",
+    (
+        "/api/knowledge/wiki/lotcd/NAND",
+        "/api/knowledge/wiki/lotcd/DRAM/UnknownTech",
+        "/api/knowledge/wiki/lotcd/DRAM/Spica/UnknownLotcd",
+    ),
+)
+def test_category_routes_return_not_found_for_unknown_scope(api_app, path):
+    response = request(api_app, path)
+
+    assert response.status_code == 404
+    assert "source_path" not in response.text
+
+
 def test_wiki_graph_returns_topics_and_non_rejected_relations(api_app):
     store = api_app.state.wiki_store
     store.save_relation(TopicRelation(

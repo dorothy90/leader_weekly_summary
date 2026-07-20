@@ -43,7 +43,7 @@ from knowledge_models import (
 from topic_linker import build_link_decider, resolve_wiki_review
 from topic_wiki_builder import build_analysis_fn, build_draft_fn, build_week
 from wiki_projections import (
-    build_lotcd_view,
+    build_category_view,
     build_team_view,
     build_topic_detail,
     list_topics,
@@ -323,17 +323,41 @@ def wiki_topic(topic_id: str) -> WikiTopicDetail:
         raise HTTPException(status_code=404, detail=f"Unknown Topic: {topic_id}") from exc
 
 
-@router.get("/wiki/lotcd/{domain}/{tech}/{lotcd}", response_model=LotcdWikiView)
-def wiki_lotcd(domain: DomainName, tech: str, lotcd: str) -> LotcdWikiView:
+def _category_or_404(
+    domain: DomainName,
+    tech: str | None = None,
+    lotcd: str | None = None,
+) -> LotcdWikiView:
     try:
-        return build_lotcd_view(
+        view = build_category_view(
             get_wiki_store(), get_store(), domain, tech, lotcd
         )
+        if not view.topic_ids:
+            raise KeyError("empty category")
+        return view
     except KeyError as exc:
+        category = "/".join(
+            part for part in (domain, tech, lotcd) if part is not None
+        )
         raise HTTPException(
             status_code=404,
-            detail=f"Unknown LOTCD: {domain}/{tech}/{lotcd}",
+            detail=f"Unknown category: {category}",
         ) from exc
+
+
+@router.get("/wiki/lotcd/{domain}", response_model=LotcdWikiView)
+def wiki_domain(domain: DomainName) -> LotcdWikiView:
+    return _category_or_404(domain)
+
+
+@router.get("/wiki/lotcd/{domain}/{tech}", response_model=LotcdWikiView)
+def wiki_tech(domain: DomainName, tech: str) -> LotcdWikiView:
+    return _category_or_404(domain, tech)
+
+
+@router.get("/wiki/lotcd/{domain}/{tech}/{lotcd}", response_model=LotcdWikiView)
+def wiki_lotcd(domain: DomainName, tech: str, lotcd: str) -> LotcdWikiView:
+    return _category_or_404(domain, tech, lotcd)
 
 
 @router.get("/wiki/teams/{team}", response_model=TeamWikiView)
