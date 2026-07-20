@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import sys
 from dataclasses import dataclass
@@ -164,10 +165,32 @@ def _classification_item(index: int, spec: TopicSpec, mail: dict[str, object]) -
         team=spec.teams[0],
         subject=str(mail["subject"]),
         received_at=mail["received_at"],
-        source_path=f"fixtures/knowledge/mails.json#{mail['id']}",
+        source_path=f"{spec.week}/{spec.teams[0]}/{mail['id']}/combined.txt",
         topic_hint=spec.title,
         state_hint=spec.state,
     )
+
+
+def _write_demo_mail_html(
+    mail_data_dir: Path,
+    items: dict[str, ClassificationItem],
+    mails: list[dict[str, object]],
+) -> None:
+    for index, mail in enumerate(mails, start=1):
+        item = items[_agenda_id(index)]
+        directory = mail_data_dir / Path(item.source_path or "").parent
+        directory.mkdir(parents=True, exist_ok=True)
+        paragraphs = "".join(
+            f"<p>{html.escape(line)}</p>"
+            for line in str(mail["body"]).splitlines()
+            if line.strip()
+        )
+        (directory / "body.html").write_text(
+            "<!doctype html><html><body>"
+            f"<h1>{html.escape(str(mail['subject']))}</h1>{paragraphs}"
+            "</body></html>",
+            encoding="utf-8",
+        )
 
 
 def _write_classification_weeks(
@@ -447,6 +470,7 @@ def seed_demo(
         _agenda_id(index): _classification_item(index, spec, mails[index - 1])
         for index, spec in enumerate(TOPIC_SPECS, start=1)
     }
+    _write_demo_mail_html(classification_data_dir / "mail", items, mails)
     _write_classification_weeks(classification_data_dir, items)
     topic_count, relation_count, week_count = _write_wiki(wiki_data_dir, items)
     generated = _generated_paths(wiki_data_dir, classification_data_dir)

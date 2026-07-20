@@ -5,6 +5,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import HTMLResponse
 
 from classification_store import (
     DEFAULT_DATA_DIR,
@@ -49,6 +50,7 @@ from wiki_projections import (
     list_topics,
 )
 from wiki_store import DEFAULT_WIKI_DATA_DIR, JsonWikiStore
+from source_mail import render_source_mail, resolve_mail_html
 
 
 router = APIRouter(
@@ -321,6 +323,35 @@ def wiki_topic(topic_id: str) -> WikiTopicDetail:
         return build_topic_detail(get_wiki_store(), get_store(), topic_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"Unknown Topic: {topic_id}") from exc
+
+
+@router.get("/evidence/{agenda_id}/mail", response_class=HTMLResponse)
+def evidence_mail(agenda_id: str) -> HTMLResponse:
+    try:
+        archived = get_wiki_store().archived_evidence_for_agenda(agenda_id)
+        if archived.item.source_path is None:
+            raise FileNotFoundError
+        path = resolve_mail_html(
+            archived.item.source_path,
+            Path(os.getenv("MAIL_DATA_DIR", "data")),
+        )
+        rendered = render_source_mail(
+            path.read_text(encoding="utf-8", errors="replace"),
+            archived.item.source_quote,
+        )
+    except (KeyError, FileNotFoundError, ValueError):
+        raise HTTPException(status_code=404, detail="Original mail is unavailable")
+    return HTMLResponse(
+        rendered,
+        headers={
+            "Content-Security-Policy": (
+                "default-src 'none'; img-src data:; style-src 'unsafe-inline'; "
+                "base-uri 'none'; form-action 'none'; frame-ancestors 'self'; sandbox"
+            ),
+            "Referrer-Policy": "no-referrer",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 def _category_or_404(

@@ -209,6 +209,17 @@ class JsonWikiStore:
             ArchivedApprovedEvidence,
         )
 
+    def archived_evidence_for_agenda(self, agenda_id: str) -> ArchivedApprovedEvidence:
+        matches = [
+            _load(path, ArchivedApprovedEvidence)
+            for path in self.root.joinpath("history/evidence").glob(
+                f"*/*/{_safe_id(agenda_id)}.json"
+            )
+        ]
+        if not matches:
+            raise KeyError(agenda_id)
+        return max(matches, key=lambda value: value.archived_at)
+
     def archive_approved_week(self, value: ArchivedApprovedWeek) -> ArchivedApprovedWeek:
         path = (
             self.root / "history" / "evidence" / _safe_id(value.week)

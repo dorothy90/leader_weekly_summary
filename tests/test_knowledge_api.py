@@ -40,6 +40,13 @@ def post(app, path, *, headers=None, json=None):
 
 @pytest.fixture
 def api_app(tmp_path, monkeypatch):
+    mail_dir = tmp_path / "mail_data" / "2026-W30" / "Yield" / "M-001"
+    mail_dir.mkdir(parents=True)
+    (mail_dir / "body.html").write_text(
+        '<html><body><script>bad()</script><p>4SA yield declined.</p></body></html>',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MAIL_DATA_DIR", str(tmp_path / "mail_data"))
     item = ClassificationItem(
         agenda_id="A-001",
         mail_id="M-001",
@@ -56,6 +63,7 @@ def api_app(tmp_path, monkeypatch):
         team="Yield",
         subject="Weekly yield",
         received_at=datetime(2026, 7, 20, tzinfo=UTC),
+        source_path="2026-W30/Yield/M-001/combined.txt",
     )
 
     class ClassificationStore:
@@ -158,6 +166,32 @@ def test_category_routes_return_not_found_for_unknown_scope(api_app, path):
 
     assert response.status_code == 404
     assert "source_path" not in response.text
+
+
+def test_original_mail_route_returns_sanitized_html_with_security_headers(api_app):
+    response = request(api_app, "/api/knowledge/evidence/A-001/mail")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    assert "default-src 'none'" in response.headers["content-security-policy"]
+    assert '<mark id="agenda-source">4SA yield declined.</mark>' in response.text
+    assert "<script" not in response.text
+    assert "bad()" not in response.text
+
+    topic = request(api_app, "/api/knowledge/wiki/topics/T-001").json()
+    evidence = topic["evidence"][0]
+    assert evidence["mail_html_available"] is True
+    assert evidence["original_mail_url"] == (
+        "/api/knowledge/evidence/A-001/mail#agenda-source"
+    )
+    assert "source_path" not in evidence
+
+
+def test_original_mail_route_does_not_expose_unknown_or_missing_sources(api_app):
+    unknown = request(api_app, "/api/knowledge/evidence/UNKNOWN/mail")
+
+    assert unknown.status_code == 404
+    assert "mail_data" not in unknown.text
 
 
 def test_wiki_graph_returns_topics_and_non_rejected_relations(api_app):

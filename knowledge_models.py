@@ -397,7 +397,9 @@ class WikiEvidence(StrictModel):
     week: str
     subject: str
     source_quote: str
-    source_path: str | None = None
+    source_path: str | None = Field(default=None, exclude=True)
+    mail_html_available: bool = False
+    original_mail_url: str | None = None
 
 
 class WikiTopicDetail(StrictModel):

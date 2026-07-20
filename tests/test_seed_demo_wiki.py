@@ -21,6 +21,11 @@ def test_seed_demo_builds_graph_and_evidence_scenarios(tmp_path: Path):
     assert any(not topic.related_topic_ids for topic in topics)
     assert list((tmp_path / "wiki" / "history" / "evidence").glob("*/*/*.json"))
     assert list((tmp_path / "wiki" / "history" / "weeks").glob("*/*.json"))
+    assert list((tmp_path / "classification" / "mail").glob("**/body.html"))
+    evidence = store.archived_evidence_for_agenda("DEMO-AGENDA-01")
+    assert evidence.item.source_path == (
+        "2026-W28/Spica수율/dummy_mail_001/combined.txt"
+    )
 
 
 def test_seed_demo_is_deterministic(tmp_path: Path):

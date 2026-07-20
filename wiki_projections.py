@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from collections.abc import Callable
 from datetime import UTC, date, datetime
+from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from knowledge_models import (
     CategoryPath,
@@ -18,6 +21,7 @@ from knowledge_models import (
     WikiTopicDetail,
 )
 from wiki_store import JsonWikiStore
+from source_mail import resolve_mail_html
 
 
 LOTCD_SECTION_ORDER = (
@@ -181,9 +185,25 @@ def _evidence(
                 subject=item.subject,
                 source_quote=item.source_quote,
                 source_path=item.source_path,
+                **_mail_reference(item.agenda_id, item.source_path),
             )
         )
     return values
+
+
+def _mail_reference(agenda_id: str, source_path: str | None) -> dict[str, object]:
+    if source_path is None:
+        return {"mail_html_available": False, "original_mail_url": None}
+    try:
+        resolve_mail_html(source_path, Path(os.getenv("MAIL_DATA_DIR", "data")))
+    except (FileNotFoundError, ValueError):
+        return {"mail_html_available": False, "original_mail_url": None}
+    return {
+        "mail_html_available": True,
+        "original_mail_url": (
+            f"/api/knowledge/evidence/{quote(agenda_id, safe='')}/mail#agenda-source"
+        ),
+    }
 
 
 def _source_agenda_ids(topics: list[WikiTopic]) -> list[str]:
