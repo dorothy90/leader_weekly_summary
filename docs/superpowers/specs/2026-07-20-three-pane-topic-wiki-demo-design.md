@@ -20,11 +20,12 @@ Agenda evidence without losing navigation context.
 
 ## Approaches considered
 
-### A. Document-centered three-pane Wiki — selected
+### A. Document-centered three-pane Wiki with linked graph — selected
 
-Left: knowledge tree. Center: pages in the selected collection. Right: canonical Wiki
-document. This preserves the useful `nashsu/llm_wiki` three-column mental model while
-matching this product's Topic/LOTCD/Team/Week data model.
+Utility rail: Wiki, Evidence, Search, Graph, and Review. Left: knowledge/evidence tree.
+Center: Docs or Graph for the selected collection. Right: canonical Wiki document. This
+preserves the useful `nashsu/llm_wiki` navigation, graph, and preview flow while matching
+this product's Topic/LOTCD/Team/Week data model.
 
 ### B. Reference-faithful Chat-centered workspace
 
@@ -39,27 +40,28 @@ its member Topics. It performs poorly when users compare many teams and weeks.
 
 ## Information architecture
 
-The global shell is one persistent workspace rather than four dashboard tabs:
+The global shell is one persistent workspace rather than four dashboard tabs. Topic,
+LOTCD, Team, and Week are metadata perspectives inside the knowledge tree; Docs and
+Graph are the two center-pane views:
 
 ```text
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ Weekly Knowledge Wiki   search                         review  workbench    │
-├───────────────┬──────────────────────┬──────────────────────────────────────┤
-│ KNOWLEDGE TREE│ COLLECTION           │ WIKI PAGE                            │
-│               │                      │                                      │
-│ ▾ Topics      │ path / title         │ breadcrumbs · state · updated week   │
-│   Yield       │ page row             │ title                                │
-│   Process     │ page row             │ compact abstract                     │
-│ ▾ LOTCD       │ page row             │ ┃ section                            │
-│   DRAM        │                      │ ┃ section + [Agenda evidence]        │
-│    Spica      │ recent changes       │ related Topics · source trail        │
-│ ▾ Teams       │                      │                                      │
-│ ▾ Weeks       │                      │                                      │
-└───────────────┴──────────────────────┴──────────────────────────────────────┘
+┌────┬────────────────┬────────────────────────┬──────────────────────────────┐
+│RAIL│ KNOWLEDGE TREE │ WIKI DOCS / WIKI GRAPH │ WIKI DOCUMENT                │
+│    │ [지식] [근거]  │                        │                              │
+│Wiki│ ▾ Topics       │ Docs: collection rows  │ breadcrumbs · state · week   │
+│Src │ ▾ LOTCD        │ Graph: topic network   │ title · abstract · TOC       │
+│Find│ ▾ Teams        │ search · filters       │ ┃ accumulated sections       │
+│Graph│▾ Weeks        │ legend · insights      │ ┃ Agenda evidence            │
+│Rev │ build activity │                        │ relations · backlinks        │
+└────┴────────────────┴────────────────────────┴──────────────────────────────┘
 ```
 
 ### Left pane: Knowledge Tree
 
+- A compact utility rail exposes Wiki, Evidence, Search, Graph, and Review; Graph opens
+  the center graph without discarding the selected metadata path or Topic.
+- The tree has `지식` and `근거` tabs. `근거` groups archived Agenda evidence by Week and
+  Team and opens the existing evidence drawer.
 - Four permanent roots: `주제`, `LOTCD`, `팀`, `주차`.
 - Topic children group by controlled knowledge area.
 - LOTCD children use `Domain → Tech → LOTCD` from the taxonomy endpoint.
@@ -67,7 +69,7 @@ The global shell is one persistent workspace rather than four dashboard tabs:
 - Expansion is local UI state; selection is represented in the URL.
 - The active path remains visible and keyboard reachable.
 
-### Center pane: Collection Explorer
+### Center pane: Wiki Docs
 
 - Shows a concise title, item count, search field, and contextual facets.
 - Topic rows contain title, state, importance, updated week, teams, paths, and one-line
@@ -76,22 +78,41 @@ The global shell is one persistent workspace rather than four dashboard tabs:
 - Selecting a row keeps the collection route in the `from` query and opens the Topic in
   the right pane.
 
+### Center pane: Wiki Graph
+
+- Docs and Graph are persistent center-view choices, not separate metadata modes.
+- Topic nodes and typed `TopicRelation` edges use the production Wiki API data. Accepted
+  edges are solid; pending edges are amber and dashed; rejected edges are omitted.
+- Node size reflects connectivity and evidence count. Color can switch between knowledge
+  area, Topic state, and deterministic graph community.
+- Search, collection filters, node-type/state filters, zoom, fit, reload, a collapsible
+  legend, and visible page/link counts are required controls.
+- Hover focuses a node and its neighbors. Clicking a node opens the same canonical Topic
+  in the right pane. Selecting an edge shows relation kind, review state, confidence, and
+  Agenda evidence.
+- Deterministic insights identify isolated Topics, bridge Topics, cross-LOTCD links,
+  evidence-poor Topics, and pending relations. Insights highlight affected nodes and link
+  to the existing Review surface when an operator decision is required.
+- The graph is lazy-loaded. Use a graph renderer suitable for a year of weekly reports
+  from more than 30 teams; do not implement the production view as a fixed-position SVG.
+
 ### Right pane: Wiki Document
 
 - When no Topic is selected, shows a generated overview document for the current
   collection rather than a blank state.
 - A selected Topic shows breadcrumbs, title, abstract, table of contents, accumulated
-  revision sections, inline Agenda citation buttons, relations, and source trail.
+  revision sections, inline Agenda citation buttons, relations, backlinks, and source
+  trail.
 - The document is the only canonical narrative surface.
 - Evidence opens in the existing modal drawer and restores focus to the citation.
 
 ### Responsive behavior
 
-- `>= 1180px`: all three panes visible; left and center have bounded widths and the
-  article owns remaining space.
+- `>= 1180px`: utility rail and all three panes are visible. Left and right panes are
+  collapsible and mouse-resizable; the graph responds to size changes.
 - `760–1179px`: left tree becomes a slide-over; explorer and article remain split.
 - `< 760px`: route-driven single pane with a compact back trail; no content is hidden.
-- Pane resizing is not part of this release.
+- Panel widths and collapsed state persist locally with a versioned storage key.
 
 ## Visual design
 
@@ -136,7 +157,8 @@ Create `scripts/seed_demo_wiki.py`, a deterministic, offline synthesizer.
 - Generate at least 10 Topics across 4 teams, 3 weeks, 2 Techs, and 5 LOTCD paths.
 - Include one cross-LOTCD Topic, one resolved Topic, one reopened Topic, one pending
   relation, one blocking assignment review, accepted relations, a partial build status,
-  immutable evidence archives, and versioned Week snapshots.
+  immutable evidence archives, versioned Week snapshots, one isolated Topic, and one
+  bridge Topic so every graph state is visible.
 - Use realistic semiconductor weekly-report prose derived from dummy mail themes, but
   mark every generated record with deterministic `DEMO-` IDs.
 - Do not invoke the LLM, network, embeddings, SQLite, or OpenSearch.
@@ -147,8 +169,10 @@ API, so the demo exercises production contracts rather than a frontend-only mock
 ## Components and boundaries
 
 - `WikiShell`: global header and responsive workspace frame.
+- `WikiUtilityRail`: Wiki, Evidence, Search, Graph, Review, and build-status navigation.
 - `KnowledgeTree`: metadata hierarchy and selection only.
 - `CollectionExplorer`: collection header, search/facets, and reusable Topic rows.
+- `WikiGraph`: lazy-loaded graph canvas, controls, legend, relation detail, and insights.
 - `WikiDocument`: canonical Topic or collection overview rendering.
 - `EvidenceDrawer`: existing source-evidence modal, reused.
 - Existing projection pages become route/data adapters; they do not each own a separate
@@ -159,8 +183,9 @@ API, so the demo exercises production contracts rather than a frontend-only mock
 ## Data flow
 
 1. URL identifies mode, collection, and optional Topic.
-2. Left pane loads taxonomy/team/week indexes in parallel.
-3. Center pane loads the selected projection or Topic list.
+2. Left pane loads taxonomy/team/week indexes and evidence indexes in parallel.
+3. Center Docs loads the selected projection or Topic list; Graph loads the same scoped
+   Topic set and relation details without changing the collection URL.
 4. Right pane loads canonical Topic detail or derives a deterministic collection
    overview from the projection response.
 5. Inline citations resolve against immutable archived evidence through the backend.
@@ -181,8 +206,9 @@ API, so the demo exercises production contracts rather than a frontend-only mock
 - Python tests validate deterministic output, strict-model loading, overwrite safety,
   cross-LOTCD data, evidence archives, and Week history.
 - React tests validate three-pane landmarks, tree navigation, collection-to-Topic
-  selection, `from` return context, overview fallback, evidence buttons, error states,
-  and responsive navigation semantics.
+  selection, Docs/Graph switching, graph filtering and node-to-document selection,
+  relation styling, insight generation, `from` return context, overview fallback,
+  evidence buttons, panel persistence, error states, and responsive navigation semantics.
 - Preserve all Classification Workbench tests.
 - Run full Python and Web suites plus the Vite production build.
 - Inspect the seeded desktop and mobile pages in a real browser. Iterate on overflow,
@@ -194,12 +220,20 @@ API, so the demo exercises production contracts rather than a frontend-only mock
 1. Opening `/wiki/topics` with seeded data immediately looks and behaves like a Wiki,
    not a filter dashboard.
 2. Users can navigate Topic, LOTCD, Team, and Week from one persistent tree.
-3. Selecting any projected Topic opens the same canonical document in the right pane.
-4. At least 10 realistic synthetic Topics demonstrate multiple teams, weeks, paths,
+3. Users can switch the center between Wiki Docs and Wiki Graph without losing the
+   selected collection or Topic.
+4. Selecting any projected row or graph node opens the same canonical document in the
+   right pane.
+5. At least 10 realistic synthetic Topics demonstrate multiple teams, weeks, paths,
    states, relations, and evidence.
-5. Inline citations open immutable source evidence.
-6. The default model is `z-ai/glm-4.7-flash` with existing overrides and policy gates.
-7. `/classification` remains unchanged and all existing tests pass.
-8. Desktop and mobile browser inspection confirms readable hierarchy, no clipped text,
+6. Inline citations and graph relation evidence open immutable source evidence.
+7. The default model is `z-ai/glm-4.7-flash` with existing overrides and policy gates.
+8. `/classification` remains unchanged and all existing tests pass.
+9. Desktop and mobile browser inspection confirms readable hierarchy, no clipped text,
    visible focus, and appropriate contrast.
 
+## Explicit exclusions
+
+AI Chat, Deep Research, generated-page editing, automatic Wiki lint repair, LLM settings,
+and project switching are not part of this implementation. They are separate product
+capabilities in the reference application and have no current weekly-report Wiki contract.
