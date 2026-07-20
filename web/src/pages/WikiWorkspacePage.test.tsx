@@ -67,8 +67,8 @@ function renderWorkspace(path: string) {
 it('renders one synthesized Wiki document in the center for Docs mode', async () => {
   renderWorkspace('/wiki/topics')
 
-  expect(await screen.findByRole('navigation', { name: 'Wiki 도구' })).toBeInTheDocument()
-  expect(screen.getByRole('navigation', { name: '주제 Library' })).toBeInTheDocument()
+  expect(await screen.findByRole('navigation', { name: '주제 Library' })).toBeInTheDocument()
+  expect(screen.queryByRole('navigation', { name: 'Wiki 도구' })).not.toBeInTheDocument()
   expect(screen.getByRole('region', { name: 'Wiki 탐색' })).toBeInTheDocument()
   expect(screen.getAllByRole('article', { name: 'Wiki 문서' })).toHaveLength(1)
   expect(screen.getByRole('region', { name: 'Wiki 탐색' })).toContainElement(screen.getByRole('article', { name: 'Wiki 문서' }))

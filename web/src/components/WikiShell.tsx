@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Link, Outlet } from 'react-router-dom'
+import { Link, NavLink, Outlet } from 'react-router-dom'
 
 import { fetchWikiReviews } from '../api/knowledge'
 import { WIKI_ASSIGNMENT_REVIEWS_CHANGED } from '../reviewEvents'
@@ -35,7 +35,12 @@ export function WikiShell() {
           <strong>Weekly Knowledge Wiki</strong>
           <span>주간 기술 로그북</span>
         </Link>
-        <div className="wiki-shell__context">TOPIC · LOTCD · TEAM · WEEK</div>
+        <nav className="wiki-shell__modes" aria-label="Wiki Library 모드">
+          <NavLink to="/wiki/topics">주제</NavLink>
+          <NavLink to="/wiki/lotcd/DRAM">LOTCD</NavLink>
+          <NavLink to="/wiki/teams">팀</NavLink>
+          <NavLink to="/wiki/weeks">주차</NavLink>
+        </nav>
         <div className="wiki-shell__operator-links">
           {blockingReviewCount > 0 ? (
             <Link className="wiki-shell__review-link" to="/wiki/reviews" aria-label={`차단 중인 배정 검토 ${blockingReviewCount}건`}>

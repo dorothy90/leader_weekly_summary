@@ -1,11 +1,9 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 
-import { fetchWikiReviews } from '../api/knowledge'
 import { KnowledgeTree } from '../components/wiki/KnowledgeTree'
 import { ResizablePane } from '../components/wiki/ResizablePane'
 import { WikiDocumentPane } from '../components/wiki/WikiDocumentPane'
-import { WikiUtilityRail } from '../components/wiki/WikiUtilityRail'
 import { useWikiCollection } from '../components/wiki/useWikiCollection'
 import { parseWikiLocation } from '../components/wiki/wikiLocation'
 
@@ -34,9 +32,7 @@ export function WikiWorkspacePage() {
   const navigate = useNavigate()
   const wikiLocation = parseWikiLocation(location.pathname, location.search)
   const collection = useWikiCollection(wikiLocation.collectionPath)
-  const [treeMode, setTreeMode] = useState<'knowledge' | 'evidence'>('knowledge')
   const [layout, setLayout] = useState<LayoutState>(initialLayout)
-  const [reviewCount, setReviewCount] = useState(0)
   const graphScopeIds = useMemo(() => new Set(collection.topics.map((topic) => topic.topic_id)), [collection.topics])
 
   useEffect(() => {
@@ -44,12 +40,6 @@ export function WikiWorkspacePage() {
       localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout))
     }
   }, [layout])
-
-  useEffect(() => {
-    const controller = new AbortController()
-    fetchWikiReviews(controller.signal).then((reviews) => setReviewCount(reviews.length)).catch(() => setReviewCount(0))
-    return () => controller.abort()
-  }, [])
 
   function changeView(view: 'docs' | 'graph') {
     const params = new URLSearchParams(location.search)
@@ -67,7 +57,6 @@ export function WikiWorkspacePage() {
 
   return (
     <div className="wiki-workspace">
-      <WikiUtilityRail view={wikiLocation.view} treeMode={treeMode} reviewCount={reviewCount} onViewChange={changeView} onTreeModeChange={setTreeMode} />
       <ResizablePane side="left" width={layout.treeWidth} min={190} max={360} collapsed={layout.treeCollapsed} onWidthChange={(treeWidth) => setLayout((current) => ({ ...current, treeWidth }))}>
         <KnowledgeTree activePath={wikiLocation.collectionPath} kind={wikiLocation.kind} collapsed={layout.treeCollapsed} onCollapse={() => setLayout((current) => ({ ...current, treeCollapsed: !current.treeCollapsed }))} />
       </ResizablePane>

@@ -17,7 +17,9 @@ beforeEach(() => {
 it('shows the Wiki identity and keeps Classification available', () => {
   render(<MemoryRouter initialEntries={['/wiki/topics']}><WikiShell /></MemoryRouter>)
   expect(screen.getByRole('link', { name: /Weekly Knowledge Wiki/ })).toHaveAttribute('href', '/wiki/topics')
-  expect(screen.getByText('TOPIC · LOTCD · TEAM · WEEK')).toBeInTheDocument()
+  expect(screen.getByRole('navigation', { name: 'Wiki Library 모드' })).toBeInTheDocument()
+  expect(screen.getByRole('link', { name: '주제' })).toHaveAttribute('aria-current', 'page')
+  expect(screen.getByRole('link', { name: 'LOTCD' })).toHaveAttribute('href', '/wiki/lotcd/DRAM')
   expect(screen.getByRole('link', { name: '분류 작업대' })).toHaveAttribute('href', '/classification')
 })
 
