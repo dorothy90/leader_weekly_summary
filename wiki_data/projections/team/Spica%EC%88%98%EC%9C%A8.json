@@ -1,0 +1,58 @@
+{
+  "projection_id": "team:Spica수율",
+  "kind": "team",
+  "key": "Spica수율",
+  "title": "Spica수율 Wiki",
+  "breadcrumb": [
+    "Spica수율"
+  ],
+  "summary": "2026-W28부터 2026-W28까지 누적된 내용을 하나의 문서로 합성했다.",
+  "sections": [
+    {
+      "key": "current_state",
+      "title": "현재 상태와 주요 변화",
+      "body": "Spica수율 Wiki은 승인된 2개 Agenda의 흐름을 현재 기준으로 통합한다. [agenda:DEMO-AGENDA-01] 4SA chamber A 편차와 수율 하락 [agenda:DEMO-AGENDA-01] Spica Edge defect 세정 recipe [agenda:DEMO-AGENDA-03]"
+    }
+  ],
+  "claims": [
+    {
+      "text": "2개 승인 Agenda가 현재 정본에 반영됐다.",
+      "agenda_ids": [
+        "DEMO-AGENDA-01",
+        "DEMO-AGENDA-03"
+      ]
+    }
+  ],
+  "source_agenda_ids": [
+    "DEMO-AGENDA-01",
+    "DEMO-AGENDA-03"
+  ],
+  "direct_topic_ids": [
+    "DEMO-TOPIC-01",
+    "DEMO-TOPIC-03"
+  ],
+  "rolled_up_topic_ids": [],
+  "direct_agenda_ids": [
+    "DEMO-AGENDA-01",
+    "DEMO-AGENDA-03"
+  ],
+  "rolled_up_agenda_ids": [],
+  "child_document_ids": [],
+  "as_of_week": "2026-W28",
+  "revision_id": "DEMO-PROJ-991B8DFA3D2D",
+  "previous_revision_id": null,
+  "body_markdown": "# Spica수율 Wiki\n\n## 현재 상태와 주요 변화\n\nSpica수율 Wiki은 승인된 2개 Agenda의 흐름을 현재 기준으로 통합한다. [agenda:DEMO-AGENDA-01] 4SA chamber A 편차와 수율 하락 [agenda:DEMO-AGENDA-01] Spica Edge defect 세정 recipe [agenda:DEMO-AGENDA-03]\n\n### 2026-W28\n\n4SA chamber A 편차와 수율 하락가 반영됐다. [agenda:DEMO-AGENDA-01] Spica Edge defect 세정 recipe가 반영됐다. [agenda:DEMO-AGENDA-03]",
+  "weekly_history": [
+    {
+      "week": "2026-W28",
+      "body": "4SA chamber A 편차와 수율 하락가 반영됐다. [agenda:DEMO-AGENDA-01] Spica Edge defect 세정 recipe가 반영됐다. [agenda:DEMO-AGENDA-03]",
+      "agenda_ids": [
+        "DEMO-AGENDA-01",
+        "DEMO-AGENDA-03"
+      ]
+    }
+  ],
+  "build_run_id": "DEMO-BUILD-30",
+  "model": "z-ai/glm-4.7-flash",
+  "published_at": "2026-07-20T03:00:00Z"
+}

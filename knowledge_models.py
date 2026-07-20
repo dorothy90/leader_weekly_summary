@@ -411,6 +411,59 @@ class WikiTopicDetail(StrictModel):
     relations: list[TopicRelation]
 
 
+ProjectionKind = Literal["domain", "tech", "lotcd", "team", "week"]
+
+
+class ProjectionSection(StrictModel):
+    key: str = Field(min_length=1)
+    title: str = Field(min_length=1)
+    body: str
+
+
+class ProjectionWeeklyHistory(StrictModel):
+    week: str
+    body: str
+    agenda_ids: list[str] = Field(default_factory=list)
+
+
+class WikiProjectionSpec(StrictModel):
+    projection_id: str
+    kind: ProjectionKind
+    key: str
+    title: str
+    breadcrumb: list[str]
+    direct_topic_ids: list[str] = Field(default_factory=list)
+    rolled_up_topic_ids: list[str] = Field(default_factory=list)
+    direct_agenda_ids: list[str] = Field(default_factory=list)
+    rolled_up_agenda_ids: list[str] = Field(default_factory=list)
+    child_document_ids: list[str] = Field(default_factory=list)
+
+
+class WikiProjectionDocument(StrictModel):
+    projection_id: str
+    kind: ProjectionKind
+    key: str
+    title: str
+    breadcrumb: list[str]
+    summary: str
+    sections: list[ProjectionSection]
+    claims: list[SupportedClaim]
+    source_agenda_ids: list[str]
+    direct_topic_ids: list[str] = Field(default_factory=list)
+    rolled_up_topic_ids: list[str] = Field(default_factory=list)
+    direct_agenda_ids: list[str] = Field(default_factory=list)
+    rolled_up_agenda_ids: list[str] = Field(default_factory=list)
+    child_document_ids: list[str] = Field(default_factory=list)
+    as_of_week: str
+    revision_id: str
+    previous_revision_id: str | None = None
+    body_markdown: str
+    weekly_history: list[ProjectionWeeklyHistory] = Field(default_factory=list)
+    build_run_id: str
+    model: str
+    published_at: datetime
+
+
 class WikiGraphView(StrictModel):
     topics: list[TopicListItem]
     relations: list[TopicRelation]
@@ -433,6 +486,8 @@ class LotcdWikiView(StrictModel):
     direct_activity: list[WikiEvidence] = Field(default_factory=list)
     rolled_up_activity: list[WikiEvidence] = Field(default_factory=list)
     topic_ids: list[str]
+    documents: list[WikiTopicDetail] = Field(default_factory=list)
+    projection: WikiProjectionDocument | None = None
 
 
 class TeamWikiView(StrictModel):
@@ -443,6 +498,8 @@ class TeamWikiView(StrictModel):
     partner_teams: list[str]
     target_paths: list[CategoryPath]
     actions_and_decisions: list[TopicListItem]
+    documents: list[WikiTopicDetail] = Field(default_factory=list)
+    projection: WikiProjectionDocument | None = None
 
 
 class WeekRelationReviewEvent(StrictModel):
@@ -469,6 +526,8 @@ class WeekWikiView(StrictModel):
     pending_assignment_count: int
     contradictions: list[str]
     teams: list[str]
+    documents: list[WikiTopicDetail] = Field(default_factory=list)
+    projection: WikiProjectionDocument | None = None
 
 
 class WikiBuildRun(StrictModel):

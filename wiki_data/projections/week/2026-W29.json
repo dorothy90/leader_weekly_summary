@@ -1,0 +1,68 @@
+{
+  "projection_id": "week:2026-W29",
+  "kind": "week",
+  "key": "2026-W29",
+  "title": "2026-W29 Wiki",
+  "breadcrumb": [
+    "2026-W29"
+  ],
+  "summary": "2026-W29부터 2026-W29까지 누적된 내용을 하나의 문서로 합성했다.",
+  "sections": [
+    {
+      "key": "current_state",
+      "title": "현재 상태와 주요 변화",
+      "body": "2026-W29 Wiki은 승인된 4개 Agenda의 흐름을 현재 기준으로 통합한다. [agenda:DEMO-AGENDA-05] Canopus 4SS Test fail 증가 [agenda:DEMO-AGENDA-05] Canopus 6SS 관리 범위 회복 [agenda:DEMO-AGENDA-06] Heraion channel hole 편차 [agenda:DEMO-AGENDA-07] 6H1 조건 최적화 split [agenda:DEMO-AGENDA-08]"
+    }
+  ],
+  "claims": [
+    {
+      "text": "4개 승인 Agenda가 현재 정본에 반영됐다.",
+      "agenda_ids": [
+        "DEMO-AGENDA-05",
+        "DEMO-AGENDA-06",
+        "DEMO-AGENDA-07",
+        "DEMO-AGENDA-08"
+      ]
+    }
+  ],
+  "source_agenda_ids": [
+    "DEMO-AGENDA-05",
+    "DEMO-AGENDA-06",
+    "DEMO-AGENDA-07",
+    "DEMO-AGENDA-08"
+  ],
+  "direct_topic_ids": [
+    "DEMO-TOPIC-05",
+    "DEMO-TOPIC-06",
+    "DEMO-TOPIC-07",
+    "DEMO-TOPIC-08"
+  ],
+  "rolled_up_topic_ids": [],
+  "direct_agenda_ids": [
+    "DEMO-AGENDA-05",
+    "DEMO-AGENDA-06",
+    "DEMO-AGENDA-07",
+    "DEMO-AGENDA-08"
+  ],
+  "rolled_up_agenda_ids": [],
+  "child_document_ids": [],
+  "as_of_week": "2026-W29",
+  "revision_id": "DEMO-PROJ-8E422EB7D3B7",
+  "previous_revision_id": null,
+  "body_markdown": "# 2026-W29 Wiki\n\n## 현재 상태와 주요 변화\n\n2026-W29 Wiki은 승인된 4개 Agenda의 흐름을 현재 기준으로 통합한다. [agenda:DEMO-AGENDA-05] Canopus 4SS Test fail 증가 [agenda:DEMO-AGENDA-05] Canopus 6SS 관리 범위 회복 [agenda:DEMO-AGENDA-06] Heraion channel hole 편차 [agenda:DEMO-AGENDA-07] 6H1 조건 최적화 split [agenda:DEMO-AGENDA-08]\n\n### 2026-W29\n\nCanopus 4SS Test fail 증가가 반영됐다. [agenda:DEMO-AGENDA-05] Canopus 6SS 관리 범위 회복가 반영됐다. [agenda:DEMO-AGENDA-06] Heraion channel hole 편차가 반영됐다. [agenda:DEMO-AGENDA-07] 6H1 조건 최적화 split가 반영됐다. [agenda:DEMO-AGENDA-08]",
+  "weekly_history": [
+    {
+      "week": "2026-W29",
+      "body": "Canopus 4SS Test fail 증가가 반영됐다. [agenda:DEMO-AGENDA-05] Canopus 6SS 관리 범위 회복가 반영됐다. [agenda:DEMO-AGENDA-06] Heraion channel hole 편차가 반영됐다. [agenda:DEMO-AGENDA-07] 6H1 조건 최적화 split가 반영됐다. [agenda:DEMO-AGENDA-08]",
+      "agenda_ids": [
+        "DEMO-AGENDA-05",
+        "DEMO-AGENDA-06",
+        "DEMO-AGENDA-07",
+        "DEMO-AGENDA-08"
+      ]
+    }
+  ],
+  "build_run_id": "DEMO-BUILD-30",
+  "model": "z-ai/glm-4.7-flash",
+  "published_at": "2026-07-20T03:00:00Z"
+}

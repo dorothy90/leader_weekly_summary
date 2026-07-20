@@ -1,0 +1,53 @@
+{
+  "projection_id": "team:DRAM SRT 개발공정",
+  "kind": "team",
+  "key": "DRAM SRT 개발공정",
+  "title": "DRAM SRT 개발공정 Wiki",
+  "breadcrumb": [
+    "DRAM SRT 개발공정"
+  ],
+  "summary": "2026-W30부터 2026-W30까지 누적된 내용을 하나의 문서로 합성했다.",
+  "sections": [
+    {
+      "key": "current_state",
+      "title": "현재 상태와 주요 변화",
+      "body": "DRAM SRT 개발공정 Wiki은 승인된 1개 Agenda의 흐름을 현재 기준으로 통합한다. [agenda:DEMO-AGENDA-12] Lucy 6E2 저온 retention fail [agenda:DEMO-AGENDA-12]"
+    }
+  ],
+  "claims": [
+    {
+      "text": "1개 승인 Agenda가 현재 정본에 반영됐다.",
+      "agenda_ids": [
+        "DEMO-AGENDA-12"
+      ]
+    }
+  ],
+  "source_agenda_ids": [
+    "DEMO-AGENDA-12"
+  ],
+  "direct_topic_ids": [
+    "DEMO-TOPIC-12"
+  ],
+  "rolled_up_topic_ids": [],
+  "direct_agenda_ids": [
+    "DEMO-AGENDA-12"
+  ],
+  "rolled_up_agenda_ids": [],
+  "child_document_ids": [],
+  "as_of_week": "2026-W30",
+  "revision_id": "DEMO-PROJ-26C04E204AEE",
+  "previous_revision_id": null,
+  "body_markdown": "# DRAM SRT 개발공정 Wiki\n\n## 현재 상태와 주요 변화\n\nDRAM SRT 개발공정 Wiki은 승인된 1개 Agenda의 흐름을 현재 기준으로 통합한다. [agenda:DEMO-AGENDA-12] Lucy 6E2 저온 retention fail [agenda:DEMO-AGENDA-12]\n\n### 2026-W30\n\nLucy 6E2 저온 retention fail가 반영됐다. [agenda:DEMO-AGENDA-12]",
+  "weekly_history": [
+    {
+      "week": "2026-W30",
+      "body": "Lucy 6E2 저온 retention fail가 반영됐다. [agenda:DEMO-AGENDA-12]",
+      "agenda_ids": [
+        "DEMO-AGENDA-12"
+      ]
+    }
+  ],
+  "build_run_id": "DEMO-BUILD-30",
+  "model": "z-ai/glm-4.7-flash",
+  "published_at": "2026-07-20T03:00:00Z"
+}

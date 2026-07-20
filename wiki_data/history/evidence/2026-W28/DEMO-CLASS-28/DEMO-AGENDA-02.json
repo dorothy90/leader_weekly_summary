@@ -24,7 +24,7 @@
     "team": "공정기술PTE",
     "subject": "[Spica] 4SA/6SA 주간 수율 현황",
     "received_at": "2026-07-06T10:20:00+09:00",
-    "source_path": "fixtures/knowledge/mails.json#dummy_mail_002",
+    "source_path": "2026-W28/공정기술PTE/dummy_mail_002/combined.txt",
     "topic_hint": "4SA 장비 조건 원복 검증",
     "state_hint": "action_in_progress"
   },

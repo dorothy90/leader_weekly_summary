@@ -24,7 +24,7 @@
     "team": "NAND품질PTE",
     "subject": "신규 LOTCD 4ZZ 수율 이상",
     "received_at": "2026-07-10T15:35:00+09:00",
-    "source_path": "fixtures/knowledge/mails.json#dummy_mail_011",
+    "source_path": "2026-W30/NAND품질PTE/dummy_mail_011/combined.txt",
     "topic_hint": "Petra 4P1 read 성능 검증",
     "state_hint": "monitoring"
   },

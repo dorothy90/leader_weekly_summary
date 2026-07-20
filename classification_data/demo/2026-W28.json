@@ -42,7 +42,7 @@
       "team": "Spica수율",
       "subject": "[DRAM 수율] 28주차 공통 기준 변경",
       "received_at": "2026-07-06T09:10:00+09:00",
-      "source_path": "fixtures/knowledge/mails.json#dummy_mail_001",
+      "source_path": "2026-W28/Spica수율/dummy_mail_001/combined.txt",
       "topic_hint": "4SA chamber A 편차와 수율 하락",
       "state_hint": "investigating"
     },
@@ -68,7 +68,7 @@
       "team": "공정기술PTE",
       "subject": "[Spica] 4SA/6SA 주간 수율 현황",
       "received_at": "2026-07-06T10:20:00+09:00",
-      "source_path": "fixtures/knowledge/mails.json#dummy_mail_002",
+      "source_path": "2026-W28/공정기술PTE/dummy_mail_002/combined.txt",
       "topic_hint": "4SA 장비 조건 원복 검증",
       "state_hint": "action_in_progress"
     },
@@ -94,7 +94,7 @@
       "team": "Spica수율",
       "subject": "SP LPDDR5 24G 공통 개선안 검토",
       "received_at": "2026-07-07T08:40:00+09:00",
-      "source_path": "fixtures/knowledge/mails.json#dummy_mail_003",
+      "source_path": "2026-W28/Spica수율/dummy_mail_003/combined.txt",
       "topic_hint": "Spica Edge defect 세정 recipe",
       "state_hint": "monitoring"
     },
@@ -120,7 +120,7 @@
       "team": "공정기술PTE",
       "subject": "Canopus DDR5 16G 수율 점검",
       "received_at": "2026-07-07T11:15:00+09:00",
-      "source_path": "fixtures/knowledge/mails.json#dummy_mail_004",
+      "source_path": "2026-W28/공정기술PTE/dummy_mail_004/combined.txt",
       "topic_hint": "검사 장비 calibration 영향",
       "state_hint": "monitoring"
     }

@@ -24,7 +24,7 @@
     "team": "공정기술PTE",
     "subject": "DRAM/NAND 공통 장비 점검 공지",
     "received_at": "2026-07-10T13:10:00+09:00",
-    "source_path": "fixtures/knowledge/mails.json#dummy_mail_010",
+    "source_path": "2026-W30/공정기술PTE/dummy_mail_010/combined.txt",
     "topic_hint": "DRAM/NAND 공통 검사 중지 계획",
     "state_hint": "monitoring"
   },

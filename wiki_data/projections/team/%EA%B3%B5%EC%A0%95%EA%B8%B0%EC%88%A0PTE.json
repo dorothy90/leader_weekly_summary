@@ -1,0 +1,71 @@
+{
+  "projection_id": "team:공정기술PTE",
+  "kind": "team",
+  "key": "공정기술PTE",
+  "title": "공정기술PTE Wiki",
+  "breadcrumb": [
+    "공정기술PTE"
+  ],
+  "summary": "2026-W28부터 2026-W30까지 누적된 내용을 하나의 문서로 합성했다.",
+  "sections": [
+    {
+      "key": "current_state",
+      "title": "현재 상태와 주요 변화",
+      "body": "공정기술PTE Wiki은 승인된 3개 Agenda의 흐름을 현재 기준으로 통합한다. [agenda:DEMO-AGENDA-02] 4SA 장비 조건 원복 검증 [agenda:DEMO-AGENDA-02] 검사 장비 calibration 영향 [agenda:DEMO-AGENDA-04] DRAM/NAND 공통 검사 중지 계획 [agenda:DEMO-AGENDA-10]"
+    }
+  ],
+  "claims": [
+    {
+      "text": "3개 승인 Agenda가 현재 정본에 반영됐다.",
+      "agenda_ids": [
+        "DEMO-AGENDA-02",
+        "DEMO-AGENDA-04",
+        "DEMO-AGENDA-10"
+      ]
+    }
+  ],
+  "source_agenda_ids": [
+    "DEMO-AGENDA-02",
+    "DEMO-AGENDA-04",
+    "DEMO-AGENDA-10"
+  ],
+  "direct_topic_ids": [
+    "DEMO-TOPIC-01",
+    "DEMO-TOPIC-02",
+    "DEMO-TOPIC-04",
+    "DEMO-TOPIC-07",
+    "DEMO-TOPIC-10"
+  ],
+  "rolled_up_topic_ids": [],
+  "direct_agenda_ids": [
+    "DEMO-AGENDA-02",
+    "DEMO-AGENDA-04",
+    "DEMO-AGENDA-10"
+  ],
+  "rolled_up_agenda_ids": [],
+  "child_document_ids": [],
+  "as_of_week": "2026-W30",
+  "revision_id": "DEMO-PROJ-4F79487C4D82",
+  "previous_revision_id": null,
+  "body_markdown": "# 공정기술PTE Wiki\n\n## 현재 상태와 주요 변화\n\n공정기술PTE Wiki은 승인된 3개 Agenda의 흐름을 현재 기준으로 통합한다. [agenda:DEMO-AGENDA-02] 4SA 장비 조건 원복 검증 [agenda:DEMO-AGENDA-02] 검사 장비 calibration 영향 [agenda:DEMO-AGENDA-04] DRAM/NAND 공통 검사 중지 계획 [agenda:DEMO-AGENDA-10]\n\n### 2026-W30\n\nDRAM/NAND 공통 검사 중지 계획가 반영됐다. [agenda:DEMO-AGENDA-10]\n\n### 2026-W28\n\n4SA 장비 조건 원복 검증가 반영됐다. [agenda:DEMO-AGENDA-02] 검사 장비 calibration 영향가 반영됐다. [agenda:DEMO-AGENDA-04]",
+  "weekly_history": [
+    {
+      "week": "2026-W30",
+      "body": "DRAM/NAND 공통 검사 중지 계획가 반영됐다. [agenda:DEMO-AGENDA-10]",
+      "agenda_ids": [
+        "DEMO-AGENDA-10"
+      ]
+    },
+    {
+      "week": "2026-W28",
+      "body": "4SA 장비 조건 원복 검증가 반영됐다. [agenda:DEMO-AGENDA-02] 검사 장비 calibration 영향가 반영됐다. [agenda:DEMO-AGENDA-04]",
+      "agenda_ids": [
+        "DEMO-AGENDA-02",
+        "DEMO-AGENDA-04"
+      ]
+    }
+  ],
+  "build_run_id": "DEMO-BUILD-30",
+  "model": "z-ai/glm-4.7-flash",
+  "published_at": "2026-07-20T03:00:00Z"
+}

@@ -1,0 +1,55 @@
+{
+  "projection_id": "lotcd:DRAM/Canopus/4SS",
+  "kind": "lotcd",
+  "key": "DRAM/Canopus/4SS",
+  "title": "4SS Wiki",
+  "breadcrumb": [
+    "DRAM",
+    "Canopus",
+    "4SS"
+  ],
+  "summary": "2026-W29부터 2026-W29까지 누적된 내용을 하나의 문서로 합성했다.",
+  "sections": [
+    {
+      "key": "current_state",
+      "title": "현재 상태와 주요 변화",
+      "body": "4SS Wiki은 승인된 1개 Agenda의 흐름을 현재 기준으로 통합한다. [agenda:DEMO-AGENDA-05] Canopus 4SS Test fail 증가 [agenda:DEMO-AGENDA-05]"
+    }
+  ],
+  "claims": [
+    {
+      "text": "1개 승인 Agenda가 현재 정본에 반영됐다.",
+      "agenda_ids": [
+        "DEMO-AGENDA-05"
+      ]
+    }
+  ],
+  "source_agenda_ids": [
+    "DEMO-AGENDA-05"
+  ],
+  "direct_topic_ids": [
+    "DEMO-TOPIC-05"
+  ],
+  "rolled_up_topic_ids": [],
+  "direct_agenda_ids": [
+    "DEMO-AGENDA-05"
+  ],
+  "rolled_up_agenda_ids": [],
+  "child_document_ids": [],
+  "as_of_week": "2026-W29",
+  "revision_id": "DEMO-PROJ-54101DA17FD6",
+  "previous_revision_id": null,
+  "body_markdown": "# 4SS Wiki\n\n## 현재 상태와 주요 변화\n\n4SS Wiki은 승인된 1개 Agenda의 흐름을 현재 기준으로 통합한다. [agenda:DEMO-AGENDA-05] Canopus 4SS Test fail 증가 [agenda:DEMO-AGENDA-05]\n\n### 2026-W29\n\nCanopus 4SS Test fail 증가가 반영됐다. [agenda:DEMO-AGENDA-05]",
+  "weekly_history": [
+    {
+      "week": "2026-W29",
+      "body": "Canopus 4SS Test fail 증가가 반영됐다. [agenda:DEMO-AGENDA-05]",
+      "agenda_ids": [
+        "DEMO-AGENDA-05"
+      ]
+    }
+  ],
+  "build_run_id": "DEMO-BUILD-30",
+  "model": "z-ai/glm-4.7-flash",
+  "published_at": "2026-07-20T03:00:00Z"
+}

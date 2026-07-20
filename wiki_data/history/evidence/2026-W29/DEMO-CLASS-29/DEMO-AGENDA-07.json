@@ -24,7 +24,7 @@
     "team": "Heraion양산수율",
     "subject": "Heraion 4H1/6H1 수율 현황",
     "received_at": "2026-07-09T08:55:00+09:00",
-    "source_path": "fixtures/knowledge/mails.json#dummy_mail_007",
+    "source_path": "2026-W29/Heraion양산수율/dummy_mail_007/combined.txt",
     "topic_hint": "Heraion channel hole 편차",
     "state_hint": "investigating"
   },

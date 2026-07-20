@@ -251,6 +251,31 @@ export interface WikiEvidence {
   original_mail_url?: string | null
 }
 
+export interface WikiProjectionDocument {
+  projection_id: string
+  kind: 'domain' | 'tech' | 'lotcd' | 'team' | 'week'
+  key: string
+  title: string
+  breadcrumb: string[]
+  summary: string
+  sections: Array<{ key: string; title: string; body: string }>
+  claims: Array<{ text: string; agenda_ids: string[] }>
+  source_agenda_ids: string[]
+  direct_topic_ids: string[]
+  rolled_up_topic_ids: string[]
+  direct_agenda_ids: string[]
+  rolled_up_agenda_ids: string[]
+  child_document_ids: string[]
+  as_of_week: string
+  revision_id: string
+  previous_revision_id: string | null
+  body_markdown: string
+  weekly_history: Array<{ week: string; body: string; agenda_ids: string[] }>
+  build_run_id: string
+  model: string
+  published_at: string
+}
+
 export interface LotcdWikiView {
   domain: DomainName
   tech: string | null
@@ -268,6 +293,8 @@ export interface LotcdWikiView {
   direct_activity: WikiEvidence[]
   rolled_up_activity: WikiEvidence[]
   topic_ids: string[]
+  documents?: WikiTopicDetail[]
+  projection?: WikiProjectionDocument | null
 }
 
 export interface TeamWikiView {
@@ -278,6 +305,8 @@ export interface TeamWikiView {
   partner_teams: string[]
   target_paths: CategoryPath[]
   actions_and_decisions: TopicListItem[]
+  documents?: WikiTopicDetail[]
+  projection?: WikiProjectionDocument | null
 }
 
 export interface WikiIndex { values: string[] }
@@ -304,6 +333,8 @@ export interface WeekWikiView {
   pending_assignment_count: number
   contradictions: string[]
   teams: string[]
+  documents?: WikiTopicDetail[]
+  projection?: WikiProjectionDocument | null
 }
 
 export interface WikiReview {

@@ -6,7 +6,7 @@ import {
   fetchTopics,
   fetchWeekWiki,
 } from '../../api/knowledge'
-import type { TopicListItem, WikiEvidence } from '../../types'
+import type { TopicListItem, WikiEvidence, WikiProjectionDocument, WikiTopicDetail } from '../../types'
 import type { WikiCollectionKind } from './wikiLocation'
 
 export interface WikiCollectionState {
@@ -20,12 +20,16 @@ export interface WikiCollectionState {
   rolledUpEvidence: WikiEvidence[]
   breadcrumb: string[]
   scopeLevel: 'domain' | 'tech' | 'lotcd' | null
+  documents?: WikiTopicDetail[]
+  projection?: WikiProjectionDocument | null
   status: 'loading' | 'ready' | 'error'
 }
 
 const EMPTY_COLLECTION: WikiCollectionState = {
   kind: 'topics', path: '/wiki/topics', title: '전체 주제', summary: '', topics: [], evidence: [],
   directEvidence: [], rolledUpEvidence: [], breadcrumb: [], scopeLevel: null, status: 'loading',
+  documents: [],
+  projection: null,
 }
 
 function uniqueTopics(values: TopicListItem[]): TopicListItem[] {
@@ -60,7 +64,7 @@ export function useWikiCollection(collectionPath: string): WikiCollectionState {
           topics: uniqueTopics([...view.recent_changes, ...view.active_topics, ...grouped, ...closed]),
           evidence: view.activity, directEvidence: view.direct_activity,
           rolledUpEvidence: view.rolled_up_activity, breadcrumb: view.breadcrumb,
-          scopeLevel: view.scope_level, status: 'ready',
+          scopeLevel: view.scope_level, documents: view.documents ?? [], projection: view.projection ?? null, status: 'ready',
         }
       }
       if (kind === 'team' && parts.length >= 3) {
@@ -69,6 +73,7 @@ export function useWikiCollection(collectionPath: string): WikiCollectionState {
           kind, path: collectionPath, title: view.team, summary: `${view.topics.length}개 Topic에 기여`,
           topics: view.topics, evidence: view.recent_activity, directEvidence: view.recent_activity,
           rolledUpEvidence: [], breadcrumb: [view.team], scopeLevel: null, status: 'ready',
+          documents: view.documents ?? [], projection: view.projection ?? null,
         }
       }
       if (kind === 'week' && parts.length >= 3) {
@@ -84,7 +89,8 @@ export function useWikiCollection(collectionPath: string): WikiCollectionState {
           kind, path: collectionPath, title: `${view.week} Wiki`,
           summary: `신규 ${view.new_topic_ids.length} · 변경 ${view.changed_topic_ids.length} · 검토 ${view.pending_assignment_count}`,
           topics: topics.filter((topic) => ids.has(topic.topic_id)), evidence: [], directEvidence: [],
-          rolledUpEvidence: [], breadcrumb: [view.week], scopeLevel: null, status: 'ready',
+          rolledUpEvidence: [], breadcrumb: [view.week], scopeLevel: null,
+          documents: view.documents ?? [], projection: view.projection ?? null, status: 'ready',
         }
       }
       const filters = {
@@ -99,7 +105,7 @@ export function useWikiCollection(collectionPath: string): WikiCollectionState {
         : kind === 'team' ? '팀을 선택하세요'
           : kind === 'week' ? '주차를 선택하세요' : '전체 주제'
       return { kind, path: collectionPath, title, summary: `${topics.length}개 canonical Topic`, topics, evidence: [],
-        directEvidence: [], rolledUpEvidence: [], breadcrumb: [], scopeLevel: null, status: 'ready' }
+        directEvidence: [], rolledUpEvidence: [], breadcrumb: [], scopeLevel: null, documents: [], projection: null, status: 'ready' }
     }
 
     load().then(setState).catch((error: unknown) => {

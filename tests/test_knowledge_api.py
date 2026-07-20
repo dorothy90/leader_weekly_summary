@@ -151,6 +151,9 @@ def test_category_routes_synthesize_domain_tech_and_lotcd_documents(api_app):
     assert tech.json()["breadcrumb"] == ["DRAM", "Spica"]
     assert lotcd.json()["breadcrumb"] == ["DRAM", "Spica", "4SA"]
     assert domain.json()["topic_ids"] == tech.json()["topic_ids"] == ["T-001"]
+    document = lotcd.json()["documents"][0]
+    assert document["topic"]["topic_id"] == "T-001"
+    assert document["body_markdown"] == "4SA yield declined. [agenda:A-001]"
 
 
 @pytest.mark.parametrize(
@@ -251,6 +254,24 @@ def test_week_route_preserves_snapshot_action_rows(api_app):
     assert response.status_code == 200
     assert response.json()["actions_and_decisions"] == [
         snapshot.actions_and_decisions[0].model_dump(mode="json")
+    ]
+
+
+def test_week_route_enriches_legacy_snapshot_with_new_topic_documents(api_app):
+    store = api_app.state.wiki_store
+    snapshot = build_week_view(store, "2026-W30", "RUN-001").model_copy(
+        update={
+            "new_topic_ids": ["T-001"],
+            "changed_topic_ids": [],
+            "documents": [],
+        }
+    )
+    store.save_week(snapshot)
+
+    response = request(api_app, "/api/knowledge/wiki/weeks/2026-W30")
+
+    assert [item["topic"]["topic_id"] for item in response.json()["documents"]] == [
+        "T-001"
     ]
 
 

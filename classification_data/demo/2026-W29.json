@@ -42,7 +42,7 @@
       "team": "DRAM수율전략",
       "subject": "Lucy 및 Procyon 주요 이슈",
       "received_at": "2026-07-08T09:05:00+09:00",
-      "source_path": "fixtures/knowledge/mails.json#dummy_mail_005",
+      "source_path": "2026-W29/DRAM수율전략/dummy_mail_005/combined.txt",
       "topic_hint": "Canopus 4SS Test fail 증가",
       "state_hint": "reopened"
     },
@@ -68,7 +68,7 @@
       "team": "DRAM수율전략",
       "subject": "[NAND] Tech 공통 수율 관리 기준",
       "received_at": "2026-07-08T13:30:00+09:00",
-      "source_path": "fixtures/knowledge/mails.json#dummy_mail_006",
+      "source_path": "2026-W29/DRAM수율전략/dummy_mail_006/combined.txt",
       "topic_hint": "Canopus 6SS 관리 범위 회복",
       "state_hint": "resolved"
     },
@@ -94,7 +94,7 @@
       "team": "Heraion양산수율",
       "subject": "Heraion 4H1/6H1 수율 현황",
       "received_at": "2026-07-09T08:55:00+09:00",
-      "source_path": "fixtures/knowledge/mails.json#dummy_mail_007",
+      "source_path": "2026-W29/Heraion양산수율/dummy_mail_007/combined.txt",
       "topic_hint": "Heraion channel hole 편차",
       "state_hint": "investigating"
     },
@@ -120,7 +120,7 @@
       "team": "Heraion양산수율",
       "subject": "CO QLC 1T program fail 분석",
       "received_at": "2026-07-09T11:45:00+09:00",
-      "source_path": "fixtures/knowledge/mails.json#dummy_mail_008",
+      "source_path": "2026-W29/Heraion양산수율/dummy_mail_008/combined.txt",
       "topic_hint": "6H1 조건 최적화 split",
       "state_hint": "action_in_progress"
     }

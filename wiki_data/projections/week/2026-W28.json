@@ -1,0 +1,68 @@
+{
+  "projection_id": "week:2026-W28",
+  "kind": "week",
+  "key": "2026-W28",
+  "title": "2026-W28 Wiki",
+  "breadcrumb": [
+    "2026-W28"
+  ],
+  "summary": "2026-W28부터 2026-W28까지 누적된 내용을 하나의 문서로 합성했다.",
+  "sections": [
+    {
+      "key": "current_state",
+      "title": "현재 상태와 주요 변화",
+      "body": "2026-W28 Wiki은 승인된 4개 Agenda의 흐름을 현재 기준으로 통합한다. [agenda:DEMO-AGENDA-01] 4SA chamber A 편차와 수율 하락 [agenda:DEMO-AGENDA-01] 4SA 장비 조건 원복 검증 [agenda:DEMO-AGENDA-02] Spica Edge defect 세정 recipe [agenda:DEMO-AGENDA-03] 검사 장비 calibration 영향 [agenda:DEMO-AGENDA-04]"
+    }
+  ],
+  "claims": [
+    {
+      "text": "4개 승인 Agenda가 현재 정본에 반영됐다.",
+      "agenda_ids": [
+        "DEMO-AGENDA-01",
+        "DEMO-AGENDA-02",
+        "DEMO-AGENDA-03",
+        "DEMO-AGENDA-04"
+      ]
+    }
+  ],
+  "source_agenda_ids": [
+    "DEMO-AGENDA-01",
+    "DEMO-AGENDA-02",
+    "DEMO-AGENDA-03",
+    "DEMO-AGENDA-04"
+  ],
+  "direct_topic_ids": [
+    "DEMO-TOPIC-01",
+    "DEMO-TOPIC-02",
+    "DEMO-TOPIC-03",
+    "DEMO-TOPIC-04"
+  ],
+  "rolled_up_topic_ids": [],
+  "direct_agenda_ids": [
+    "DEMO-AGENDA-01",
+    "DEMO-AGENDA-02",
+    "DEMO-AGENDA-03",
+    "DEMO-AGENDA-04"
+  ],
+  "rolled_up_agenda_ids": [],
+  "child_document_ids": [],
+  "as_of_week": "2026-W28",
+  "revision_id": "DEMO-PROJ-C78D6E557D5B",
+  "previous_revision_id": null,
+  "body_markdown": "# 2026-W28 Wiki\n\n## 현재 상태와 주요 변화\n\n2026-W28 Wiki은 승인된 4개 Agenda의 흐름을 현재 기준으로 통합한다. [agenda:DEMO-AGENDA-01] 4SA chamber A 편차와 수율 하락 [agenda:DEMO-AGENDA-01] 4SA 장비 조건 원복 검증 [agenda:DEMO-AGENDA-02] Spica Edge defect 세정 recipe [agenda:DEMO-AGENDA-03] 검사 장비 calibration 영향 [agenda:DEMO-AGENDA-04]\n\n### 2026-W28\n\n4SA chamber A 편차와 수율 하락가 반영됐다. [agenda:DEMO-AGENDA-01] 4SA 장비 조건 원복 검증가 반영됐다. [agenda:DEMO-AGENDA-02] Spica Edge defect 세정 recipe가 반영됐다. [agenda:DEMO-AGENDA-03] 검사 장비 calibration 영향가 반영됐다. [agenda:DEMO-AGENDA-04]",
+  "weekly_history": [
+    {
+      "week": "2026-W28",
+      "body": "4SA chamber A 편차와 수율 하락가 반영됐다. [agenda:DEMO-AGENDA-01] 4SA 장비 조건 원복 검증가 반영됐다. [agenda:DEMO-AGENDA-02] Spica Edge defect 세정 recipe가 반영됐다. [agenda:DEMO-AGENDA-03] 검사 장비 calibration 영향가 반영됐다. [agenda:DEMO-AGENDA-04]",
+      "agenda_ids": [
+        "DEMO-AGENDA-01",
+        "DEMO-AGENDA-02",
+        "DEMO-AGENDA-03",
+        "DEMO-AGENDA-04"
+      ]
+    }
+  ],
+  "build_run_id": "DEMO-BUILD-30",
+  "model": "z-ai/glm-4.7-flash",
+  "published_at": "2026-07-20T03:00:00Z"
+}

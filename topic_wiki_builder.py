@@ -86,7 +86,7 @@ ANALYSIS_SYSTEM_PROMPT = """Analyze one semiconductor Topic using only the suppl
 DRAFT_SYSTEM_PROMPT = """Write the current Korean Topic narrative from the validated analysis and approved evidence. Return ordered structured sections only. Every factual sentence must cite its evidence as [agenda:<agenda_id>]. Do not return a complete Markdown document or invent facts."""
 
 TOPIC_PROMPT_VERSION = "topic-wiki-v1"
-WIKI_BUILDER_VERSION = "json-wiki-v1"
+WIKI_BUILDER_VERSION = "json-wiki-v2-projections"
 
 
 def llm_connection() -> Any:
@@ -244,6 +244,8 @@ def build_week(
     link_decider: DecisionFn,
     analysis_fn: AnalysisFn,
     draft_fn: DraftFn,
+    projection_analysis_fn: Any | None = None,
+    projection_draft_fn: Any | None = None,
 ) -> WikiBuildRun:
     from wiki_projections import build_week_view
 
@@ -411,8 +413,22 @@ def build_week(
             except Exception:
                 failed.append(topic_id)
         wiki_store.rebuild_catalog()
+        failed_projections: list[str] = []
+        if (projection_analysis_fn is None) != (projection_draft_fn is None):
+            raise ValueError("Projection synthesis requires analysis and draft functions")
+        if projection_analysis_fn is not None and projection_draft_fn is not None:
+            from projection_wiki_builder import refresh_projection_documents
+
+            failed_projections = refresh_projection_documents(
+                wiki_store,
+                week,
+                run.run_id,
+                projection_analysis_fn,
+                projection_draft_fn,
+                model=model,
+            )
         wiki_store.save_week(build_week_view(wiki_store, week, run.run_id))
-        status = "partially_failed" if failed else "published"
+        status = "partially_failed" if failed or failed_projections else "published"
         return wiki_store.finish_build(
             run,
             status=status,

@@ -24,7 +24,7 @@
     "team": "Heraion양산수율",
     "subject": "CO QLC 1T program fail 분석",
     "received_at": "2026-07-09T11:45:00+09:00",
-    "source_path": "fixtures/knowledge/mails.json#dummy_mail_008",
+    "source_path": "2026-W29/Heraion양산수율/dummy_mail_008/combined.txt",
     "topic_hint": "6H1 조건 최적화 split",
     "state_hint": "action_in_progress"
   },

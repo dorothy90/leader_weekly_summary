@@ -1,0 +1,56 @@
+{
+  "projection_id": "tech:NAND/Petra",
+  "kind": "tech",
+  "key": "NAND/Petra",
+  "title": "Petra Wiki",
+  "breadcrumb": [
+    "NAND",
+    "Petra"
+  ],
+  "summary": "2026-W30부터 2026-W30까지 누적된 내용을 하나의 문서로 합성했다.",
+  "sections": [
+    {
+      "key": "current_state",
+      "title": "현재 상태와 주요 변화",
+      "body": "Petra Wiki은 승인된 1개 Agenda의 흐름을 현재 기준으로 통합한다. [agenda:DEMO-AGENDA-11] Petra 4P1 read 성능 검증 [agenda:DEMO-AGENDA-11]"
+    }
+  ],
+  "claims": [
+    {
+      "text": "1개 승인 Agenda가 현재 정본에 반영됐다.",
+      "agenda_ids": [
+        "DEMO-AGENDA-11"
+      ]
+    }
+  ],
+  "source_agenda_ids": [
+    "DEMO-AGENDA-11"
+  ],
+  "direct_topic_ids": [],
+  "rolled_up_topic_ids": [
+    "DEMO-TOPIC-11"
+  ],
+  "direct_agenda_ids": [],
+  "rolled_up_agenda_ids": [
+    "DEMO-AGENDA-11"
+  ],
+  "child_document_ids": [
+    "lotcd:NAND/Petra/4P1"
+  ],
+  "as_of_week": "2026-W30",
+  "revision_id": "DEMO-PROJ-CBC90A333501",
+  "previous_revision_id": null,
+  "body_markdown": "# Petra Wiki\n\n## 현재 상태와 주요 변화\n\nPetra Wiki은 승인된 1개 Agenda의 흐름을 현재 기준으로 통합한다. [agenda:DEMO-AGENDA-11] Petra 4P1 read 성능 검증 [agenda:DEMO-AGENDA-11]\n\n### 2026-W30\n\nPetra 4P1 read 성능 검증가 반영됐다. [agenda:DEMO-AGENDA-11]",
+  "weekly_history": [
+    {
+      "week": "2026-W30",
+      "body": "Petra 4P1 read 성능 검증가 반영됐다. [agenda:DEMO-AGENDA-11]",
+      "agenda_ids": [
+        "DEMO-AGENDA-11"
+      ]
+    }
+  ],
+  "build_run_id": "DEMO-BUILD-30",
+  "model": "z-ai/glm-4.7-flash",
+  "published_at": "2026-07-20T03:00:00Z"
+}

@@ -6,6 +6,7 @@ from threading import Event, Thread
 import pytest
 
 import wiki_store
+from wiki_store import JsonWikiStore, WikiStoreLockError
 from knowledge_models import (
     CategoryPath,
     TopicAssignment,
@@ -16,7 +17,30 @@ from knowledge_models import (
     WikiReview,
     WikiTopic,
 )
-from wiki_store import JsonWikiStore, WikiStoreLockError
+
+
+def test_projection_current_and_history_are_versioned(tmp_path):
+    from knowledge_models import WikiProjectionDocument
+
+    store = JsonWikiStore(tmp_path / "wiki")
+    base = WikiProjectionDocument(
+        projection_id="team:Yield", kind="team", key="Yield", title="Yield Wiki",
+        breadcrumb=["Yield"], summary="첫 문서", sections=[], claims=[],
+        source_agenda_ids=[], direct_agenda_ids=[], rolled_up_agenda_ids=[],
+        as_of_week="2026-W29", revision_id="PROJ-001", body_markdown="첫 문서",
+        weekly_history=[], build_run_id="RUN-1", model="test-model",
+        published_at=datetime(2026, 7, 13, tzinfo=UTC),
+    )
+    updated = base.model_copy(update={
+        "summary": "누적 문서", "as_of_week": "2026-W30",
+        "revision_id": "PROJ-002", "previous_revision_id": "PROJ-001",
+    })
+
+    store.save_projection(base)
+    store.save_projection(updated)
+
+    assert store.projection("team", "Yield").revision_id == "PROJ-002"
+    assert store.projection_revision("team", "Yield", "PROJ-001") == base
 
 
 def topic(revision_id: str = "REV-001") -> WikiTopic:

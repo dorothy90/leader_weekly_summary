@@ -1,0 +1,68 @@
+{
+  "projection_id": "week:2026-W30",
+  "kind": "week",
+  "key": "2026-W30",
+  "title": "2026-W30 Wiki",
+  "breadcrumb": [
+    "2026-W30"
+  ],
+  "summary": "2026-W30부터 2026-W30까지 누적된 내용을 하나의 문서로 합성했다.",
+  "sections": [
+    {
+      "key": "current_state",
+      "title": "현재 상태와 주요 변화",
+      "body": "2026-W30 Wiki은 승인된 4개 Agenda의 흐름을 현재 기준으로 통합한다. [agenda:DEMO-AGENDA-09] Colosseum word line 저항 상관성 [agenda:DEMO-AGENDA-09] DRAM/NAND 공통 검사 중지 계획 [agenda:DEMO-AGENDA-10] Petra 4P1 read 성능 검증 [agenda:DEMO-AGENDA-11] Lucy 6E2 저온 retention fail [agenda:DEMO-AGENDA-12]"
+    }
+  ],
+  "claims": [
+    {
+      "text": "4개 승인 Agenda가 현재 정본에 반영됐다.",
+      "agenda_ids": [
+        "DEMO-AGENDA-09",
+        "DEMO-AGENDA-10",
+        "DEMO-AGENDA-11",
+        "DEMO-AGENDA-12"
+      ]
+    }
+  ],
+  "source_agenda_ids": [
+    "DEMO-AGENDA-09",
+    "DEMO-AGENDA-10",
+    "DEMO-AGENDA-11",
+    "DEMO-AGENDA-12"
+  ],
+  "direct_topic_ids": [
+    "DEMO-TOPIC-09",
+    "DEMO-TOPIC-10",
+    "DEMO-TOPIC-11",
+    "DEMO-TOPIC-12"
+  ],
+  "rolled_up_topic_ids": [],
+  "direct_agenda_ids": [
+    "DEMO-AGENDA-09",
+    "DEMO-AGENDA-10",
+    "DEMO-AGENDA-11",
+    "DEMO-AGENDA-12"
+  ],
+  "rolled_up_agenda_ids": [],
+  "child_document_ids": [],
+  "as_of_week": "2026-W30",
+  "revision_id": "DEMO-PROJ-1B3A471C6B6C",
+  "previous_revision_id": null,
+  "body_markdown": "# 2026-W30 Wiki\n\n## 현재 상태와 주요 변화\n\n2026-W30 Wiki은 승인된 4개 Agenda의 흐름을 현재 기준으로 통합한다. [agenda:DEMO-AGENDA-09] Colosseum word line 저항 상관성 [agenda:DEMO-AGENDA-09] DRAM/NAND 공통 검사 중지 계획 [agenda:DEMO-AGENDA-10] Petra 4P1 read 성능 검증 [agenda:DEMO-AGENDA-11] Lucy 6E2 저온 retention fail [agenda:DEMO-AGENDA-12]\n\n### 2026-W30\n\nColosseum word line 저항 상관성가 반영됐다. [agenda:DEMO-AGENDA-09] DRAM/NAND 공통 검사 중지 계획가 반영됐다. [agenda:DEMO-AGENDA-10] Petra 4P1 read 성능 검증가 반영됐다. [agenda:DEMO-AGENDA-11] Lucy 6E2 저온 retention fail가 반영됐다. [agenda:DEMO-AGENDA-12]",
+  "weekly_history": [
+    {
+      "week": "2026-W30",
+      "body": "Colosseum word line 저항 상관성가 반영됐다. [agenda:DEMO-AGENDA-09] DRAM/NAND 공통 검사 중지 계획가 반영됐다. [agenda:DEMO-AGENDA-10] Petra 4P1 read 성능 검증가 반영됐다. [agenda:DEMO-AGENDA-11] Lucy 6E2 저온 retention fail가 반영됐다. [agenda:DEMO-AGENDA-12]",
+      "agenda_ids": [
+        "DEMO-AGENDA-09",
+        "DEMO-AGENDA-10",
+        "DEMO-AGENDA-11",
+        "DEMO-AGENDA-12"
+      ]
+    }
+  ],
+  "build_run_id": "DEMO-BUILD-30",
+  "model": "z-ai/glm-4.7-flash",
+  "published_at": "2026-07-20T03:00:00Z"
+}

@@ -1,0 +1,62 @@
+{
+  "projection_id": "tech:DRAM/Canopus",
+  "kind": "tech",
+  "key": "DRAM/Canopus",
+  "title": "Canopus Wiki",
+  "breadcrumb": [
+    "DRAM",
+    "Canopus"
+  ],
+  "summary": "2026-W29부터 2026-W29까지 누적된 내용을 하나의 문서로 합성했다.",
+  "sections": [
+    {
+      "key": "current_state",
+      "title": "현재 상태와 주요 변화",
+      "body": "Canopus Wiki은 승인된 2개 Agenda의 흐름을 현재 기준으로 통합한다. [agenda:DEMO-AGENDA-05] Canopus 4SS Test fail 증가 [agenda:DEMO-AGENDA-05] Canopus 6SS 관리 범위 회복 [agenda:DEMO-AGENDA-06]"
+    }
+  ],
+  "claims": [
+    {
+      "text": "2개 승인 Agenda가 현재 정본에 반영됐다.",
+      "agenda_ids": [
+        "DEMO-AGENDA-05",
+        "DEMO-AGENDA-06"
+      ]
+    }
+  ],
+  "source_agenda_ids": [
+    "DEMO-AGENDA-05",
+    "DEMO-AGENDA-06"
+  ],
+  "direct_topic_ids": [],
+  "rolled_up_topic_ids": [
+    "DEMO-TOPIC-05",
+    "DEMO-TOPIC-06"
+  ],
+  "direct_agenda_ids": [],
+  "rolled_up_agenda_ids": [
+    "DEMO-AGENDA-05",
+    "DEMO-AGENDA-06"
+  ],
+  "child_document_ids": [
+    "lotcd:DRAM/Canopus/4SS",
+    "lotcd:DRAM/Canopus/6SS"
+  ],
+  "as_of_week": "2026-W29",
+  "revision_id": "DEMO-PROJ-2997EFEAC778",
+  "previous_revision_id": null,
+  "body_markdown": "# Canopus Wiki\n\n## 현재 상태와 주요 변화\n\nCanopus Wiki은 승인된 2개 Agenda의 흐름을 현재 기준으로 통합한다. [agenda:DEMO-AGENDA-05] Canopus 4SS Test fail 증가 [agenda:DEMO-AGENDA-05] Canopus 6SS 관리 범위 회복 [agenda:DEMO-AGENDA-06]\n\n### 2026-W29\n\nCanopus 4SS Test fail 증가가 반영됐다. [agenda:DEMO-AGENDA-05] Canopus 6SS 관리 범위 회복가 반영됐다. [agenda:DEMO-AGENDA-06]",
+  "weekly_history": [
+    {
+      "week": "2026-W29",
+      "body": "Canopus 4SS Test fail 증가가 반영됐다. [agenda:DEMO-AGENDA-05] Canopus 6SS 관리 범위 회복가 반영됐다. [agenda:DEMO-AGENDA-06]",
+      "agenda_ids": [
+        "DEMO-AGENDA-05",
+        "DEMO-AGENDA-06"
+      ]
+    }
+  ],
+  "build_run_id": "DEMO-BUILD-30",
+  "model": "z-ai/glm-4.7-flash",
+  "published_at": "2026-07-20T03:00:00Z"
+}

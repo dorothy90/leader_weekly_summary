@@ -1,0 +1,55 @@
+{
+  "projection_id": "team:NAND품질PTE",
+  "kind": "team",
+  "key": "NAND품질PTE",
+  "title": "NAND품질PTE Wiki",
+  "breadcrumb": [
+    "NAND품질PTE"
+  ],
+  "summary": "2026-W30부터 2026-W30까지 누적된 내용을 하나의 문서로 합성했다.",
+  "sections": [
+    {
+      "key": "current_state",
+      "title": "현재 상태와 주요 변화",
+      "body": "NAND품질PTE Wiki은 승인된 1개 Agenda의 흐름을 현재 기준으로 통합한다. [agenda:DEMO-AGENDA-11] Petra 4P1 read 성능 검증 [agenda:DEMO-AGENDA-11]"
+    }
+  ],
+  "claims": [
+    {
+      "text": "1개 승인 Agenda가 현재 정본에 반영됐다.",
+      "agenda_ids": [
+        "DEMO-AGENDA-11"
+      ]
+    }
+  ],
+  "source_agenda_ids": [
+    "DEMO-AGENDA-11"
+  ],
+  "direct_topic_ids": [
+    "DEMO-TOPIC-04",
+    "DEMO-TOPIC-09",
+    "DEMO-TOPIC-11"
+  ],
+  "rolled_up_topic_ids": [],
+  "direct_agenda_ids": [
+    "DEMO-AGENDA-11"
+  ],
+  "rolled_up_agenda_ids": [],
+  "child_document_ids": [],
+  "as_of_week": "2026-W30",
+  "revision_id": "DEMO-PROJ-DC65E04A2564",
+  "previous_revision_id": null,
+  "body_markdown": "# NAND품질PTE Wiki\n\n## 현재 상태와 주요 변화\n\nNAND품질PTE Wiki은 승인된 1개 Agenda의 흐름을 현재 기준으로 통합한다. [agenda:DEMO-AGENDA-11] Petra 4P1 read 성능 검증 [agenda:DEMO-AGENDA-11]\n\n### 2026-W30\n\nPetra 4P1 read 성능 검증가 반영됐다. [agenda:DEMO-AGENDA-11]",
+  "weekly_history": [
+    {
+      "week": "2026-W30",
+      "body": "Petra 4P1 read 성능 검증가 반영됐다. [agenda:DEMO-AGENDA-11]",
+      "agenda_ids": [
+        "DEMO-AGENDA-11"
+      ]
+    }
+  ],
+  "build_run_id": "DEMO-BUILD-30",
+  "model": "z-ai/glm-4.7-flash",
+  "published_at": "2026-07-20T03:00:00Z"
+}

@@ -24,7 +24,7 @@
     "team": "Spica수율",
     "subject": "[DRAM 수율] 28주차 공통 기준 변경",
     "received_at": "2026-07-06T09:10:00+09:00",
-    "source_path": "fixtures/knowledge/mails.json#dummy_mail_001",
+    "source_path": "2026-W28/Spica수율/dummy_mail_001/combined.txt",
     "topic_hint": "4SA chamber A 편차와 수율 하락",
     "state_hint": "investigating"
   },

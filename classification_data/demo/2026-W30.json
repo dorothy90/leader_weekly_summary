@@ -42,7 +42,7 @@
       "team": "NAND FA PTE",
       "subject": "Petra performance 제품 검증 결과",
       "received_at": "2026-07-10T09:25:00+09:00",
-      "source_path": "fixtures/knowledge/mails.json#dummy_mail_009",
+      "source_path": "2026-W30/NAND FA PTE/dummy_mail_009/combined.txt",
       "topic_hint": "Colosseum word line 저항 상관성",
       "state_hint": "investigating"
     },
@@ -68,7 +68,7 @@
       "team": "공정기술PTE",
       "subject": "DRAM/NAND 공통 장비 점검 공지",
       "received_at": "2026-07-10T13:10:00+09:00",
-      "source_path": "fixtures/knowledge/mails.json#dummy_mail_010",
+      "source_path": "2026-W30/공정기술PTE/dummy_mail_010/combined.txt",
       "topic_hint": "DRAM/NAND 공통 검사 중지 계획",
       "state_hint": "monitoring"
     },
@@ -94,7 +94,7 @@
       "team": "NAND품질PTE",
       "subject": "신규 LOTCD 4ZZ 수율 이상",
       "received_at": "2026-07-10T15:35:00+09:00",
-      "source_path": "fixtures/knowledge/mails.json#dummy_mail_011",
+      "source_path": "2026-W30/NAND품질PTE/dummy_mail_011/combined.txt",
       "topic_hint": "Petra 4P1 read 성능 검증",
       "state_hint": "monitoring"
     },
@@ -120,7 +120,7 @@
       "team": "DRAM SRT 개발공정",
       "subject": "RE: [Spica] 4SA/6SA 주간 수율 현황",
       "received_at": "2026-07-11T08:20:00+09:00",
-      "source_path": "fixtures/knowledge/mails.json#dummy_mail_012",
+      "source_path": "2026-W30/DRAM SRT 개발공정/dummy_mail_012/combined.txt",
       "topic_hint": "Lucy 6E2 저온 retention fail",
       "state_hint": "review_required"
     }

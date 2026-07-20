@@ -24,7 +24,7 @@
     "team": "NAND FA PTE",
     "subject": "Petra performance 제품 검증 결과",
     "received_at": "2026-07-10T09:25:00+09:00",
-    "source_path": "fixtures/knowledge/mails.json#dummy_mail_009",
+    "source_path": "2026-W30/NAND FA PTE/dummy_mail_009/combined.txt",
     "topic_hint": "Colosseum word line 저항 상관성",
     "state_hint": "investigating"
   },

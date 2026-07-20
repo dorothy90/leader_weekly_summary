@@ -24,7 +24,7 @@
     "team": "공정기술PTE",
     "subject": "Canopus DDR5 16G 수율 점검",
     "received_at": "2026-07-07T11:15:00+09:00",
-    "source_path": "fixtures/knowledge/mails.json#dummy_mail_004",
+    "source_path": "2026-W28/공정기술PTE/dummy_mail_004/combined.txt",
     "topic_hint": "검사 장비 calibration 영향",
     "state_hint": "monitoring"
   },

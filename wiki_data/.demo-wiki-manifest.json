@@ -171,6 +171,110 @@
     },
     {
       "root": "wiki",
+      "path": "projections/domain/DRAM.json"
+    },
+    {
+      "root": "wiki",
+      "path": "projections/domain/NAND.json"
+    },
+    {
+      "root": "wiki",
+      "path": "projections/lotcd/DRAM%2FCanopus%2F4SS.json"
+    },
+    {
+      "root": "wiki",
+      "path": "projections/lotcd/DRAM%2FCanopus%2F6SS.json"
+    },
+    {
+      "root": "wiki",
+      "path": "projections/lotcd/DRAM%2FLucy%2F6E2.json"
+    },
+    {
+      "root": "wiki",
+      "path": "projections/lotcd/DRAM%2FSpica%2F4SA.json"
+    },
+    {
+      "root": "wiki",
+      "path": "projections/lotcd/NAND%2FColosseum%2F4C1.json"
+    },
+    {
+      "root": "wiki",
+      "path": "projections/lotcd/NAND%2FHeraion%2F4H1.json"
+    },
+    {
+      "root": "wiki",
+      "path": "projections/lotcd/NAND%2FHeraion%2F6H1.json"
+    },
+    {
+      "root": "wiki",
+      "path": "projections/lotcd/NAND%2FPetra%2F4P1.json"
+    },
+    {
+      "root": "wiki",
+      "path": "projections/team/%EA%B3%B5%EC%A0%95%EA%B8%B0%EC%88%A0PTE.json"
+    },
+    {
+      "root": "wiki",
+      "path": "projections/team/DRAM%20SRT%20%EA%B0%9C%EB%B0%9C%EA%B3%B5%EC%A0%95.json"
+    },
+    {
+      "root": "wiki",
+      "path": "projections/team/DRAM%EC%88%98%EC%9C%A8%EC%A0%84%EB%9E%B5.json"
+    },
+    {
+      "root": "wiki",
+      "path": "projections/team/Heraion%EC%96%91%EC%82%B0%EC%88%98%EC%9C%A8.json"
+    },
+    {
+      "root": "wiki",
+      "path": "projections/team/NAND%20FA%20PTE.json"
+    },
+    {
+      "root": "wiki",
+      "path": "projections/team/NAND%ED%92%88%EC%A7%88PTE.json"
+    },
+    {
+      "root": "wiki",
+      "path": "projections/team/Spica%EC%88%98%EC%9C%A8.json"
+    },
+    {
+      "root": "wiki",
+      "path": "projections/tech/DRAM%2FCanopus.json"
+    },
+    {
+      "root": "wiki",
+      "path": "projections/tech/DRAM%2FLucy.json"
+    },
+    {
+      "root": "wiki",
+      "path": "projections/tech/DRAM%2FSpica.json"
+    },
+    {
+      "root": "wiki",
+      "path": "projections/tech/NAND%2FColosseum.json"
+    },
+    {
+      "root": "wiki",
+      "path": "projections/tech/NAND%2FHeraion.json"
+    },
+    {
+      "root": "wiki",
+      "path": "projections/tech/NAND%2FPetra.json"
+    },
+    {
+      "root": "wiki",
+      "path": "projections/week/2026-W28.json"
+    },
+    {
+      "root": "wiki",
+      "path": "projections/week/2026-W29.json"
+    },
+    {
+      "root": "wiki",
+      "path": "projections/week/2026-W30.json"
+    },
+    {
+      "root": "wiki",
       "path": "relations/DEMO-REL-01.json"
     },
     {
@@ -284,6 +388,54 @@
     {
       "root": "classification",
       "path": "2026-W30.json"
+    },
+    {
+      "root": "classification",
+      "path": "mail/2026-W28/Spica수율/dummy_mail_001/body.html"
+    },
+    {
+      "root": "classification",
+      "path": "mail/2026-W28/Spica수율/dummy_mail_003/body.html"
+    },
+    {
+      "root": "classification",
+      "path": "mail/2026-W28/공정기술PTE/dummy_mail_002/body.html"
+    },
+    {
+      "root": "classification",
+      "path": "mail/2026-W28/공정기술PTE/dummy_mail_004/body.html"
+    },
+    {
+      "root": "classification",
+      "path": "mail/2026-W29/DRAM수율전략/dummy_mail_005/body.html"
+    },
+    {
+      "root": "classification",
+      "path": "mail/2026-W29/DRAM수율전략/dummy_mail_006/body.html"
+    },
+    {
+      "root": "classification",
+      "path": "mail/2026-W29/Heraion양산수율/dummy_mail_007/body.html"
+    },
+    {
+      "root": "classification",
+      "path": "mail/2026-W29/Heraion양산수율/dummy_mail_008/body.html"
+    },
+    {
+      "root": "classification",
+      "path": "mail/2026-W30/DRAM SRT 개발공정/dummy_mail_012/body.html"
+    },
+    {
+      "root": "classification",
+      "path": "mail/2026-W30/NAND FA PTE/dummy_mail_009/body.html"
+    },
+    {
+      "root": "classification",
+      "path": "mail/2026-W30/NAND품질PTE/dummy_mail_011/body.html"
+    },
+    {
+      "root": "classification",
+      "path": "mail/2026-W30/공정기술PTE/dummy_mail_010/body.html"
     }
   ]
 }

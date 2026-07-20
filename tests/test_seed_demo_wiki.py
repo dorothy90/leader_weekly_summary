@@ -22,6 +22,12 @@ def test_seed_demo_builds_graph_and_evidence_scenarios(tmp_path: Path):
     assert list((tmp_path / "wiki" / "history" / "evidence").glob("*/*/*.json"))
     assert list((tmp_path / "wiki" / "history" / "weeks").glob("*/*.json"))
     assert list((tmp_path / "classification" / "mail").glob("**/body.html"))
+    team_projection = store.projection("team", "공정기술PTE")
+    lotcd_projection = store.projection("lotcd", "DRAM/Spica/4SA")
+    assert len(team_projection.source_agenda_ids) > 1
+    assert len(lotcd_projection.source_agenda_ids) > 1
+    assert {entry.week for entry in team_projection.weekly_history} >= {"2026-W28", "2026-W30"}
+    assert team_projection.sections[0].title == "현재 상태와 주요 변화"
     evidence = store.archived_evidence_for_agenda("DEMO-AGENDA-01")
     assert evidence.item.source_path == (
         "2026-W28/Spica수율/dummy_mail_001/combined.txt"

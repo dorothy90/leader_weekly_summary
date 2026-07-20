@@ -2305,7 +2305,7 @@
 .canonical-document__section { margin-bottom: 48px; }
 .canonical-document__section h2, .canonical-document__claims h2, .canonical-document__relations h2, .canonical-document__evidence h2 { margin-bottom: 16px; font-size: 23px; line-height: 1.35; letter-spacing: -.025em; }
 .canonical-document__section p { color: #303833; font-size: 16px; line-height: 1.9; }
-.document-citation { border: 0; border-bottom: 1px solid #91b9b2; padding: 0 2px; color: var(--wiki-accent); background: transparent; font: 10px/1.4 ui-sans-serif, system-ui, sans-serif; text-decoration: none; }
+.document-citation { border: 0; border-bottom: 1px solid #91b9b2; padding: 0 2px; color: var(--wiki-accent); background: transparent; font: 10px/1.4 ui-sans-serif, system-ui, sans-serif; text-decoration: none; cursor: pointer; vertical-align: .15em; }
 .canonical-document__claims, .canonical-document__relations, .canonical-document__evidence { margin-top: 52px; border-top-color: var(--wiki-line); padding-top: 24px; }
 
 .collection-document__topics ol { gap: 0; }
@@ -2315,6 +2315,17 @@
 .collection-document__topics li > button:hover { border-color: transparent; background: transparent; }
 .collection-document__topics button > strong { font: 700 16px/1.45 ui-serif, "Noto Serif KR", serif; }
 .collection-document__topics button > span, .collection-document__topics button > small { color: var(--wiki-muted); font: 10px/1.4 ui-sans-serif, system-ui, sans-serif; }
+.collection-topic-section { margin-top: 30px; border-top: 1px solid var(--wiki-line); padding: 30px 0 8px; scroll-margin-top: 18px; }
+.collection-topic-section > header > span { display: flex; justify-content: space-between; color: var(--wiki-muted); font: 10px/1.4 ui-sans-serif, system-ui, sans-serif; }
+.collection-topic-section > header h3 { margin: 8px 0; font: 750 25px/1.35 ui-serif, "Noto Serif KR", serif; letter-spacing: -.025em; }
+.collection-topic-section > header small { color: var(--wiki-muted); font: 11px/1.5 ui-sans-serif, system-ui, sans-serif; }
+.collection-topic-section > section { margin-top: 28px; }
+.collection-topic-section h4 { margin: 0 0 8px; font: 700 15px/1.5 ui-sans-serif, system-ui, sans-serif; }
+.collection-topic-section__claims { margin-top: 28px; border-left: 2px solid var(--wiki-line); padding-left: 16px; }
+.collection-document__backlinks ul { margin: 0; padding: 0; list-style: none; }
+.collection-document__backlinks li { border-top: 1px solid var(--wiki-line); }
+.collection-document__backlinks li:last-child { border-bottom: 1px solid var(--wiki-line); }
+.collection-document__backlinks a { display: block; padding: 12px 2px; color: var(--wiki-accent); font: 12px/1.5 ui-sans-serif, system-ui, sans-serif; text-decoration: none; }
 .collection-document__areas > div { display: block; }
 .collection-document__areas section { border: 0; border-top: 1px solid var(--wiki-line); padding: 15px 2px; background: transparent; }
 .collection-document__areas h3 { margin-bottom: 8px; font-size: 15px; }

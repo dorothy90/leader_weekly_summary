@@ -9,6 +9,8 @@ from classification_store import JsonClassificationStore
 from knowledge_models import (
     ArchivedApprovedEvidence,
     CategoryPath,
+    ProjectionSection,
+    SupportedClaim,
     TopicAssignment,
     TopicRevision,
     TopicSection,
@@ -18,6 +20,7 @@ from knowledge_models import (
 )
 from topic_linker import TopicLinkDecision, resolve_wiki_review
 from topic_wiki_builder import RelationProposal, TopicAnalysis, TopicDraft, build_week
+from projection_wiki_builder import ProjectionAnalysis, ProjectionDraft
 from wiki_projections import (
     LOTCD_SECTION_ORDER,
     build_category_view,
@@ -200,6 +203,20 @@ def test_category_projection_rolls_descendants_into_domain_and_tech(stores):
     assert lotcd.summary == "4SA: 1 Topics"
 
 
+def test_category_projection_contains_complete_topic_documents(stores):
+    classification, wiki = stores
+
+    view = build_category_view(wiki, classification, "DRAM", "Spica", "4SA")
+
+    assert [document.topic.topic_id for document in view.documents] == ["T-001"]
+    assert view.documents[0].sections[0].body == (
+        "조건을 조정했다. [agenda:A-001]"
+    )
+    assert {item.agenda_id for item in view.documents[0].evidence} == {
+        "A-001", "A-002", "A-003",
+    }
+
+
 def test_category_projection_includes_agenda_classified_directly_to_parent(stores):
     classification, wiki = stores
     archived = wiki.archived_evidence("2026-W30/CLASS-001/A-003")
@@ -337,6 +354,53 @@ def test_pending_relation_review_does_not_block_publication(stores):
     assert result.status == "published"
     assert result.classification_run_id == "CLASS-001"
     assert wiki.week("2026-W30").build_run_id == result.run_id
+
+
+def test_week_build_persists_bottom_up_category_team_and_week_synthesis(stores):
+    classification, wiki = stores
+    calls: list[str] = []
+
+    def projection_analysis(context):
+        calls.append(context["projection"]["projection_id"])
+        return ProjectionAnalysis(summary="범위 내 현황을 통합했다.")
+
+    def projection_draft(context, _analysis):
+        agenda_id = context["evidence"][0]["agenda_id"]
+        return ProjectionDraft(
+            summary="범위 내 현황을 통합했다.",
+            sections=[ProjectionSection(
+                key="current_state",
+                title="현재 상태와 주요 변화",
+                body=f"범위 내 현황을 통합했다. [agenda:{agenda_id}]",
+            )],
+            claims=[SupportedClaim(
+                text="범위 내 현황을 통합했다.",
+                agenda_ids=[agenda_id],
+            )],
+            weekly_update=f"이번 주 근거를 반영했다. [agenda:{agenda_id}]",
+        )
+
+    result = build_week(
+        "2026-W30",
+        classification,
+        wiki,
+        lambda *_: None,
+        fake_analysis,
+        fake_draft,
+        projection_analysis_fn=projection_analysis,
+        projection_draft_fn=projection_draft,
+    )
+
+    assert result.status == "published"
+    assert wiki.projection("lotcd", "DRAM/Spica/4SA").sections[0].body.startswith(
+        "범위 내 현황"
+    )
+    assert wiki.projection("tech", "DRAM/Spica").kind == "tech"
+    assert wiki.projection("domain", "DRAM").kind == "domain"
+    assert wiki.projection("team", "Yield").kind == "team"
+    assert wiki.projection("week", "2026-W30").kind == "week"
+    assert calls.index("lotcd:DRAM/Spica/4SA") < calls.index("tech:DRAM/Spica")
+    assert calls.index("tech:DRAM/Spica") < calls.index("domain:DRAM")
 
 
 def test_build_creates_typed_nonblocking_review_for_relation_proposal(stores):

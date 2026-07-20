@@ -55,7 +55,7 @@ it('shows TOC, connected Topics, inline citations, and source-mail references', 
   expect(screen.getByRole('dialog', { name: 'Agenda 근거' })).toHaveTextContent('chamber A 편차')
 })
 
-it('synthesizes a collection as one document with linked Topic sections', () => {
+it('renders the persisted cumulative projection instead of parallel Topic documents', () => {
   const onSelectTopic = vi.fn()
   const teamCollection: WikiCollectionState = {
     kind: 'team', path: '/wiki/teams/Spica수율', title: 'Spica수율',
@@ -68,18 +68,43 @@ it('synthesizes a collection as one document with linked Topic sections', () => 
       last_updated_week: '2026-W30', evidence_count: 1, rank_reasons: ['최근 갱신'],
     }],
     evidence: [detail.evidence[0]],
+    documents: [detail],
+    projection: {
+      projection_id: 'team:Spica수율', kind: 'team', key: 'Spica수율',
+      title: 'Spica수율 Wiki', breadcrumb: ['Spica수율'],
+      summary: '여러 주차의 Agenda를 하나의 팀 현황으로 합성했다.',
+      sections: [{
+        key: 'current_state', title: '현재 상태와 주요 변화',
+        body: '28주차 편차와 30주차 조치를 통합해 모니터링 중이다. [agenda:DEMO-AGENDA-01]',
+      }],
+      claims: [{ text: '통합 모니터링 중이다.', agenda_ids: ['DEMO-AGENDA-01'] }],
+      source_agenda_ids: ['DEMO-AGENDA-01'], direct_topic_ids: ['DEMO-TOPIC-01'],
+      rolled_up_topic_ids: [], direct_agenda_ids: ['DEMO-AGENDA-01'], rolled_up_agenda_ids: [],
+      child_document_ids: [], as_of_week: '2026-W30', revision_id: 'PROJ-001',
+      previous_revision_id: null, body_markdown: '',
+      weekly_history: [{ week: '2026-W30', body: '조치를 반영했다. [agenda:DEMO-AGENDA-01]', agenda_ids: ['DEMO-AGENDA-01'] }],
+      build_run_id: 'RUN-30', model: 'z-ai/glm-4.7-flash', published_at: '2026-07-20T00:00:00Z',
+    },
   }
 
   render(<WikiDocumentPane topicId={null} collection={teamCollection} onSelectTopic={onSelectTopic} />)
 
   expect(screen.getByRole('heading', { name: 'Spica수율' })).toBeInTheDocument()
   expect(screen.getByRole('navigation', { name: '문서 목차' })).toBeInTheDocument()
-  expect(screen.getByRole('heading', { name: '주요 주제' })).toBeInTheDocument()
-  expect(screen.getByRole('heading', { name: '지식 영역' })).toBeInTheDocument()
+  expect(screen.queryByRole('heading', { name: '주요 주제' })).not.toBeInTheDocument()
+  expect(screen.queryByRole('heading', { name: '지식 영역' })).not.toBeInTheDocument()
   expect(screen.getByRole('heading', { name: '참고문서' })).toBeInTheDocument()
 
-  fireEvent.click(screen.getByRole('button', { name: 'Topic 문서 열기: 4SA chamber A 편차' }))
-  expect(onSelectTopic).toHaveBeenCalledWith('DEMO-TOPIC-01')
+  expect(screen.getByRole('heading', { name: '현재 상태와 주요 변화' })).toBeInTheDocument()
+  expect(screen.getByText('28주차 편차와 30주차 조치를 통합해 모니터링 중이다.')).toBeInTheDocument()
+  expect(screen.queryByRole('heading', { name: '4SA chamber A 편차' })).not.toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: '주차별 업데이트 이력' })).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Topic 문서 열기: 4SA chamber A 편차' })).not.toBeInTheDocument()
+  expect(onSelectTopic).not.toHaveBeenCalled()
+
+  fireEvent.click(screen.getAllByRole('button', { name: '참고문서 DEMO-AGENDA-01 상세 보기' })[0])
+  expect(screen.getByRole('dialog', { name: 'Agenda 근거' })).toHaveTextContent('chamber A 편차')
+  expect(screen.getByRole('heading', { name: 'Backlinks' })).toBeInTheDocument()
 })
 
 it('distinguishes direct and descendant references in a category rollup', () => {
@@ -93,6 +118,7 @@ it('distinguishes direct and descendant references in a category rollup', () => 
     summary: 'Spica: 1 Topics', status: 'ready', topics: [],
     evidence: [direct, rolled], directEvidence: [direct], rolledUpEvidence: [rolled],
     breadcrumb: ['DRAM', 'Spica'], scopeLevel: 'tech',
+    documents: [],
   }
 
   render(<WikiDocumentPane topicId={null} collection={categoryCollection} onSelectTopic={vi.fn()} />)

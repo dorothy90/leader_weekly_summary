@@ -43,6 +43,11 @@ from knowledge_models import (
 )
 from topic_linker import build_link_decider, resolve_wiki_review
 from topic_wiki_builder import build_analysis_fn, build_draft_fn, build_week
+from topic_wiki_builder import build_wiki_llm
+from projection_wiki_builder import (
+    build_projection_analysis_fn,
+    build_projection_draft_fn,
+)
 from wiki_projections import (
     build_category_view,
     build_team_view,
@@ -406,7 +411,29 @@ def wiki_teams() -> WikiIndex:
 @router.get("/wiki/weeks/{week}", response_model=WeekWikiView)
 def wiki_week(week: str) -> WeekWikiView:
     try:
-        return get_wiki_store().week(week)
+        store = get_wiki_store()
+        view = store.week(week)
+        try:
+            projection = view.projection or store.projection("week", week)
+        except KeyError:
+            projection = None
+        if view.documents and projection is view.projection:
+            return view
+        topic_ids = {
+            *view.new_topic_ids,
+            *view.changed_topic_ids,
+            *view.resolved_topic_ids,
+            *view.reopened_topic_ids,
+            *(item.topic_id for item in view.actions_and_decisions),
+        }
+        return view.model_copy(update={
+            "documents": view.documents or [
+                build_topic_detail(store, get_store(), topic.topic_id)
+                for topic in store.topics()
+                if topic.topic_id in topic_ids
+            ],
+            "projection": projection,
+        })
     except KeyError as exc:
         raise HTTPException(
             status_code=404, detail=f"Unknown Wiki week: {week}"
@@ -448,13 +475,16 @@ def start_wiki_build(
     classification_store = get_store()
     try:
         classification_store.approved_week(week)
+        wiki_llm = build_wiki_llm()
         return build_week(
             week,
             classification_store,
             get_wiki_store(),
             build_link_decider(),
-            build_analysis_fn(),
-            build_draft_fn(),
+            build_analysis_fn(wiki_llm),
+            build_draft_fn(wiki_llm),
+            build_projection_analysis_fn(wiki_llm),
+            build_projection_draft_fn(wiki_llm),
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"Unknown week: {week}") from exc

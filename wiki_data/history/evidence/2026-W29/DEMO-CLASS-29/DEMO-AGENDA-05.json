@@ -24,7 +24,7 @@
     "team": "DRAM수율전략",
     "subject": "Lucy 및 Procyon 주요 이슈",
     "received_at": "2026-07-08T09:05:00+09:00",
-    "source_path": "fixtures/knowledge/mails.json#dummy_mail_005",
+    "source_path": "2026-W29/DRAM수율전략/dummy_mail_005/combined.txt",
     "topic_hint": "Canopus 4SS Test fail 증가",
     "state_hint": "reopened"
   },

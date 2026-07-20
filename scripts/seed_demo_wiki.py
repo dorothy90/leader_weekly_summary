@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import html
 import json
 import sys
@@ -27,12 +28,16 @@ from knowledge_models import (
     TopicRelation,
     TopicRevision,
     TopicSection,
+    ProjectionSection,
+    ProjectionWeeklyHistory,
     WeekWikiView,
     WikiBuildRun,
+    WikiProjectionDocument,
     WikiReview,
     WikiTopic,
 )
 from wiki_store import JsonWikiStore
+from projection_wiki_builder import _category_specs, _team_specs, _week_spec
 
 
 FIXTURE_PATH = ROOT / "fixtures" / "knowledge" / "mails.json"
@@ -239,6 +244,64 @@ def _relation_ids_for(index: int, accepted_only: bool = False) -> list[str]:
     return result
 
 
+def _write_demo_projections(store: JsonWikiStore) -> None:
+    specs = [*_category_specs(store), *_team_specs(store)]
+    specs.extend(
+        week_spec
+        for week in ("2026-W28", "2026-W29", "2026-W30")
+        if (week_spec := _week_spec(store, week)) is not None
+    )
+    for spec, evidence, _topic_documents in specs:
+        citations = " ".join(
+            f"{item.summary} [agenda:{item.agenda_id}]" for item in evidence
+        )
+        sections = [ProjectionSection(
+            key="current_state",
+            title="현재 상태와 주요 변화",
+            body=(
+                f"{spec.title}은 승인된 {len(evidence)}개 Agenda의 흐름을 현재 기준으로 통합한다. "
+                f"[agenda:{evidence[0].agenda_id}] {citations}"
+            ),
+        )]
+        by_week: dict[str, list[ClassificationItem]] = {}
+        for item in evidence:
+            item_week = TOPIC_SPECS[int(item.agenda_id[-2:]) - 1].week
+            by_week.setdefault(item_week, []).append(item)
+        history = [
+            ProjectionWeeklyHistory(
+                week=item_week,
+                body=" ".join(
+                    f"{item.summary}가 반영됐다. [agenda:{item.agenda_id}]"
+                    for item in week_items
+                ),
+                agenda_ids=[item.agenda_id for item in week_items],
+            )
+            for item_week, week_items in sorted(by_week.items(), reverse=True)
+        ]
+        body = "\n\n".join(
+            [f"# {spec.title}", f"## {sections[0].title}\n\n{sections[0].body}"]
+            + [f"### {entry.week}\n\n{entry.body}" for entry in history]
+        )
+        digest = hashlib.sha256(spec.projection_id.encode("utf-8")).hexdigest()[:12].upper()
+        store.save_projection(WikiProjectionDocument(
+            **spec.model_dump(mode="python"),
+            summary=f"{history[-1].week}부터 {history[0].week}까지 누적된 내용을 하나의 문서로 합성했다.",
+            sections=sections,
+            claims=[SupportedClaim(
+                text=f"{len(evidence)}개 승인 Agenda가 현재 정본에 반영됐다.",
+                agenda_ids=[item.agenda_id for item in evidence],
+            )],
+            source_agenda_ids=sorted(item.agenda_id for item in evidence),
+            as_of_week=history[0].week,
+            revision_id=f"DEMO-PROJ-{digest}",
+            body_markdown=body,
+            weekly_history=history,
+            build_run_id="DEMO-BUILD-30",
+            model="z-ai/glm-4.7-flash",
+            published_at=STAMP,
+        ))
+
+
 def _write_wiki(
     wiki_data_dir: Path,
     items: dict[str, ClassificationItem],
@@ -429,6 +492,7 @@ def _write_wiki(
         contradictions=["DEMO-REL-09 관계 검토 대기"],
         teams=sorted({team for topic in topics for team in topic.teams}),
     ))
+    _write_demo_projections(store)
     store.rebuild_catalog()
     return len(topics), len(RELATION_SPECS), 3
 

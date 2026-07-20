@@ -1,0 +1,55 @@
+{
+  "projection_id": "lotcd:NAND/Colosseum/4C1",
+  "kind": "lotcd",
+  "key": "NAND/Colosseum/4C1",
+  "title": "4C1 Wiki",
+  "breadcrumb": [
+    "NAND",
+    "Colosseum",
+    "4C1"
+  ],
+  "summary": "2026-W30부터 2026-W30까지 누적된 내용을 하나의 문서로 합성했다.",
+  "sections": [
+    {
+      "key": "current_state",
+      "title": "현재 상태와 주요 변화",
+      "body": "4C1 Wiki은 승인된 1개 Agenda의 흐름을 현재 기준으로 통합한다. [agenda:DEMO-AGENDA-09] Colosseum word line 저항 상관성 [agenda:DEMO-AGENDA-09]"
+    }
+  ],
+  "claims": [
+    {
+      "text": "1개 승인 Agenda가 현재 정본에 반영됐다.",
+      "agenda_ids": [
+        "DEMO-AGENDA-09"
+      ]
+    }
+  ],
+  "source_agenda_ids": [
+    "DEMO-AGENDA-09"
+  ],
+  "direct_topic_ids": [
+    "DEMO-TOPIC-09"
+  ],
+  "rolled_up_topic_ids": [],
+  "direct_agenda_ids": [
+    "DEMO-AGENDA-09"
+  ],
+  "rolled_up_agenda_ids": [],
+  "child_document_ids": [],
+  "as_of_week": "2026-W30",
+  "revision_id": "DEMO-PROJ-C29F7C1F95EF",
+  "previous_revision_id": null,
+  "body_markdown": "# 4C1 Wiki\n\n## 현재 상태와 주요 변화\n\n4C1 Wiki은 승인된 1개 Agenda의 흐름을 현재 기준으로 통합한다. [agenda:DEMO-AGENDA-09] Colosseum word line 저항 상관성 [agenda:DEMO-AGENDA-09]\n\n### 2026-W30\n\nColosseum word line 저항 상관성가 반영됐다. [agenda:DEMO-AGENDA-09]",
+  "weekly_history": [
+    {
+      "week": "2026-W30",
+      "body": "Colosseum word line 저항 상관성가 반영됐다. [agenda:DEMO-AGENDA-09]",
+      "agenda_ids": [
+        "DEMO-AGENDA-09"
+      ]
+    }
+  ],
+  "build_run_id": "DEMO-BUILD-30",
+  "model": "z-ai/glm-4.7-flash",
+  "published_at": "2026-07-20T03:00:00Z"
+}

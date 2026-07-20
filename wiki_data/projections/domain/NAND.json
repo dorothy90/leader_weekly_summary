@@ -1,0 +1,82 @@
+{
+  "projection_id": "domain:NAND",
+  "kind": "domain",
+  "key": "NAND",
+  "title": "NAND Wiki",
+  "breadcrumb": [
+    "NAND"
+  ],
+  "summary": "2026-W29부터 2026-W30까지 누적된 내용을 하나의 문서로 합성했다.",
+  "sections": [
+    {
+      "key": "current_state",
+      "title": "현재 상태와 주요 변화",
+      "body": "NAND Wiki은 승인된 4개 Agenda의 흐름을 현재 기준으로 통합한다. [agenda:DEMO-AGENDA-07] Heraion channel hole 편차 [agenda:DEMO-AGENDA-07] 6H1 조건 최적화 split [agenda:DEMO-AGENDA-08] Colosseum word line 저항 상관성 [agenda:DEMO-AGENDA-09] Petra 4P1 read 성능 검증 [agenda:DEMO-AGENDA-11]"
+    }
+  ],
+  "claims": [
+    {
+      "text": "4개 승인 Agenda가 현재 정본에 반영됐다.",
+      "agenda_ids": [
+        "DEMO-AGENDA-07",
+        "DEMO-AGENDA-08",
+        "DEMO-AGENDA-09",
+        "DEMO-AGENDA-11"
+      ]
+    }
+  ],
+  "source_agenda_ids": [
+    "DEMO-AGENDA-07",
+    "DEMO-AGENDA-08",
+    "DEMO-AGENDA-09",
+    "DEMO-AGENDA-11"
+  ],
+  "direct_topic_ids": [],
+  "rolled_up_topic_ids": [
+    "DEMO-TOPIC-04",
+    "DEMO-TOPIC-07",
+    "DEMO-TOPIC-08",
+    "DEMO-TOPIC-09",
+    "DEMO-TOPIC-10",
+    "DEMO-TOPIC-11"
+  ],
+  "direct_agenda_ids": [],
+  "rolled_up_agenda_ids": [
+    "DEMO-AGENDA-07",
+    "DEMO-AGENDA-08",
+    "DEMO-AGENDA-09",
+    "DEMO-AGENDA-11"
+  ],
+  "child_document_ids": [
+    "tech:NAND/Colosseum",
+    "tech:NAND/Colosseum",
+    "tech:NAND/Heraion",
+    "tech:NAND/Heraion",
+    "tech:NAND/Petra"
+  ],
+  "as_of_week": "2026-W30",
+  "revision_id": "DEMO-PROJ-A1FF6E87A933",
+  "previous_revision_id": null,
+  "body_markdown": "# NAND Wiki\n\n## 현재 상태와 주요 변화\n\nNAND Wiki은 승인된 4개 Agenda의 흐름을 현재 기준으로 통합한다. [agenda:DEMO-AGENDA-07] Heraion channel hole 편차 [agenda:DEMO-AGENDA-07] 6H1 조건 최적화 split [agenda:DEMO-AGENDA-08] Colosseum word line 저항 상관성 [agenda:DEMO-AGENDA-09] Petra 4P1 read 성능 검증 [agenda:DEMO-AGENDA-11]\n\n### 2026-W30\n\nColosseum word line 저항 상관성가 반영됐다. [agenda:DEMO-AGENDA-09] Petra 4P1 read 성능 검증가 반영됐다. [agenda:DEMO-AGENDA-11]\n\n### 2026-W29\n\nHeraion channel hole 편차가 반영됐다. [agenda:DEMO-AGENDA-07] 6H1 조건 최적화 split가 반영됐다. [agenda:DEMO-AGENDA-08]",
+  "weekly_history": [
+    {
+      "week": "2026-W30",
+      "body": "Colosseum word line 저항 상관성가 반영됐다. [agenda:DEMO-AGENDA-09] Petra 4P1 read 성능 검증가 반영됐다. [agenda:DEMO-AGENDA-11]",
+      "agenda_ids": [
+        "DEMO-AGENDA-09",
+        "DEMO-AGENDA-11"
+      ]
+    },
+    {
+      "week": "2026-W29",
+      "body": "Heraion channel hole 편차가 반영됐다. [agenda:DEMO-AGENDA-07] 6H1 조건 최적화 split가 반영됐다. [agenda:DEMO-AGENDA-08]",
+      "agenda_ids": [
+        "DEMO-AGENDA-07",
+        "DEMO-AGENDA-08"
+      ]
+    }
+  ],
+  "build_run_id": "DEMO-BUILD-30",
+  "model": "z-ai/glm-4.7-flash",
+  "published_at": "2026-07-20T03:00:00Z"
+}

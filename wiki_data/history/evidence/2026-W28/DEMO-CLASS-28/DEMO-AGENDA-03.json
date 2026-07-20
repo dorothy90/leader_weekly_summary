@@ -24,7 +24,7 @@
     "team": "Spica수율",
     "subject": "SP LPDDR5 24G 공통 개선안 검토",
     "received_at": "2026-07-07T08:40:00+09:00",
-    "source_path": "fixtures/knowledge/mails.json#dummy_mail_003",
+    "source_path": "2026-W28/Spica수율/dummy_mail_003/combined.txt",
     "topic_hint": "Spica Edge defect 세정 recipe",
     "state_hint": "monitoring"
   },

@@ -1,0 +1,83 @@
+{
+  "projection_id": "tech:DRAM/Spica",
+  "kind": "tech",
+  "key": "DRAM/Spica",
+  "title": "Spica Wiki",
+  "breadcrumb": [
+    "DRAM",
+    "Spica"
+  ],
+  "summary": "2026-W28부터 2026-W30까지 누적된 내용을 하나의 문서로 합성했다.",
+  "sections": [
+    {
+      "key": "current_state",
+      "title": "현재 상태와 주요 변화",
+      "body": "Spica Wiki은 승인된 5개 Agenda의 흐름을 현재 기준으로 통합한다. [agenda:DEMO-AGENDA-01] 4SA chamber A 편차와 수율 하락 [agenda:DEMO-AGENDA-01] 4SA 장비 조건 원복 검증 [agenda:DEMO-AGENDA-02] Spica Edge defect 세정 recipe [agenda:DEMO-AGENDA-03] 검사 장비 calibration 영향 [agenda:DEMO-AGENDA-04] DRAM/NAND 공통 검사 중지 계획 [agenda:DEMO-AGENDA-10]"
+    }
+  ],
+  "claims": [
+    {
+      "text": "5개 승인 Agenda가 현재 정본에 반영됐다.",
+      "agenda_ids": [
+        "DEMO-AGENDA-01",
+        "DEMO-AGENDA-02",
+        "DEMO-AGENDA-03",
+        "DEMO-AGENDA-04",
+        "DEMO-AGENDA-10"
+      ]
+    }
+  ],
+  "source_agenda_ids": [
+    "DEMO-AGENDA-01",
+    "DEMO-AGENDA-02",
+    "DEMO-AGENDA-03",
+    "DEMO-AGENDA-04",
+    "DEMO-AGENDA-10"
+  ],
+  "direct_topic_ids": [],
+  "rolled_up_topic_ids": [
+    "DEMO-TOPIC-01",
+    "DEMO-TOPIC-02",
+    "DEMO-TOPIC-03",
+    "DEMO-TOPIC-04",
+    "DEMO-TOPIC-10"
+  ],
+  "direct_agenda_ids": [],
+  "rolled_up_agenda_ids": [
+    "DEMO-AGENDA-01",
+    "DEMO-AGENDA-02",
+    "DEMO-AGENDA-03",
+    "DEMO-AGENDA-04",
+    "DEMO-AGENDA-10"
+  ],
+  "child_document_ids": [
+    "lotcd:DRAM/Spica/4SA",
+    "lotcd:DRAM/Spica/6SA"
+  ],
+  "as_of_week": "2026-W30",
+  "revision_id": "DEMO-PROJ-ED9C86036114",
+  "previous_revision_id": null,
+  "body_markdown": "# Spica Wiki\n\n## 현재 상태와 주요 변화\n\nSpica Wiki은 승인된 5개 Agenda의 흐름을 현재 기준으로 통합한다. [agenda:DEMO-AGENDA-01] 4SA chamber A 편차와 수율 하락 [agenda:DEMO-AGENDA-01] 4SA 장비 조건 원복 검증 [agenda:DEMO-AGENDA-02] Spica Edge defect 세정 recipe [agenda:DEMO-AGENDA-03] 검사 장비 calibration 영향 [agenda:DEMO-AGENDA-04] DRAM/NAND 공통 검사 중지 계획 [agenda:DEMO-AGENDA-10]\n\n### 2026-W30\n\nDRAM/NAND 공통 검사 중지 계획가 반영됐다. [agenda:DEMO-AGENDA-10]\n\n### 2026-W28\n\n4SA chamber A 편차와 수율 하락가 반영됐다. [agenda:DEMO-AGENDA-01] 4SA 장비 조건 원복 검증가 반영됐다. [agenda:DEMO-AGENDA-02] Spica Edge defect 세정 recipe가 반영됐다. [agenda:DEMO-AGENDA-03] 검사 장비 calibration 영향가 반영됐다. [agenda:DEMO-AGENDA-04]",
+  "weekly_history": [
+    {
+      "week": "2026-W30",
+      "body": "DRAM/NAND 공통 검사 중지 계획가 반영됐다. [agenda:DEMO-AGENDA-10]",
+      "agenda_ids": [
+        "DEMO-AGENDA-10"
+      ]
+    },
+    {
+      "week": "2026-W28",
+      "body": "4SA chamber A 편차와 수율 하락가 반영됐다. [agenda:DEMO-AGENDA-01] 4SA 장비 조건 원복 검증가 반영됐다. [agenda:DEMO-AGENDA-02] Spica Edge defect 세정 recipe가 반영됐다. [agenda:DEMO-AGENDA-03] 검사 장비 calibration 영향가 반영됐다. [agenda:DEMO-AGENDA-04]",
+      "agenda_ids": [
+        "DEMO-AGENDA-01",
+        "DEMO-AGENDA-02",
+        "DEMO-AGENDA-03",
+        "DEMO-AGENDA-04"
+      ]
+    }
+  ],
+  "build_run_id": "DEMO-BUILD-30",
+  "model": "z-ai/glm-4.7-flash",
+  "published_at": "2026-07-20T03:00:00Z"
+}

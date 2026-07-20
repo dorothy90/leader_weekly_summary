@@ -24,7 +24,7 @@
     "team": "DRAM SRT 개발공정",
     "subject": "RE: [Spica] 4SA/6SA 주간 수율 현황",
     "received_at": "2026-07-11T08:20:00+09:00",
-    "source_path": "fixtures/knowledge/mails.json#dummy_mail_012",
+    "source_path": "2026-W30/DRAM SRT 개발공정/dummy_mail_012/combined.txt",
     "topic_hint": "Lucy 6E2 저온 retention fail",
     "state_hint": "review_required"
   },

@@ -377,6 +377,11 @@ def build_category_view(
     direct_ids = {item.agenda_id for item in direct_activity}
     scope_level = "lotcd" if lotcd is not None else "tech" if tech is not None else "domain"
     label = lotcd or tech or domain
+    projection_key = "/".join(part for part in (domain, tech, lotcd) if part)
+    try:
+        projection = store.projection(scope_level, projection_key)
+    except KeyError:
+        projection = None
     return LotcdWikiView(
         domain=domain,
         tech=tech,
@@ -404,6 +409,11 @@ def build_category_view(
             item for item in activity if item.agenda_id not in direct_ids
         ],
         topic_ids=sorted(by_id),
+        documents=[
+            build_topic_detail(store, classification_store, item.topic_id)
+            for item in ranked
+        ],
+        projection=projection,
     )
 
 
@@ -432,6 +442,10 @@ def build_team_view(
     projection_week = max(
         (topic.last_updated_week for topic in topics), default=reference_week
     )
+    try:
+        projection = store.projection("team", team)
+    except KeyError:
+        projection = None
     return TeamWikiView(
         team=team,
         topics=ranked,
@@ -459,6 +473,11 @@ def build_team_view(
                 ),
             )
         ],
+        documents=[
+            build_topic_detail(store, classification_store, item.topic_id)
+            for item in ranked
+        ],
+        projection=projection,
     )
 
 
@@ -584,8 +603,17 @@ def build_week_view(
     revision_id = "WREV-" + hashlib.sha256(
         json.dumps(hash_payload, sort_keys=True).encode("utf-8")
     ).hexdigest()[:16].upper()
+    try:
+        projection = store.projection("week", week)
+    except KeyError:
+        projection = None
     return WeekWikiView(
         revision_id=revision_id,
         published_at=datetime.now(UTC),
+        documents=[
+            build_topic_detail(store, None, item.topic_id)
+            for item in ranked
+        ],
+        projection=projection,
         **payload,
     )

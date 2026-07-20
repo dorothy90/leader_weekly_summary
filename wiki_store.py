@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterator, TypeVar
+from urllib.parse import quote
 
 from knowledge_models import (
     ArchivedApprovedEvidence,
@@ -21,6 +22,7 @@ from knowledge_models import (
     WeekRelationReviewEvent,
     WeekWikiView,
     WikiBuildRun,
+    WikiProjectionDocument,
     WikiReview,
     WikiTopic,
 )
@@ -66,8 +68,10 @@ class JsonWikiStore:
             "reviews",
             "builds",
             "weeks",
+            "projections",
             "history/topics",
             "history/weeks",
+            "history/projections",
             "history/evidence",
             "transitions",
         ):
@@ -499,6 +503,60 @@ class JsonWikiStore:
 
     def weeks(self) -> list[str]:
         return sorted(path.stem for path in self.root.joinpath("weeks").glob("*.json"))
+
+    @staticmethod
+    def _projection_name(kind: str, key: str) -> tuple[str, str]:
+        if kind not in {"domain", "tech", "lotcd", "team", "week"}:
+            raise ValueError(f"Invalid projection kind: {kind}")
+        if not key:
+            raise ValueError("Projection key is required")
+        return kind, quote(key, safe="")
+
+    def save_projection(self, value: WikiProjectionDocument) -> None:
+        kind, name = self._projection_name(value.kind, value.key)
+        current = self.root / "projections" / kind / f"{name}.json"
+        with self._mutation_lock():
+            if current.exists():
+                previous = _load(current, WikiProjectionDocument)
+                if previous.projection_id != value.projection_id:
+                    raise ValueError("Projection identity mismatch")
+                history = (
+                    self.root / "history" / "projections" / kind / name
+                    / f"{_safe_id(previous.revision_id)}.json"
+                )
+                if not history.exists():
+                    self._atomic_write(history, previous)
+            self._atomic_write(current, value)
+
+    def projection(self, kind: str, key: str) -> WikiProjectionDocument:
+        resolved_kind, name = self._projection_name(kind, key)
+        return _load(
+            self.root / "projections" / resolved_kind / f"{name}.json",
+            WikiProjectionDocument,
+        )
+
+    def projection_revision(
+        self,
+        kind: str,
+        key: str,
+        revision_id: str,
+    ) -> WikiProjectionDocument:
+        resolved_kind, name = self._projection_name(kind, key)
+        return _load(
+            self.root / "history" / "projections" / resolved_kind / name
+            / f"{_safe_id(revision_id)}.json",
+            WikiProjectionDocument,
+        )
+
+    def projections(self, kind: str) -> list[WikiProjectionDocument]:
+        resolved_kind, _ = self._projection_name(kind, "index")
+        return sorted(
+            (
+                _load(path, WikiProjectionDocument)
+                for path in self.root.joinpath("projections", resolved_kind).glob("*.json")
+            ),
+            key=lambda value: value.key,
+        )
 
     def rebuild_catalog(self) -> list[dict[str, Any]]:
         with self._mutation_lock():

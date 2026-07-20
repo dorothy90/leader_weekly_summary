@@ -21,6 +21,10 @@ from topic_wiki_builder import (
     build_week,
     build_wiki_llm,
 )
+from projection_wiki_builder import (
+    build_projection_analysis_fn,
+    build_projection_draft_fn,
+)
 from wiki_store import DEFAULT_WIKI_DATA_DIR, JsonWikiStore
 
 
@@ -59,6 +63,8 @@ def process_week(
         build_link_decider(),
         build_analysis_fn(wiki_llm),
         build_draft_fn(wiki_llm),
+        build_projection_analysis_fn(wiki_llm),
+        build_projection_draft_fn(wiki_llm),
     )
 
 
