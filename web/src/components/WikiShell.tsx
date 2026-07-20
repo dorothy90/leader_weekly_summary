@@ -1,15 +1,8 @@
 import { useEffect, useState } from 'react'
-import { Link, NavLink, Outlet } from 'react-router-dom'
+import { Link, Outlet } from 'react-router-dom'
 
 import { fetchWikiReviews } from '../api/knowledge'
 import { WIKI_ASSIGNMENT_REVIEWS_CHANGED } from '../reviewEvents'
-
-const wikiModes = [
-  { label: '주제', to: '/wiki/topics' },
-  { label: 'LOTCD', to: '/wiki/lotcd' },
-  { label: '팀', to: '/wiki/teams' },
-  { label: '주차', to: '/wiki/weeks' },
-]
 
 export function WikiShell() {
   const [blockingReviewCount, setBlockingReviewCount] = useState(0)
@@ -42,11 +35,7 @@ export function WikiShell() {
           <strong>Weekly Knowledge Wiki</strong>
           <span>주간 기술 로그북</span>
         </Link>
-        <nav className="wiki-shell__modes" aria-label="Wiki 탐색 모드">
-          {wikiModes.map((mode) => (
-            <NavLink key={mode.to} to={mode.to}>{mode.label}</NavLink>
-          ))}
-        </nav>
+        <div className="wiki-shell__context">TOPIC · LOTCD · TEAM · WEEK</div>
         <div className="wiki-shell__operator-links">
           {blockingReviewCount > 0 ? (
             <Link className="wiki-shell__review-link" to="/wiki/reviews" aria-label={`차단 중인 배정 검토 ${blockingReviewCount}건`}>

@@ -14,12 +14,10 @@ beforeEach(() => {
   vi.mocked(fetchWikiReviews).mockResolvedValue([])
 })
 
-it('shows four Wiki modes and keeps Classification available', () => {
+it('shows the Wiki identity and keeps Classification available', () => {
   render(<MemoryRouter initialEntries={['/wiki/topics']}><WikiShell /></MemoryRouter>)
-  expect(screen.getByRole('link', { name: '주제' })).toHaveAttribute('href', '/wiki/topics')
-  expect(screen.getByRole('link', { name: 'LOTCD' })).toHaveAttribute('href', '/wiki/lotcd')
-  expect(screen.getByRole('link', { name: '팀' })).toHaveAttribute('href', '/wiki/teams')
-  expect(screen.getByRole('link', { name: '주차' })).toHaveAttribute('href', '/wiki/weeks')
+  expect(screen.getByRole('link', { name: /Weekly Knowledge Wiki/ })).toHaveAttribute('href', '/wiki/topics')
+  expect(screen.getByText('TOPIC · LOTCD · TEAM · WEEK')).toBeInTheDocument()
   expect(screen.getByRole('link', { name: '분류 작업대' })).toHaveAttribute('href', '/classification')
 })
 
