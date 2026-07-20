@@ -50,10 +50,11 @@ export function EvidenceDrawer({ evidence, onClose, triggerRef }: EvidenceDrawer
         <h3>원문 인용</h3>
         <blockquote>{evidence.source_quote}</blockquote>
       </section>
-      <dl className="evidence-drawer__source">
-        <dt>원본 경로</dt>
-        <dd>{evidence.source_path ?? '경로 정보 없음'}</dd>
-      </dl>
+      <footer className="evidence-drawer__source">
+        {evidence.mail_html_available && evidence.original_mail_url
+          ? <a href={evidence.original_mail_url} target="_blank" rel="noopener noreferrer">원본 메일을 새 탭에서 보기 ↗</a>
+          : <span>보관된 원본 HTML이 없습니다.</span>}
+      </footer>
     </dialog>
   )
 }

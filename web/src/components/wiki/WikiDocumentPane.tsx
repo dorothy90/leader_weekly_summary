@@ -47,7 +47,7 @@ export function WikiDocumentPane({ topicId, collection, onSelectTopic }: WikiDoc
     setSelectedEvidence(evidence)
   }
 
-  if (!topicId) return <CollectionOverview collection={collection} />
+  if (!topicId) return <CollectionOverview collection={collection} onSelectTopic={onSelectTopic} />
   if (status === 'loading') return <p className="topic-page-status" role="status">Topic 문서를 불러오는 중입니다.</p>
   if (status === 'error' || !detail) return <p className="topic-page-status topic-page-status--error" role="alert">Topic 문서를 불러오지 못했습니다.</p>
 
@@ -59,7 +59,7 @@ export function WikiDocumentPane({ topicId, collection, onSelectTopic }: WikiDoc
       if (index % 3 === 1) {
         const agendaId = parts[index + 1]
         const evidence = evidenceById.get(agendaId)
-        nodes.push(evidence ? <button key={`${agendaId}-${index}`} type="button" className="document-citation" aria-label={`Agenda 근거 ${agendaId} 보기`} onClick={(event) => openEvidence(evidence, event.currentTarget)}>{agendaId}</button> : value)
+        nodes.push(evidence ? <a key={`${agendaId}-${index}`} className="document-citation" aria-label={`참고문서 ${agendaId}로 이동`} href={`#reference-${agendaId}`}>{agendaId}</a> : value)
       } else if (value) nodes.push(value)
       return nodes
     }, [])
@@ -84,7 +84,7 @@ export function WikiDocumentPane({ topicId, collection, onSelectTopic }: WikiDoc
       <nav className="canonical-document__toc" aria-label="문서 목차">
         <strong>ON THIS PAGE</strong>
         {detail.sections.map((section, index) => <a key={`${section.key}-${index}`} href={`#section-${index}`}>{section.title}</a>)}
-        <a href="#document-relations">연결된 주제</a><a href="#document-evidence">출처 기록</a>
+        <a href="#document-relations">연결된 주제</a><a href="#document-evidence">참고문서</a>
       </nav>
       <div className="canonical-document__spine">
         {detail.sections.map((section, index) => <section key={`${section.key}-${index}`} id={`section-${index}`} className="canonical-document__section">
@@ -95,7 +95,7 @@ export function WikiDocumentPane({ topicId, collection, onSelectTopic }: WikiDoc
       {detail.claims.length > 0 ? <section className="canonical-document__claims"><h2>근거가 있는 주장</h2>
         {detail.claims.map((claim) => <div key={claim.text}><p>{claim.text}</p><span>{claim.agenda_ids.map((agendaId) => {
           const evidence = evidenceById.get(agendaId)
-          return evidence ? <button key={agendaId} type="button" aria-label={`Agenda 근거 ${agendaId} 보기`} onClick={(event) => openEvidence(evidence, event.currentTarget)}>{agendaId}</button> : null
+          return evidence ? <a key={agendaId} className="document-citation" aria-label={`참고문서 ${agendaId}로 이동`} href={`#reference-${agendaId}`}>{agendaId}</a> : null
         })}</span></div>)}
       </section> : null}
       <section id="document-relations" className="canonical-document__relations">
@@ -108,18 +108,94 @@ export function WikiDocumentPane({ topicId, collection, onSelectTopic }: WikiDoc
           </li>
         })}</ul>}
       </section>
-      <section id="document-evidence" className="canonical-document__evidence"><h2>출처 기록</h2><EvidenceTree evidence={detail.evidence} onOpen={openEvidence} /></section>
+      <section id="document-evidence" className="canonical-document__evidence"><h2>참고문서</h2><EvidenceTree evidence={detail.evidence} onOpen={openEvidence} /></section>
       {selectedEvidence ? <EvidenceDrawer evidence={selectedEvidence} onClose={() => setSelectedEvidence(null)} triggerRef={evidenceTriggerRef} /> : null}
     </article>
   )
 }
 
-function CollectionOverview({ collection }: { collection: WikiCollectionState }) {
+const collectionKindLabels: Record<WikiCollectionState['kind'], string> = {
+  topics: 'TOPIC INDEX', lotcd: 'LOTCD WIKI', team: 'TEAM WIKI', week: 'WEEKLY WIKI',
+}
+
+function CollectionOverview({
+  collection, onSelectTopic,
+}: {
+  collection: WikiCollectionState
+  onSelectTopic: (topicId: string) => void
+}) {
+  const [selectedEvidence, setSelectedEvidence] = useState<WikiEvidence | null>(null)
+  const evidenceTriggerRef = useRef<HTMLButtonElement | null>(null)
+
+  if (collection.status === 'loading') return <article className="collection-document collection-document--status" aria-label="Wiki 문서"><p className="topic-page-status" role="status">Wiki 문서를 합성하는 중입니다.</p></article>
+  if (collection.status === 'error') return <article className="collection-document collection-document--status" aria-label="Wiki 문서"><p className="topic-page-status topic-page-status--error" role="alert">Wiki 문서를 불러오지 못했습니다.</p></article>
+
   const stateCount = new Set(collection.topics.map((topic) => topic.state)).size
-  return <article className="wiki-document-pane__overview" aria-label="Wiki 문서">
-    <small>COLLECTION OVERVIEW</small><h1>{collection.title}</h1>
-    <p>{collection.summary || '좌측 트리에서 분류 축을 선택하거나 중앙에서 Topic을 선택하세요.'}</p>
-    <dl><div><dt>표시 Topic</dt><dd>{collection.topics.length}</dd></div><div><dt>활성 상태</dt><dd>{stateCount}</dd></div></dl>
-    {collection.topics.length > 0 ? <section className="collection-overview__recent"><h2>최근 갱신</h2>{collection.topics.slice(0, 5).map((topic) => <p key={topic.topic_id}><code>{topic.last_updated_week}</code>{topic.title}</p>)}</section> : null}
+  const teams = new Set(collection.topics.flatMap((topic) => topic.teams)).size
+  const areas = new Map<string, WikiCollectionState['topics']>()
+  collection.topics.forEach((topic) => areas.set(topic.primary_area, [...(areas.get(topic.primary_area) ?? []), topic]))
+
+  function openEvidence(evidence: WikiEvidence, trigger: HTMLButtonElement) {
+    evidenceTriggerRef.current = trigger
+    setSelectedEvidence(evidence)
+  }
+
+  return <article className="collection-document" aria-label="Wiki 문서">
+    <header className="collection-document__header">
+      <small>{collectionKindLabels[collection.kind]} · SYNTHESIZED DOCUMENT</small>
+      {collection.breadcrumb.length ? <p className="collection-document__breadcrumb">{collection.breadcrumb.join(' / ')}</p> : null}
+      <h1>{collection.title}</h1>
+      <p>{collection.summary || '좌측 지식 트리에서 문서를 선택하세요.'}</p>
+      <dl>
+        <div><dt>연결 Topic</dt><dd>{collection.topics.length}</dd></div>
+        <div><dt>기여 팀</dt><dd>{teams}</dd></div>
+        <div><dt>지식 영역</dt><dd>{areas.size}</dd></div>
+        <div><dt>활성 상태</dt><dd>{stateCount}</dd></div>
+      </dl>
+    </header>
+    <nav className="canonical-document__toc" aria-label="문서 목차">
+      <strong>ON THIS PAGE</strong>
+      <a href="#collection-summary">현황 요약</a>
+      <a href="#collection-topics">주요 주제</a>
+      <a href="#collection-areas">지식 영역</a>
+      <a href="#collection-evidence">참고문서</a>
+    </nav>
+    <div className="canonical-document__spine">
+      <section id="collection-summary" className="canonical-document__section">
+        <span className="canonical-document__node">01</span><h2>현황 요약</h2>
+        <p>{collection.summary || `${collection.topics.length}개 Topic을 하나의 Wiki 문서로 합성했습니다.`}</p>
+      </section>
+      <section id="collection-topics" className="canonical-document__section collection-document__topics">
+        <span className="canonical-document__node">02</span><h2>주요 주제</h2>
+        {collection.topics.length === 0 ? <p>연결된 Topic이 없습니다.</p> : <ol>{collection.topics.map((topic) => <li key={topic.topic_id}>
+          <button type="button" onClick={() => onSelectTopic(topic.topic_id)} aria-label={`Topic 문서 열기: ${topic.title}`}>
+            <span><code>{topic.topic_id}</code><time>{topic.last_updated_week}</time></span>
+            <strong>{topic.title}</strong>
+            <small>{topicStateLabels[topic.state]} · {knowledgeAreaLabels[topic.primary_area]} · {topic.teams.join(' · ') || '팀 미지정'}</small>
+          </button>
+        </li>)}</ol>}
+      </section>
+      <section id="collection-areas" className="canonical-document__section collection-document__areas">
+        <span className="canonical-document__node">03</span><h2>지식 영역</h2>
+        {areas.size === 0 ? <p>분류된 지식 영역이 없습니다.</p> : <div>{[...areas.entries()].map(([area, topics]) => <section key={area}>
+          <h3>{knowledgeAreaLabels[area as keyof typeof knowledgeAreaLabels]}</h3>
+          <p>{topics.map((topic) => topic.title).join(' · ')}</p>
+        </section>)}</div>}
+      </section>
+      <section id="collection-evidence" className="canonical-document__section collection-document__evidence">
+        <span className="canonical-document__node">04</span><h2>참고문서</h2>
+        {collection.scopeLevel ? <>
+          <div className="collection-document__reference-group">
+            <h3>직접 분류된 참고문서 <span>{collection.directEvidence.length}</span></h3>
+            {collection.directEvidence.length ? <EvidenceTree evidence={collection.directEvidence} onOpen={openEvidence} /> : <p>이 계층에 직접 분류된 Agenda가 없습니다.</p>}
+          </div>
+          <div className="collection-document__reference-group is-rollup">
+            <h3>하위 계층에서 롤업된 참고문서 <span>{collection.rolledUpEvidence.length}</span></h3>
+            {collection.rolledUpEvidence.length ? <EvidenceTree evidence={collection.rolledUpEvidence} onOpen={openEvidence} /> : <p>하위 계층에서 포함된 Agenda가 없습니다.</p>}
+          </div>
+        </> : collection.evidence.length > 0 ? <EvidenceTree evidence={collection.evidence} onOpen={openEvidence} /> : <p>이 문서 범위에 표시할 원문 근거가 없습니다.</p>}
+      </section>
+    </div>
+    {selectedEvidence ? <EvidenceDrawer evidence={selectedEvidence} onClose={() => setSelectedEvidence(null)} triggerRef={evidenceTriggerRef} /> : null}
   </article>
 }
