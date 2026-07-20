@@ -212,6 +212,11 @@ export interface TopicRelation {
   review_state: 'pending' | 'accepted' | 'rejected'
 }
 
+export interface WikiGraphView {
+  topics: TopicListItem[]
+  relations: TopicRelation[]
+}
+
 export interface WikiTopicDetail {
   topic: WikiTopic
   body_markdown: string

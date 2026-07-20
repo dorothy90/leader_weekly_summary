@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 
 import { fetchWikiReviews } from '../api/knowledge'
@@ -11,6 +11,7 @@ import { useWikiCollection } from '../components/wiki/useWikiCollection'
 import { parseWikiLocation } from '../components/wiki/wikiLocation'
 
 const LAYOUT_KEY = 'weekly-wiki:layout:v1'
+const WikiGraph = lazy(() => import('../components/wiki/graph/WikiGraph'))
 
 interface LayoutState { treeWidth: number; documentWidth: number; treeCollapsed: boolean; documentCollapsed: boolean }
 
@@ -37,6 +38,7 @@ export function WikiWorkspacePage() {
   const [treeMode, setTreeMode] = useState<'knowledge' | 'evidence'>('knowledge')
   const [layout, setLayout] = useState<LayoutState>(initialLayout)
   const [reviewCount, setReviewCount] = useState(0)
+  const graphScopeIds = useMemo(() => new Set(collection.topics.map((topic) => topic.topic_id)), [collection.topics])
 
   useEffect(() => {
     if (typeof localStorage?.setItem === 'function') {
@@ -80,7 +82,9 @@ export function WikiWorkspacePage() {
         </header>
         {wikiLocation.view === 'docs' ? <div className="wiki-explorer__body">
           <CollectionExplorer collection={collection} selectedTopicId={wikiLocation.topicId} onSelectTopic={selectTopic} />
-        </div> : <div className="wiki-graph-placeholder" role="status">관계 그래프를 준비하는 중입니다.</div>}
+        </div> : <Suspense fallback={<div className="wiki-graph-placeholder" role="status">관계 그래프를 불러오는 중입니다.</div>}>
+          <WikiGraph scopeIds={graphScopeIds} selectedTopicId={wikiLocation.topicId} onSelectTopic={selectTopic} />
+        </Suspense>}
       </section>
       <ResizablePane side="right" width={layout.documentWidth} min={320} max={720} collapsed={layout.documentCollapsed} onWidthChange={(documentWidth) => setLayout((current) => ({ ...current, documentWidth }))}>
         <div className="wiki-document-pane">

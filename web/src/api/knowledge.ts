@@ -17,6 +17,7 @@ import type {
   TopicState,
   WeekWikiView,
   WikiBuildRun,
+  WikiGraphView,
   WikiReview,
   WikiReviewResolution,
   WikiTopicDetail,
@@ -155,6 +156,9 @@ export const fetchTopic = (topicId: string, signal?: AbortSignal) =>
     `/api/knowledge/wiki/topics/${encodeURIComponent(topicId)}`,
     signal,
   )
+
+export const fetchWikiGraph = (signal?: AbortSignal) =>
+  getJson<WikiGraphView>('/api/knowledge/wiki/graph', signal)
 
 export const fetchLotcdWiki = (
   domain: DomainName,

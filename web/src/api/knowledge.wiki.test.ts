@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   fetchWikiBuild,
+  fetchWikiGraph,
   fetchWikiReviews,
   fetchLotcdWiki,
   fetchTeamWiki,
@@ -32,6 +33,13 @@ describe('Wiki API', () => {
       '/api/knowledge/wiki/teams/Yield%20%26%20Quality',
       '/api/knowledge/wiki/weeks/2026-W30',
     ])
+  })
+
+  it('loads the shared graph contract', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({ topics: [], relations: [] })))
+
+    expect(await fetchWikiGraph()).toEqual({ topics: [], relations: [] })
+    expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe('/api/knowledge/wiki/graph')
   })
 
   it('serializes a manual attach review decision', async () => {

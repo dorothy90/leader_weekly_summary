@@ -18,9 +18,11 @@ export function parseWikiLocation(pathname: string, search: string): WikiLocatio
   const params = new URLSearchParams(search)
   const topicMatch = pathname.match(/^\/wiki\/topics\/([^/]+)$/)
   const from = params.get('from')
+  params.delete('view')
+  const currentCollection = `${pathname}${params.size ? `?${params}` : ''}`
   const collectionPath = topicMatch && from?.startsWith('/wiki/') && !from.startsWith('/wiki/reviews')
     ? from
-    : topicMatch ? '/wiki/topics' : `${pathname}${search}`
+    : topicMatch ? '/wiki/topics' : currentCollection
   const collectionUrl = new URL(collectionPath, 'http://wiki.local')
 
   return {
