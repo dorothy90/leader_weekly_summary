@@ -4,9 +4,11 @@ import { vi } from 'vitest'
 
 import {
   fetchTaxonomy,
+  fetchTopic,
   fetchTopics,
   fetchWeekWiki,
   fetchWikiBuild,
+  fetchWikiGraph,
   fetchWikiReviews,
   fetchWikiTeams,
   fetchWikiWeeks,
@@ -16,9 +18,11 @@ import { WikiWorkspacePage } from './WikiWorkspacePage'
 
 vi.mock('../api/knowledge', () => ({
   fetchTaxonomy: vi.fn(),
+  fetchTopic: vi.fn(),
   fetchTopics: vi.fn(),
   fetchWeekWiki: vi.fn(),
   fetchWikiBuild: vi.fn(),
+  fetchWikiGraph: vi.fn(),
   fetchWikiReviews: vi.fn(),
   fetchWikiTeams: vi.fn(),
   fetchWikiWeeks: vi.fn(),
@@ -34,6 +38,7 @@ beforeEach(() => {
     }] }],
   })
   vi.mocked(fetchTopics).mockResolvedValue([])
+  vi.mocked(fetchWikiGraph).mockResolvedValue({ topics: [], relations: [] })
   vi.mocked(fetchWikiTeams).mockResolvedValue({ values: ['Spica수율'] })
   vi.mocked(fetchWikiWeeks).mockResolvedValue({ values: ['2026-W30'] })
   vi.mocked(fetchWeekWiki).mockResolvedValue({
@@ -59,18 +64,26 @@ function renderWorkspace(path: string) {
   )
 }
 
-it('keeps metadata roots beside Docs and the canonical document', async () => {
+it('renders one synthesized Wiki document in the center for Docs mode', async () => {
   renderWorkspace('/wiki/topics')
 
   expect(await screen.findByRole('navigation', { name: 'Wiki 도구' })).toBeInTheDocument()
-  expect(screen.getByRole('navigation', { name: '지식 탐색' })).toBeInTheDocument()
+  expect(screen.getByRole('navigation', { name: '주제 Library' })).toBeInTheDocument()
   expect(screen.getByRole('region', { name: 'Wiki 탐색' })).toBeInTheDocument()
-  expect(screen.getByRole('article', { name: 'Wiki 문서' })).toBeInTheDocument()
+  expect(screen.getAllByRole('article', { name: 'Wiki 문서' })).toHaveLength(1)
+  expect(screen.getByRole('region', { name: 'Wiki 탐색' })).toContainElement(screen.getByRole('article', { name: 'Wiki 문서' }))
+  expect(screen.queryByRole('button', { name: 'Wiki 문서 접기' })).not.toBeInTheDocument()
   expect(screen.getByRole('button', { name: 'Docs' })).toHaveAttribute('aria-pressed', 'true')
   expect(screen.getByRole('button', { name: 'Graph' })).toHaveAttribute('aria-pressed', 'false')
-  expect(await screen.findByText('최근 빌드')).toBeInTheDocument()
-  expect(screen.getByText('부분 실패')).toBeInTheDocument()
-  expect(screen.getByText('z-ai/glm-4.7-flash')).toBeInTheDocument()
+  expect(screen.queryByText('최근 빌드')).not.toBeInTheDocument()
+})
+
+it('keeps Graph in the center without an empty document side panel', async () => {
+  renderWorkspace('/wiki/topics?view=graph')
+
+  expect(await screen.findByRole('heading', { name: 'Wiki Graph' })).toBeInTheDocument()
+  expect(screen.queryByRole('article', { name: 'Wiki 문서' })).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Wiki 문서 접기' })).not.toBeInTheDocument()
 })
 
 it('parses a Topic return collection without losing selection', () => {

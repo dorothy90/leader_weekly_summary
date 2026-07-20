@@ -246,13 +246,17 @@ export interface WikiEvidence {
   week: string
   subject: string
   source_quote: string
-  source_path: string | null
+  source_path?: string | null
+  mail_html_available?: boolean
+  original_mail_url?: string | null
 }
 
 export interface LotcdWikiView {
   domain: DomainName
-  tech: string
-  lotcd: string
+  tech: string | null
+  lotcd: string | null
+  scope_level: 'domain' | 'tech' | 'lotcd'
+  breadcrumb: string[]
   summary: string
   recent_changes: TopicListItem[]
   active_topics: TopicListItem[]
@@ -261,6 +265,8 @@ export interface LotcdWikiView {
   related_lotcds: string[]
   closed_topics: Record<string, TopicListItem[]>
   activity: WikiEvidence[]
+  direct_activity: WikiEvidence[]
+  rolled_up_activity: WikiEvidence[]
   topic_ids: string[]
 }
 

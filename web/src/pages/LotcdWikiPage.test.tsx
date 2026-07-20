@@ -36,6 +36,8 @@ const lotcdView: LotcdWikiView = {
   domain: 'DRAM',
   tech: 'Spica',
   lotcd: '4SA',
+  scope_level: 'lotcd',
+  breadcrumb: ['DRAM', 'Spica', '4SA'],
   summary: '4SA: 2 Topics',
   recent_changes: [activeTopic],
   active_topics: [activeTopic],
@@ -53,6 +55,8 @@ const lotcdView: LotcdWikiView = {
       subject: '4SA 공정 점검', source_quote: '공정 조건을 점검했다.', source_path: null,
     },
   ],
+  direct_activity: [],
+  rolled_up_activity: [],
   topic_ids: ['T-001', 'T-002'],
 }
 

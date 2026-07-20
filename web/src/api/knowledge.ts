@@ -162,13 +162,16 @@ export const fetchWikiGraph = (signal?: AbortSignal) =>
 
 export const fetchLotcdWiki = (
   domain: DomainName,
-  tech: string,
-  lotcd: string,
+  tech?: string,
+  lotcd?: string,
   signal?: AbortSignal,
-) => getJson<LotcdWikiView>(
-  `/api/knowledge/wiki/lotcd/${encodeURIComponent(domain)}/${encodeURIComponent(tech)}/${encodeURIComponent(lotcd)}`,
-  signal,
-)
+) => {
+  const path = [domain, tech, lotcd]
+    .filter((part): part is string => Boolean(part))
+    .map(encodeURIComponent)
+    .join('/')
+  return getJson<LotcdWikiView>(`/api/knowledge/wiki/lotcd/${path}`, signal)
+}
 
 export const resolveWikiReview = (
   reviewId: string,

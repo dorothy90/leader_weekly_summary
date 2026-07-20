@@ -6,7 +6,7 @@ import { CollectionExplorer } from './CollectionExplorer'
 
 const collection: WikiCollectionState = {
   kind: 'team', path: '/wiki/teams/Spica수율', title: 'Spica수율', summary: '1개 Topic에 기여',
-  status: 'ready', evidence: [], topics: [{
+  status: 'ready', evidence: [], directEvidence: [], rolledUpEvidence: [], breadcrumb: [], scopeLevel: null, topics: [{
     topic_id: 'DEMO-TOPIC-01', title: '4SA chamber A 편차', state: 'investigating',
     importance: 'critical', primary_area: 'yield_defect',
     target_paths: [{ domain: 'DRAM', tech: 'Spica', lotcd: '4SA' }], teams: ['Spica수율'],

@@ -23,12 +23,16 @@ describe('Wiki API', () => {
 
   it('encodes all four Wiki mode routes', async () => {
     await fetchTopic('T/001')
+    await fetchLotcdWiki('DRAM')
+    await fetchLotcdWiki('DRAM', 'Spica X')
     await fetchLotcdWiki('DRAM', 'Spica X', '4SA')
     await fetchTeamWiki('Yield & Quality')
     await fetchWeekWiki('2026-W30')
 
     expect(vi.mocked(fetch).mock.calls.map(([url]) => url)).toEqual([
       '/api/knowledge/wiki/topics/T%2F001',
+      '/api/knowledge/wiki/lotcd/DRAM',
+      '/api/knowledge/wiki/lotcd/DRAM/Spica%20X',
       '/api/knowledge/wiki/lotcd/DRAM/Spica%20X/4SA',
       '/api/knowledge/wiki/teams/Yield%20%26%20Quality',
       '/api/knowledge/wiki/weeks/2026-W30',

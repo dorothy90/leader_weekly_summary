@@ -16,11 +16,16 @@ export interface WikiCollectionState {
   summary: string
   topics: TopicListItem[]
   evidence: WikiEvidence[]
+  directEvidence: WikiEvidence[]
+  rolledUpEvidence: WikiEvidence[]
+  breadcrumb: string[]
+  scopeLevel: 'domain' | 'tech' | 'lotcd' | null
   status: 'loading' | 'ready' | 'error'
 }
 
 const EMPTY_COLLECTION: WikiCollectionState = {
-  kind: 'topics', path: '/wiki/topics', title: '전체 주제', summary: '', topics: [], evidence: [], status: 'loading',
+  kind: 'topics', path: '/wiki/topics', title: '전체 주제', summary: '', topics: [], evidence: [],
+  directEvidence: [], rolledUpEvidence: [], breadcrumb: [], scopeLevel: null, status: 'loading',
 }
 
 function uniqueTopics(values: TopicListItem[]): TopicListItem[] {
@@ -44,21 +49,26 @@ export function useWikiCollection(collectionPath: string): WikiCollectionState {
     setState({ ...EMPTY_COLLECTION, kind, path: collectionPath })
 
     async function load(): Promise<WikiCollectionState> {
-      if (kind === 'lotcd' && parts.length >= 5) {
-        const view = await fetchLotcdWiki(parts[2] as 'DRAM' | 'NAND', parts[3], parts[4], controller.signal)
+      if (kind === 'lotcd' && parts.length >= 3) {
+        const view = await fetchLotcdWiki(
+          parts[2] as 'DRAM' | 'NAND', parts[3], parts[4], controller.signal,
+        )
         const grouped = Object.values(view.knowledge_areas).flat()
         const closed = Object.values(view.closed_topics).flat()
         return {
-          kind, path: collectionPath, title: `${view.lotcd} Wiki`, summary: view.summary,
+          kind, path: collectionPath, title: `${view.lotcd ?? view.tech ?? view.domain} Wiki`, summary: view.summary,
           topics: uniqueTopics([...view.recent_changes, ...view.active_topics, ...grouped, ...closed]),
-          evidence: view.activity, status: 'ready',
+          evidence: view.activity, directEvidence: view.direct_activity,
+          rolledUpEvidence: view.rolled_up_activity, breadcrumb: view.breadcrumb,
+          scopeLevel: view.scope_level, status: 'ready',
         }
       }
       if (kind === 'team' && parts.length >= 3) {
         const view = await fetchTeamWiki(parts[2], controller.signal)
         return {
           kind, path: collectionPath, title: view.team, summary: `${view.topics.length}개 Topic에 기여`,
-          topics: view.topics, evidence: view.recent_activity, status: 'ready',
+          topics: view.topics, evidence: view.recent_activity, directEvidence: view.recent_activity,
+          rolledUpEvidence: [], breadcrumb: [view.team], scopeLevel: null, status: 'ready',
         }
       }
       if (kind === 'week' && parts.length >= 3) {
@@ -73,7 +83,8 @@ export function useWikiCollection(collectionPath: string): WikiCollectionState {
         return {
           kind, path: collectionPath, title: `${view.week} Wiki`,
           summary: `신규 ${view.new_topic_ids.length} · 변경 ${view.changed_topic_ids.length} · 검토 ${view.pending_assignment_count}`,
-          topics: topics.filter((topic) => ids.has(topic.topic_id)), evidence: [], status: 'ready',
+          topics: topics.filter((topic) => ids.has(topic.topic_id)), evidence: [], directEvidence: [],
+          rolledUpEvidence: [], breadcrumb: [view.week], scopeLevel: null, status: 'ready',
         }
       }
       const filters = {
@@ -87,7 +98,8 @@ export function useWikiCollection(collectionPath: string): WikiCollectionState {
       const title = kind === 'lotcd' ? 'LOTCD를 선택하세요'
         : kind === 'team' ? '팀을 선택하세요'
           : kind === 'week' ? '주차를 선택하세요' : '전체 주제'
-      return { kind, path: collectionPath, title, summary: `${topics.length}개 canonical Topic`, topics, evidence: [], status: 'ready' }
+      return { kind, path: collectionPath, title, summary: `${topics.length}개 canonical Topic`, topics, evidence: [],
+        directEvidence: [], rolledUpEvidence: [], breadcrumb: [], scopeLevel: null, status: 'ready' }
     }
 
     load().then(setState).catch((error: unknown) => {

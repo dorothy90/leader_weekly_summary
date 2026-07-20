@@ -51,6 +51,7 @@ const topic: TopicListItem = {
 }
 const lotcdView: LotcdWikiView = {
   domain: 'DRAM', tech: 'Spica', lotcd: '4SA', summary: '4SA: 1 Topic',
+  scope_level: 'lotcd', breadcrumb: ['DRAM', 'Spica', '4SA'], direct_activity: [], rolled_up_activity: [],
   recent_changes: [topic], active_topics: [], knowledge_areas: {},
   actions_and_decisions: [], related_lotcds: [], closed_topics: {}, activity: [], topic_ids: ['T-001'],
 }

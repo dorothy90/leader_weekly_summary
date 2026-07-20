@@ -3,7 +3,6 @@ import { useLocation, useNavigate } from 'react-router-dom'
 
 import { fetchWikiReviews } from '../api/knowledge'
 import { KnowledgeTree } from '../components/wiki/KnowledgeTree'
-import { CollectionExplorer } from '../components/wiki/CollectionExplorer'
 import { ResizablePane } from '../components/wiki/ResizablePane'
 import { WikiDocumentPane } from '../components/wiki/WikiDocumentPane'
 import { WikiUtilityRail } from '../components/wiki/WikiUtilityRail'
@@ -70,7 +69,7 @@ export function WikiWorkspacePage() {
     <div className="wiki-workspace">
       <WikiUtilityRail view={wikiLocation.view} treeMode={treeMode} reviewCount={reviewCount} onViewChange={changeView} onTreeModeChange={setTreeMode} />
       <ResizablePane side="left" width={layout.treeWidth} min={190} max={360} collapsed={layout.treeCollapsed} onWidthChange={(treeWidth) => setLayout((current) => ({ ...current, treeWidth }))}>
-        <KnowledgeTree activePath={wikiLocation.collectionPath} mode={treeMode} onModeChange={setTreeMode} collapsed={layout.treeCollapsed} onCollapse={() => setLayout((current) => ({ ...current, treeCollapsed: !current.treeCollapsed }))} />
+        <KnowledgeTree activePath={wikiLocation.collectionPath} kind={wikiLocation.kind} collapsed={layout.treeCollapsed} onCollapse={() => setLayout((current) => ({ ...current, treeCollapsed: !current.treeCollapsed }))} />
       </ResizablePane>
       <section className="wiki-explorer" aria-label="Wiki 탐색">
         <header className="wiki-explorer__toolbar">
@@ -80,18 +79,18 @@ export function WikiWorkspacePage() {
             <button type="button" aria-pressed={wikiLocation.view === 'graph'} onClick={() => changeView('graph')}>Graph</button>
           </div>
         </header>
-        {wikiLocation.view === 'docs' ? <div className="wiki-explorer__body">
-          <CollectionExplorer collection={collection} selectedTopicId={wikiLocation.topicId} onSelectTopic={selectTopic} />
+        {wikiLocation.view === 'docs' ? <div className="wiki-explorer__body wiki-explorer__body--document">
+          <WikiDocumentPane topicId={wikiLocation.topicId} collection={collection} onSelectTopic={selectTopic} />
         </div> : <Suspense fallback={<div className="wiki-graph-placeholder" role="status">관계 그래프를 불러오는 중입니다.</div>}>
           <WikiGraph scopeIds={graphScopeIds} selectedTopicId={wikiLocation.topicId} onSelectTopic={selectTopic} />
         </Suspense>}
       </section>
-      <ResizablePane side="right" width={layout.documentWidth} min={320} max={720} collapsed={layout.documentCollapsed} onWidthChange={(documentWidth) => setLayout((current) => ({ ...current, documentWidth }))}>
+      {wikiLocation.view === 'graph' && wikiLocation.topicId ? <ResizablePane side="right" width={layout.documentWidth} min={320} max={720} collapsed={layout.documentCollapsed} onWidthChange={(documentWidth) => setLayout((current) => ({ ...current, documentWidth }))}>
         <div className="wiki-document-pane">
           <header><button type="button" onClick={() => setLayout((current) => ({ ...current, documentCollapsed: !current.documentCollapsed }))} aria-label={layout.documentCollapsed ? 'Wiki 문서 열기' : 'Wiki 문서 접기'}>{layout.documentCollapsed ? '‹' : '›'}</button></header>
           {layout.documentCollapsed ? null : <WikiDocumentPane topicId={wikiLocation.topicId} collection={collection} onSelectTopic={selectTopic} />}
         </div>
-      </ResizablePane>
+      </ResizablePane> : null}
     </div>
   )
 }
