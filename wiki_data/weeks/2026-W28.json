@@ -1,0 +1,26 @@
+{
+  "week": "2026-W28",
+  "revision_id": "DEMO-WEEK-REV-28",
+  "published_at": "2026-07-20T03:00:00Z",
+  "build_run_id": "DEMO-BUILD-28",
+  "new_topic_ids": [
+    "DEMO-TOPIC-01",
+    "DEMO-TOPIC-02",
+    "DEMO-TOPIC-03",
+    "DEMO-TOPIC-04"
+  ],
+  "changed_topic_ids": [],
+  "resolved_topic_ids": [],
+  "reopened_topic_ids": [],
+  "actions_and_decisions": [],
+  "new_relation_ids": [],
+  "relation_review_events": [],
+  "pending_assignment_count": 0,
+  "contradictions": [],
+  "teams": [
+    "DRAM수율전략",
+    "NAND품질PTE",
+    "Spica수율",
+    "공정기술PTE"
+  ]
+}

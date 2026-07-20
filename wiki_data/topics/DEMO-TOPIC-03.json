@@ -1,0 +1,34 @@
+{
+  "topic_id": "DEMO-TOPIC-03",
+  "title": "Spica Edge defect 세정 recipe",
+  "topic_kind": "observation",
+  "primary_area": "experiment_validation",
+  "secondary_areas": [],
+  "state": "monitoring",
+  "importance": "high",
+  "first_seen_week": "2026-W28",
+  "last_updated_week": "2026-W28",
+  "target_paths": [
+    {
+      "domain": "DRAM",
+      "tech": "Spica",
+      "lotcd": "4SA"
+    },
+    {
+      "domain": "DRAM",
+      "tech": "Spica",
+      "lotcd": "6SA"
+    }
+  ],
+  "teams": [
+    "Spica수율",
+    "DRAM수율전략"
+  ],
+  "source_agenda_ids": [
+    "DEMO-AGENDA-03"
+  ],
+  "related_topic_ids": [
+    "DEMO-TOPIC-01"
+  ],
+  "current_revision_id": "DEMO-REV-03"
+}

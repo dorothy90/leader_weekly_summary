@@ -1,0 +1,29 @@
+{
+  "topic_id": "DEMO-TOPIC-08",
+  "title": "6H1 조건 최적화 split",
+  "topic_kind": "issue",
+  "primary_area": "experiment_validation",
+  "secondary_areas": [],
+  "state": "action_in_progress",
+  "importance": "high",
+  "first_seen_week": "2026-W29",
+  "last_updated_week": "2026-W29",
+  "target_paths": [
+    {
+      "domain": "NAND",
+      "tech": "Heraion",
+      "lotcd": "6H1"
+    }
+  ],
+  "teams": [
+    "Heraion양산수율"
+  ],
+  "source_agenda_ids": [
+    "DEMO-AGENDA-08"
+  ],
+  "related_topic_ids": [
+    "DEMO-TOPIC-07",
+    "DEMO-TOPIC-09"
+  ],
+  "current_revision_id": "DEMO-REV-08"
+}

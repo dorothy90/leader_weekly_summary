@@ -1,0 +1,19 @@
+{
+  "relation_id": "DEMO-REL-09",
+  "source_topic_id": "DEMO-TOPIC-03",
+  "target_topic_id": "DEMO-TOPIC-05",
+  "kind": "shares_condition",
+  "agenda_ids": [
+    "DEMO-AGENDA-03",
+    "DEMO-AGENDA-05"
+  ],
+  "confidence": 0.58,
+  "review_state": "pending",
+  "creation_source": "migration",
+  "created_by": "demo-seed",
+  "created_at": "2026-07-20T03:00:00Z",
+  "created_build_run_id": "DEMO-BUILD-30",
+  "creation_week": "2026-W30",
+  "reviewed_by": null,
+  "reviewed_at": null
+}

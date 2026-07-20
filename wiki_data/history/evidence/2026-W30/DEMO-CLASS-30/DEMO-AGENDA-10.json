@@ -1,0 +1,32 @@
+{
+  "evidence_ref": "2026-W30/DEMO-CLASS-30/DEMO-AGENDA-10",
+  "week": "2026-W30",
+  "classification_run_id": "DEMO-CLASS-30",
+  "item": {
+    "agenda_id": "DEMO-AGENDA-10",
+    "mail_id": "dummy_mail_010",
+    "summary": "DRAM/NAND 공통 검사 중지 계획",
+    "source_quote": "DRAM과 NAND 공통으로 검사 장비 calibration을 실시합니다. DRAM 4SA는 화요일, NAND 4H1은 수요일에 작업합니다. 작업 시간에는 해당 LOT 투입을 중지해 주세요.",
+    "classification_context": "DRAM과 NAND 공통으로 검사 장비 calibration을 실시합니다. DRAM 4SA는 화요일, NAND 4H1은 수요일에 작업합니다. 작업 시간에는 해당 LOT 투입을 중지해 주세요.",
+    "item_kind": "lotcd_specific",
+    "decision": {
+      "status": "confirmed",
+      "target_path": {
+        "domain": "DRAM",
+        "tech": "Spica",
+        "lotcd": "4SA"
+      },
+      "matches": [],
+      "diagnostics": [],
+      "confidence": 0.96
+    },
+    "revision_count": 0,
+    "team": "공정기술PTE",
+    "subject": "DRAM/NAND 공통 장비 점검 공지",
+    "received_at": "2026-07-10T13:10:00+09:00",
+    "source_path": "fixtures/knowledge/mails.json#dummy_mail_010",
+    "topic_hint": "DRAM/NAND 공통 검사 중지 계획",
+    "state_hint": "monitoring"
+  },
+  "archived_at": "2026-07-20T03:00:00Z"
+}

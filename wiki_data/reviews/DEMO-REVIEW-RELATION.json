@@ -1,0 +1,17 @@
+{
+  "review_id": "DEMO-REVIEW-RELATION",
+  "kind": "relation",
+  "agenda_id": null,
+  "candidates": [],
+  "relation_id": "DEMO-REL-09",
+  "relation_kind": "shares_condition",
+  "relation_agenda_ids": [
+    "DEMO-AGENDA-03",
+    "DEMO-AGENDA-05"
+  ],
+  "rationale": "세정 조건과 Test fail의 직접 관계를 검토해야 한다.",
+  "status": "pending",
+  "resolved_by": null,
+  "resolved_at": null,
+  "resolution_action": null
+}

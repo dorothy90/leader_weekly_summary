@@ -1,0 +1,28 @@
+{
+  "topic_id": "DEMO-TOPIC-06",
+  "title": "Canopus 6SS 관리 범위 회복",
+  "topic_kind": "observation",
+  "primary_area": "yield_defect",
+  "secondary_areas": [],
+  "state": "resolved",
+  "importance": "medium",
+  "first_seen_week": "2026-W29",
+  "last_updated_week": "2026-W29",
+  "target_paths": [
+    {
+      "domain": "DRAM",
+      "tech": "Canopus",
+      "lotcd": "6SS"
+    }
+  ],
+  "teams": [
+    "DRAM수율전략"
+  ],
+  "source_agenda_ids": [
+    "DEMO-AGENDA-06"
+  ],
+  "related_topic_ids": [
+    "DEMO-TOPIC-05"
+  ],
+  "current_revision_id": "DEMO-REV-06"
+}

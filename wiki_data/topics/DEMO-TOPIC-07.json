@@ -1,0 +1,30 @@
+{
+  "topic_id": "DEMO-TOPIC-07",
+  "title": "Heraion channel hole 편차",
+  "topic_kind": "issue",
+  "primary_area": "yield_defect",
+  "secondary_areas": [],
+  "state": "investigating",
+  "importance": "critical",
+  "first_seen_week": "2026-W29",
+  "last_updated_week": "2026-W29",
+  "target_paths": [
+    {
+      "domain": "NAND",
+      "tech": "Heraion",
+      "lotcd": "4H1"
+    }
+  ],
+  "teams": [
+    "Heraion양산수율",
+    "공정기술PTE"
+  ],
+  "source_agenda_ids": [
+    "DEMO-AGENDA-07"
+  ],
+  "related_topic_ids": [
+    "DEMO-TOPIC-04",
+    "DEMO-TOPIC-08"
+  ],
+  "current_revision_id": "DEMO-REV-07"
+}

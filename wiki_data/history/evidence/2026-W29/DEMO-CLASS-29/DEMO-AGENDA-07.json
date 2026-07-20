@@ -1,0 +1,32 @@
+{
+  "evidence_ref": "2026-W29/DEMO-CLASS-29/DEMO-AGENDA-07",
+  "week": "2026-W29",
+  "classification_run_id": "DEMO-CLASS-29",
+  "item": {
+    "agenda_id": "DEMO-AGENDA-07",
+    "mail_id": "dummy_mail_007",
+    "summary": "Heraion channel hole 편차",
+    "source_quote": "Heraion 전체 수율은 93.7%입니다. 4H1은 channel hole 편차 영향으로 0.9%p 하락했습니다. 6H1은 조건 최적화 split을 시작했습니다.",
+    "classification_context": "Heraion 전체 수율은 93.7%입니다. 4H1은 channel hole 편차 영향으로 0.9%p 하락했습니다. 6H1은 조건 최적화 split을 시작했습니다.",
+    "item_kind": "lotcd_specific",
+    "decision": {
+      "status": "confirmed",
+      "target_path": {
+        "domain": "NAND",
+        "tech": "Heraion",
+        "lotcd": "4H1"
+      },
+      "matches": [],
+      "diagnostics": [],
+      "confidence": 0.96
+    },
+    "revision_count": 0,
+    "team": "Heraion양산수율",
+    "subject": "Heraion 4H1/6H1 수율 현황",
+    "received_at": "2026-07-09T08:55:00+09:00",
+    "source_path": "fixtures/knowledge/mails.json#dummy_mail_007",
+    "topic_hint": "Heraion channel hole 편차",
+    "state_hint": "investigating"
+  },
+  "archived_at": "2026-07-20T03:00:00Z"
+}

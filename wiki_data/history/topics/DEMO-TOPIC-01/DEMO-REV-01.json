@@ -1,0 +1,45 @@
+{
+  "revision_id": "DEMO-REV-01",
+  "topic_id": "DEMO-TOPIC-01",
+  "week": "2026-W28",
+  "body_markdown": "# 4SA chamber A 편차와 수율 하락\n\n4SA chamber A 편차와 수율 하락은 2026-W28 주간보고에서 확인됐다. 현재 상태는 investigating이며 관련 팀이 후속 확인 중이다. [agenda:DEMO-AGENDA-01]",
+  "sections": [
+    {
+      "key": "current_state",
+      "title": "현재 상태",
+      "body": "4SA chamber A 편차와 수율 하락은 2026-W28 주간보고에서 확인됐다. 현재 상태는 investigating이며 관련 팀이 후속 확인 중이다. [agenda:DEMO-AGENDA-01]"
+    }
+  ],
+  "claims": [
+    {
+      "text": "4SA chamber A 편차와 수율 하락 상태가 보고됐다.",
+      "agenda_ids": [
+        "DEMO-AGENDA-01"
+      ]
+    }
+  ],
+  "source_agenda_ids": [
+    "DEMO-AGENDA-01"
+  ],
+  "evidence_refs": [
+    "2026-W28/DEMO-CLASS-28/DEMO-AGENDA-01"
+  ],
+  "previous_state": null,
+  "new_state": "investigating",
+  "added_agenda_ids": [
+    "DEMO-AGENDA-01"
+  ],
+  "added_claims": [],
+  "removed_claims": [],
+  "changed_claims": [],
+  "relation_changes": [],
+  "build_run_id": "DEMO-BUILD-28",
+  "prompt_version": "demo-v1",
+  "builder_version": "demo-v1",
+  "summary": "4SA chamber A 편차와 수율 하락",
+  "validation_results": [
+    "deterministic-demo"
+  ],
+  "created_at": "2026-07-20T03:00:00Z",
+  "model": "z-ai/glm-4.7-flash"
+}

@@ -1,0 +1,10 @@
+{
+  "agenda_id": "DEMO-AGENDA-12",
+  "topic_id": "DEMO-TOPIC-12",
+  "decision": "create",
+  "confidence": 0.96,
+  "rationale": "deterministic demo assignment",
+  "decision_source": "auto",
+  "decided_by": "demo-seed",
+  "decided_at": "2026-07-20T03:00:00Z"
+}

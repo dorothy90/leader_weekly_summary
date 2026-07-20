@@ -1,0 +1,29 @@
+{
+  "topic_id": "DEMO-TOPIC-05",
+  "title": "Canopus 4SS Test fail 증가",
+  "topic_kind": "issue",
+  "primary_area": "quality_analysis",
+  "secondary_areas": [],
+  "state": "reopened",
+  "importance": "high",
+  "first_seen_week": "2026-W29",
+  "last_updated_week": "2026-W29",
+  "target_paths": [
+    {
+      "domain": "DRAM",
+      "tech": "Canopus",
+      "lotcd": "4SS"
+    }
+  ],
+  "teams": [
+    "DRAM수율전략",
+    "분석FA"
+  ],
+  "source_agenda_ids": [
+    "DEMO-AGENDA-05"
+  ],
+  "related_topic_ids": [
+    "DEMO-TOPIC-06"
+  ],
+  "current_revision_id": "DEMO-REV-05"
+}

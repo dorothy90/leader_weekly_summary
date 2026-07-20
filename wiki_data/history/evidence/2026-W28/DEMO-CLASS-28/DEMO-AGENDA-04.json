@@ -1,0 +1,32 @@
+{
+  "evidence_ref": "2026-W28/DEMO-CLASS-28/DEMO-AGENDA-04",
+  "week": "2026-W28",
+  "classification_run_id": "DEMO-CLASS-28",
+  "item": {
+    "agenda_id": "DEMO-AGENDA-04",
+    "mail_id": "dummy_mail_004",
+    "summary": "검사 장비 calibration 영향",
+    "source_quote": "Canopus DDR5 16G 제품군 수율 편차가 확대됐습니다. 4SS는 Test fail 증가로 94.8%를 기록했습니다. 6SS는 96.1%로 관리 범위 내입니다.",
+    "classification_context": "Canopus DDR5 16G 제품군 수율 편차가 확대됐습니다. 4SS는 Test fail 증가로 94.8%를 기록했습니다. 6SS는 96.1%로 관리 범위 내입니다.",
+    "item_kind": "lotcd_specific",
+    "decision": {
+      "status": "confirmed",
+      "target_path": {
+        "domain": "DRAM",
+        "tech": "Spica",
+        "lotcd": "4SA"
+      },
+      "matches": [],
+      "diagnostics": [],
+      "confidence": 0.96
+    },
+    "revision_count": 0,
+    "team": "공정기술PTE",
+    "subject": "Canopus DDR5 16G 수율 점검",
+    "received_at": "2026-07-07T11:15:00+09:00",
+    "source_path": "fixtures/knowledge/mails.json#dummy_mail_004",
+    "topic_hint": "검사 장비 calibration 영향",
+    "state_hint": "monitoring"
+  },
+  "archived_at": "2026-07-20T03:00:00Z"
+}

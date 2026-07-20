@@ -1,0 +1,22 @@
+{
+  "review_id": "DEMO-REVIEW-ASSIGNMENT",
+  "kind": "assignment",
+  "agenda_id": "DEMO-AGENDA-12",
+  "candidates": [
+    {
+      "topic_id": "DEMO-TOPIC-12",
+      "score": 0.61,
+      "rank_reasons": [
+        "저온 fail 키워드"
+      ]
+    }
+  ],
+  "relation_id": null,
+  "relation_kind": null,
+  "relation_agenda_ids": [],
+  "rationale": "Lucy 저온 fail의 기존 Topic 배정을 확인해야 한다.",
+  "status": "pending",
+  "resolved_by": null,
+  "resolved_at": null,
+  "resolution_action": null
+}

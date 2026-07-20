@@ -1,0 +1,32 @@
+{
+  "evidence_ref": "2026-W30/DEMO-CLASS-30/DEMO-AGENDA-09",
+  "week": "2026-W30",
+  "classification_run_id": "DEMO-CLASS-30",
+  "item": {
+    "agenda_id": "DEMO-AGENDA-09",
+    "mail_id": "dummy_mail_009",
+    "summary": "Colosseum word line 저항 상관성",
+    "source_quote": "Petra 전체 reliability 검증은 계획대로 진행 중입니다. 4P1 read 성능은 목표 대비 3% 우수했습니다. 6P1 endurance 결과는 다음 주 공유 예정입니다.",
+    "classification_context": "Petra 전체 reliability 검증은 계획대로 진행 중입니다. 4P1 read 성능은 목표 대비 3% 우수했습니다. 6P1 endurance 결과는 다음 주 공유 예정입니다.",
+    "item_kind": "lotcd_specific",
+    "decision": {
+      "status": "confirmed",
+      "target_path": {
+        "domain": "NAND",
+        "tech": "Colosseum",
+        "lotcd": "4C1"
+      },
+      "matches": [],
+      "diagnostics": [],
+      "confidence": 0.96
+    },
+    "revision_count": 0,
+    "team": "NAND FA PTE",
+    "subject": "Petra performance 제품 검증 결과",
+    "received_at": "2026-07-10T09:25:00+09:00",
+    "source_path": "fixtures/knowledge/mails.json#dummy_mail_009",
+    "topic_hint": "Colosseum word line 저항 상관성",
+    "state_hint": "investigating"
+  },
+  "archived_at": "2026-07-20T03:00:00Z"
+}

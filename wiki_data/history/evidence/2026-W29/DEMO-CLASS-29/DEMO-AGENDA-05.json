@@ -1,0 +1,32 @@
+{
+  "evidence_ref": "2026-W29/DEMO-CLASS-29/DEMO-AGENDA-05",
+  "week": "2026-W29",
+  "classification_run_id": "DEMO-CLASS-29",
+  "item": {
+    "agenda_id": "DEMO-AGENDA-05",
+    "mail_id": "dummy_mail_005",
+    "summary": "Canopus 4SS Test fail 증가",
+    "source_quote": "Lucy 전체의 retention margin 재평가가 필요합니다. 6E2는 저온 조건 fail이 18건 발생했습니다. Procyon은 신규 mask 검증을 완료했습니다. 6EN 양산 반영 여부는 금요일 회의에서 결정합니다.",
+    "classification_context": "Lucy 전체의 retention margin 재평가가 필요합니다. 6E2는 저온 조건 fail이 18건 발생했습니다. Procyon은 신규 mask 검증을 완료했습니다. 6EN 양산 반영 여부는 금요일 회의에서 결정합니다.",
+    "item_kind": "lotcd_specific",
+    "decision": {
+      "status": "confirmed",
+      "target_path": {
+        "domain": "DRAM",
+        "tech": "Canopus",
+        "lotcd": "4SS"
+      },
+      "matches": [],
+      "diagnostics": [],
+      "confidence": 0.96
+    },
+    "revision_count": 0,
+    "team": "DRAM수율전략",
+    "subject": "Lucy 및 Procyon 주요 이슈",
+    "received_at": "2026-07-08T09:05:00+09:00",
+    "source_path": "fixtures/knowledge/mails.json#dummy_mail_005",
+    "topic_hint": "Canopus 4SS Test fail 증가",
+    "state_hint": "reopened"
+  },
+  "archived_at": "2026-07-20T03:00:00Z"
+}

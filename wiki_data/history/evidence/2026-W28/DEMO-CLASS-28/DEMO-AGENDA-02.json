@@ -1,0 +1,32 @@
+{
+  "evidence_ref": "2026-W28/DEMO-CLASS-28/DEMO-AGENDA-02",
+  "week": "2026-W28",
+  "classification_run_id": "DEMO-CLASS-28",
+  "item": {
+    "agenda_id": "DEMO-AGENDA-02",
+    "mail_id": "dummy_mail_002",
+    "summary": "4SA 장비 조건 원복 검증",
+    "source_quote": "Spica 전체 수율은 전주 수준을 유지했습니다. 4SA는 장비 조건 변경 이후 수율이 1.2%p 하락해 원인 분석 중입니다. 6SA는 세정 조건 원복 후 96.4%로 정상화됐습니다.",
+    "classification_context": "Spica 전체 수율은 전주 수준을 유지했습니다. 4SA는 장비 조건 변경 이후 수율이 1.2%p 하락해 원인 분석 중입니다. 6SA는 세정 조건 원복 후 96.4%로 정상화됐습니다.",
+    "item_kind": "lotcd_specific",
+    "decision": {
+      "status": "confirmed",
+      "target_path": {
+        "domain": "DRAM",
+        "tech": "Spica",
+        "lotcd": "4SA"
+      },
+      "matches": [],
+      "diagnostics": [],
+      "confidence": 0.96
+    },
+    "revision_count": 0,
+    "team": "공정기술PTE",
+    "subject": "[Spica] 4SA/6SA 주간 수율 현황",
+    "received_at": "2026-07-06T10:20:00+09:00",
+    "source_path": "fixtures/knowledge/mails.json#dummy_mail_002",
+    "topic_hint": "4SA 장비 조건 원복 검증",
+    "state_hint": "action_in_progress"
+  },
+  "archived_at": "2026-07-20T03:00:00Z"
+}

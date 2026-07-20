@@ -1,0 +1,26 @@
+{
+  "topic_id": "DEMO-TOPIC-12",
+  "title": "Lucy 6E2 저온 retention fail",
+  "topic_kind": "issue",
+  "primary_area": "quality_analysis",
+  "secondary_areas": [],
+  "state": "review_required",
+  "importance": "high",
+  "first_seen_week": "2026-W30",
+  "last_updated_week": "2026-W30",
+  "target_paths": [
+    {
+      "domain": "DRAM",
+      "tech": "Lucy",
+      "lotcd": "6E2"
+    }
+  ],
+  "teams": [
+    "DRAM SRT 개발공정"
+  ],
+  "source_agenda_ids": [
+    "DEMO-AGENDA-12"
+  ],
+  "related_topic_ids": [],
+  "current_revision_id": "DEMO-REV-12"
+}

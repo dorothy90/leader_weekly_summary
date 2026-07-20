@@ -1,0 +1,45 @@
+{
+  "revision_id": "DEMO-REV-07",
+  "topic_id": "DEMO-TOPIC-07",
+  "week": "2026-W29",
+  "body_markdown": "# Heraion channel hole 편차\n\nHeraion channel hole 편차은 2026-W29 주간보고에서 확인됐다. 현재 상태는 investigating이며 관련 팀이 후속 확인 중이다. [agenda:DEMO-AGENDA-07]",
+  "sections": [
+    {
+      "key": "current_state",
+      "title": "원인과 영향",
+      "body": "Heraion channel hole 편차은 2026-W29 주간보고에서 확인됐다. 현재 상태는 investigating이며 관련 팀이 후속 확인 중이다. [agenda:DEMO-AGENDA-07]"
+    }
+  ],
+  "claims": [
+    {
+      "text": "Heraion channel hole 편차 상태가 보고됐다.",
+      "agenda_ids": [
+        "DEMO-AGENDA-07"
+      ]
+    }
+  ],
+  "source_agenda_ids": [
+    "DEMO-AGENDA-07"
+  ],
+  "evidence_refs": [
+    "2026-W29/DEMO-CLASS-29/DEMO-AGENDA-07"
+  ],
+  "previous_state": null,
+  "new_state": "investigating",
+  "added_agenda_ids": [
+    "DEMO-AGENDA-07"
+  ],
+  "added_claims": [],
+  "removed_claims": [],
+  "changed_claims": [],
+  "relation_changes": [],
+  "build_run_id": "DEMO-BUILD-29",
+  "prompt_version": "demo-v1",
+  "builder_version": "demo-v1",
+  "summary": "Heraion channel hole 편차",
+  "validation_results": [
+    "deterministic-demo"
+  ],
+  "created_at": "2026-07-20T03:00:00Z",
+  "model": "z-ai/glm-4.7-flash"
+}

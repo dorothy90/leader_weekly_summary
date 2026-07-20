@@ -1,0 +1,30 @@
+{
+  "topic_id": "DEMO-TOPIC-01",
+  "title": "4SA chamber A 편차와 수율 하락",
+  "topic_kind": "issue",
+  "primary_area": "yield_defect",
+  "secondary_areas": [],
+  "state": "investigating",
+  "importance": "critical",
+  "first_seen_week": "2026-W28",
+  "last_updated_week": "2026-W28",
+  "target_paths": [
+    {
+      "domain": "DRAM",
+      "tech": "Spica",
+      "lotcd": "4SA"
+    }
+  ],
+  "teams": [
+    "Spica수율",
+    "공정기술PTE"
+  ],
+  "source_agenda_ids": [
+    "DEMO-AGENDA-01"
+  ],
+  "related_topic_ids": [
+    "DEMO-TOPIC-02",
+    "DEMO-TOPIC-03"
+  ],
+  "current_revision_id": "DEMO-REV-01"
+}

@@ -1,0 +1,35 @@
+{
+  "topic_id": "DEMO-TOPIC-10",
+  "title": "DRAM/NAND 공통 검사 중지 계획",
+  "topic_kind": "observation",
+  "primary_area": "schedule_delivery",
+  "secondary_areas": [],
+  "state": "monitoring",
+  "importance": "medium",
+  "first_seen_week": "2026-W30",
+  "last_updated_week": "2026-W30",
+  "target_paths": [
+    {
+      "domain": "DRAM",
+      "tech": "Spica",
+      "lotcd": "4SA"
+    },
+    {
+      "domain": "NAND",
+      "tech": "Heraion",
+      "lotcd": "4H1"
+    }
+  ],
+  "teams": [
+    "공정기술PTE",
+    "DRAM수율전략",
+    "Heraion양산수율"
+  ],
+  "source_agenda_ids": [
+    "DEMO-AGENDA-10"
+  ],
+  "related_topic_ids": [
+    "DEMO-TOPIC-11"
+  ],
+  "current_revision_id": "DEMO-REV-10"
+}

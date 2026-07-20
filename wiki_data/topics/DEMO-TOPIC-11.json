@@ -1,0 +1,28 @@
+{
+  "topic_id": "DEMO-TOPIC-11",
+  "title": "Petra 4P1 read 성능 검증",
+  "topic_kind": "observation",
+  "primary_area": "experiment_validation",
+  "secondary_areas": [],
+  "state": "monitoring",
+  "importance": "medium",
+  "first_seen_week": "2026-W30",
+  "last_updated_week": "2026-W30",
+  "target_paths": [
+    {
+      "domain": "NAND",
+      "tech": "Petra",
+      "lotcd": "4P1"
+    }
+  ],
+  "teams": [
+    "NAND품질PTE"
+  ],
+  "source_agenda_ids": [
+    "DEMO-AGENDA-11"
+  ],
+  "related_topic_ids": [
+    "DEMO-TOPIC-10"
+  ],
+  "current_revision_id": "DEMO-REV-11"
+}

@@ -1,0 +1,45 @@
+{
+  "revision_id": "DEMO-REV-12",
+  "topic_id": "DEMO-TOPIC-12",
+  "week": "2026-W30",
+  "body_markdown": "# Lucy 6E2 저온 retention fail\n\nLucy 6E2 저온 retention fail은 2026-W30 주간보고에서 확인됐다. 현재 상태는 review_required이며 관련 팀이 후속 확인 중이다. [agenda:DEMO-AGENDA-12]",
+  "sections": [
+    {
+      "key": "current_state",
+      "title": "열린 질문",
+      "body": "Lucy 6E2 저온 retention fail은 2026-W30 주간보고에서 확인됐다. 현재 상태는 review_required이며 관련 팀이 후속 확인 중이다. [agenda:DEMO-AGENDA-12]"
+    }
+  ],
+  "claims": [
+    {
+      "text": "Lucy 6E2 저온 retention fail 상태가 보고됐다.",
+      "agenda_ids": [
+        "DEMO-AGENDA-12"
+      ]
+    }
+  ],
+  "source_agenda_ids": [
+    "DEMO-AGENDA-12"
+  ],
+  "evidence_refs": [
+    "2026-W30/DEMO-CLASS-30/DEMO-AGENDA-12"
+  ],
+  "previous_state": null,
+  "new_state": "review_required",
+  "added_agenda_ids": [
+    "DEMO-AGENDA-12"
+  ],
+  "added_claims": [],
+  "removed_claims": [],
+  "changed_claims": [],
+  "relation_changes": [],
+  "build_run_id": "DEMO-BUILD-30",
+  "prompt_version": "demo-v1",
+  "builder_version": "demo-v1",
+  "summary": "Lucy 6E2 저온 retention fail",
+  "validation_results": [
+    "deterministic-demo"
+  ],
+  "created_at": "2026-07-20T03:00:00Z",
+  "model": "z-ai/glm-4.7-flash"
+}

@@ -1,0 +1,34 @@
+{
+  "topic_id": "DEMO-TOPIC-09",
+  "title": "Colosseum word line 저항 상관성",
+  "topic_kind": "issue",
+  "primary_area": "quality_analysis",
+  "secondary_areas": [],
+  "state": "investigating",
+  "importance": "high",
+  "first_seen_week": "2026-W30",
+  "last_updated_week": "2026-W30",
+  "target_paths": [
+    {
+      "domain": "NAND",
+      "tech": "Colosseum",
+      "lotcd": "4C1"
+    },
+    {
+      "domain": "NAND",
+      "tech": "Colosseum",
+      "lotcd": "6C1"
+    }
+  ],
+  "teams": [
+    "NAND FA PTE",
+    "NAND품질PTE"
+  ],
+  "source_agenda_ids": [
+    "DEMO-AGENDA-09"
+  ],
+  "related_topic_ids": [
+    "DEMO-TOPIC-08"
+  ],
+  "current_revision_id": "DEMO-REV-09"
+}

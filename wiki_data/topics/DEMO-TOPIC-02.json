@@ -1,0 +1,29 @@
+{
+  "topic_id": "DEMO-TOPIC-02",
+  "title": "4SA 장비 조건 원복 검증",
+  "topic_kind": "issue",
+  "primary_area": "process_equipment",
+  "secondary_areas": [],
+  "state": "action_in_progress",
+  "importance": "high",
+  "first_seen_week": "2026-W28",
+  "last_updated_week": "2026-W28",
+  "target_paths": [
+    {
+      "domain": "DRAM",
+      "tech": "Spica",
+      "lotcd": "4SA"
+    }
+  ],
+  "teams": [
+    "공정기술PTE"
+  ],
+  "source_agenda_ids": [
+    "DEMO-AGENDA-02"
+  ],
+  "related_topic_ids": [
+    "DEMO-TOPIC-01",
+    "DEMO-TOPIC-04"
+  ],
+  "current_revision_id": "DEMO-REV-02"
+}

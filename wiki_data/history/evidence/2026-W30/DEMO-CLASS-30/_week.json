@@ -1,0 +1,137 @@
+{
+  "week": "2026-W30",
+  "workflow_state": "approved",
+  "classification_run_id": "DEMO-CLASS-30",
+  "taxonomy_version": 1,
+  "approved_at": "2026-07-20T03:00:00Z",
+  "approved_by": "demo-seed",
+  "runs": {
+    "DEMO-CLASS-30": {
+      "id": "DEMO-CLASS-30",
+      "week": "2026-W30",
+      "status": "completed",
+      "prompt_version": "demo-v1",
+      "classifier_version": "demo-v1",
+      "taxonomy_version": 1,
+      "alias_version": 1,
+      "prior_run_id": null,
+      "started_at": "2026-07-20T03:00:00Z",
+      "completed_at": "2026-07-20T03:00:00Z",
+      "error": null
+    }
+  },
+  "items": {
+    "DEMO-AGENDA-09": {
+      "agenda_id": "DEMO-AGENDA-09",
+      "mail_id": "dummy_mail_009",
+      "summary": "Colosseum word line 저항 상관성",
+      "source_quote": "Petra 전체 reliability 검증은 계획대로 진행 중입니다. 4P1 read 성능은 목표 대비 3% 우수했습니다. 6P1 endurance 결과는 다음 주 공유 예정입니다.",
+      "classification_context": "Petra 전체 reliability 검증은 계획대로 진행 중입니다. 4P1 read 성능은 목표 대비 3% 우수했습니다. 6P1 endurance 결과는 다음 주 공유 예정입니다.",
+      "item_kind": "lotcd_specific",
+      "decision": {
+        "status": "confirmed",
+        "target_path": {
+          "domain": "NAND",
+          "tech": "Colosseum",
+          "lotcd": "4C1"
+        },
+        "matches": [],
+        "diagnostics": [],
+        "confidence": 0.96
+      },
+      "revision_count": 0,
+      "team": "NAND FA PTE",
+      "subject": "Petra performance 제품 검증 결과",
+      "received_at": "2026-07-10T09:25:00+09:00",
+      "source_path": "fixtures/knowledge/mails.json#dummy_mail_009",
+      "topic_hint": "Colosseum word line 저항 상관성",
+      "state_hint": "investigating"
+    },
+    "DEMO-AGENDA-10": {
+      "agenda_id": "DEMO-AGENDA-10",
+      "mail_id": "dummy_mail_010",
+      "summary": "DRAM/NAND 공통 검사 중지 계획",
+      "source_quote": "DRAM과 NAND 공통으로 검사 장비 calibration을 실시합니다. DRAM 4SA는 화요일, NAND 4H1은 수요일에 작업합니다. 작업 시간에는 해당 LOT 투입을 중지해 주세요.",
+      "classification_context": "DRAM과 NAND 공통으로 검사 장비 calibration을 실시합니다. DRAM 4SA는 화요일, NAND 4H1은 수요일에 작업합니다. 작업 시간에는 해당 LOT 투입을 중지해 주세요.",
+      "item_kind": "lotcd_specific",
+      "decision": {
+        "status": "confirmed",
+        "target_path": {
+          "domain": "DRAM",
+          "tech": "Spica",
+          "lotcd": "4SA"
+        },
+        "matches": [],
+        "diagnostics": [],
+        "confidence": 0.96
+      },
+      "revision_count": 0,
+      "team": "공정기술PTE",
+      "subject": "DRAM/NAND 공통 장비 점검 공지",
+      "received_at": "2026-07-10T13:10:00+09:00",
+      "source_path": "fixtures/knowledge/mails.json#dummy_mail_010",
+      "topic_hint": "DRAM/NAND 공통 검사 중지 계획",
+      "state_hint": "monitoring"
+    },
+    "DEMO-AGENDA-11": {
+      "agenda_id": "DEMO-AGENDA-11",
+      "mail_id": "dummy_mail_011",
+      "summary": "Petra 4P1 read 성능 검증",
+      "source_quote": "4ZZ 수율이 91.2%로 하락했습니다. 현재 기준정보에 등록되지 않은 LOTCD이므로 담당 Tech 확인이 필요합니다.",
+      "classification_context": "4ZZ 수율이 91.2%로 하락했습니다. 현재 기준정보에 등록되지 않은 LOTCD이므로 담당 Tech 확인이 필요합니다.",
+      "item_kind": "lotcd_specific",
+      "decision": {
+        "status": "confirmed",
+        "target_path": {
+          "domain": "NAND",
+          "tech": "Petra",
+          "lotcd": "4P1"
+        },
+        "matches": [],
+        "diagnostics": [],
+        "confidence": 0.96
+      },
+      "revision_count": 0,
+      "team": "NAND품질PTE",
+      "subject": "신규 LOTCD 4ZZ 수율 이상",
+      "received_at": "2026-07-10T15:35:00+09:00",
+      "source_path": "fixtures/knowledge/mails.json#dummy_mail_011",
+      "topic_hint": "Petra 4P1 read 성능 검증",
+      "state_hint": "monitoring"
+    },
+    "DEMO-AGENDA-12": {
+      "agenda_id": "DEMO-AGENDA-12",
+      "mail_id": "dummy_mail_012",
+      "summary": "Lucy 6E2 저온 retention fail",
+      "source_quote": "4SA 장비 조건 분석 결과 chamber A 편차가 원인으로 확인됐습니다. 오늘 조건 원복 후 재측정합니다.",
+      "classification_context": "4SA 장비 조건 분석 결과 chamber A 편차가 원인으로 확인됐습니다. 오늘 조건 원복 후 재측정합니다.",
+      "item_kind": "lotcd_specific",
+      "decision": {
+        "status": "confirmed",
+        "target_path": {
+          "domain": "DRAM",
+          "tech": "Lucy",
+          "lotcd": "6E2"
+        },
+        "matches": [],
+        "diagnostics": [],
+        "confidence": 0.96
+      },
+      "revision_count": 0,
+      "team": "DRAM SRT 개발공정",
+      "subject": "RE: [Spica] 4SA/6SA 주간 수율 현황",
+      "received_at": "2026-07-11T08:20:00+09:00",
+      "source_path": "fixtures/knowledge/mails.json#dummy_mail_012",
+      "topic_hint": "Lucy 6E2 저온 retention fail",
+      "state_hint": "review_required"
+    }
+  },
+  "revisions": {},
+  "evidence_refs": [
+    "2026-W30/DEMO-CLASS-30/DEMO-AGENDA-09",
+    "2026-W30/DEMO-CLASS-30/DEMO-AGENDA-10",
+    "2026-W30/DEMO-CLASS-30/DEMO-AGENDA-11",
+    "2026-W30/DEMO-CLASS-30/DEMO-AGENDA-12"
+  ],
+  "archived_at": "2026-07-20T03:00:00Z"
+}

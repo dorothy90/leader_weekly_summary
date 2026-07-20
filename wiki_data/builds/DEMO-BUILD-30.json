@@ -1,0 +1,29 @@
+{
+  "run_id": "DEMO-BUILD-30",
+  "week": "2026-W30",
+  "classification_run_id": "DEMO-CLASS-30",
+  "taxonomy_version": 1,
+  "status": "partially_failed",
+  "input_hash": "demo-input-2026-w30",
+  "model": "z-ai/glm-4.7-flash",
+  "affected_topic_ids": [
+    "DEMO-TOPIC-01",
+    "DEMO-TOPIC-02",
+    "DEMO-TOPIC-03",
+    "DEMO-TOPIC-04",
+    "DEMO-TOPIC-05",
+    "DEMO-TOPIC-06",
+    "DEMO-TOPIC-07",
+    "DEMO-TOPIC-08",
+    "DEMO-TOPIC-09",
+    "DEMO-TOPIC-10",
+    "DEMO-TOPIC-11",
+    "DEMO-TOPIC-12"
+  ],
+  "failed_topic_ids": [
+    "DEMO-TOPIC-12"
+  ],
+  "started_at": "2026-07-20T03:00:00Z",
+  "completed_at": "2026-07-20T03:00:00Z",
+  "error": "Demo partial build: prior valid revision retained."
+}

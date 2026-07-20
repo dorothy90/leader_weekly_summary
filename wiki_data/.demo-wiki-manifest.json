@@ -1,0 +1,289 @@
+{
+  "version": 1,
+  "files": [
+    {
+      "root": "wiki",
+      "path": "assignments/DEMO-AGENDA-01.json"
+    },
+    {
+      "root": "wiki",
+      "path": "assignments/DEMO-AGENDA-02.json"
+    },
+    {
+      "root": "wiki",
+      "path": "assignments/DEMO-AGENDA-03.json"
+    },
+    {
+      "root": "wiki",
+      "path": "assignments/DEMO-AGENDA-04.json"
+    },
+    {
+      "root": "wiki",
+      "path": "assignments/DEMO-AGENDA-05.json"
+    },
+    {
+      "root": "wiki",
+      "path": "assignments/DEMO-AGENDA-06.json"
+    },
+    {
+      "root": "wiki",
+      "path": "assignments/DEMO-AGENDA-07.json"
+    },
+    {
+      "root": "wiki",
+      "path": "assignments/DEMO-AGENDA-08.json"
+    },
+    {
+      "root": "wiki",
+      "path": "assignments/DEMO-AGENDA-09.json"
+    },
+    {
+      "root": "wiki",
+      "path": "assignments/DEMO-AGENDA-10.json"
+    },
+    {
+      "root": "wiki",
+      "path": "assignments/DEMO-AGENDA-11.json"
+    },
+    {
+      "root": "wiki",
+      "path": "assignments/DEMO-AGENDA-12.json"
+    },
+    {
+      "root": "wiki",
+      "path": "builds/DEMO-BUILD-30.json"
+    },
+    {
+      "root": "wiki",
+      "path": "catalog.json"
+    },
+    {
+      "root": "wiki",
+      "path": "history/evidence/2026-W28/DEMO-CLASS-28/DEMO-AGENDA-01.json"
+    },
+    {
+      "root": "wiki",
+      "path": "history/evidence/2026-W28/DEMO-CLASS-28/DEMO-AGENDA-02.json"
+    },
+    {
+      "root": "wiki",
+      "path": "history/evidence/2026-W28/DEMO-CLASS-28/DEMO-AGENDA-03.json"
+    },
+    {
+      "root": "wiki",
+      "path": "history/evidence/2026-W28/DEMO-CLASS-28/DEMO-AGENDA-04.json"
+    },
+    {
+      "root": "wiki",
+      "path": "history/evidence/2026-W28/DEMO-CLASS-28/_week.json"
+    },
+    {
+      "root": "wiki",
+      "path": "history/evidence/2026-W29/DEMO-CLASS-29/DEMO-AGENDA-05.json"
+    },
+    {
+      "root": "wiki",
+      "path": "history/evidence/2026-W29/DEMO-CLASS-29/DEMO-AGENDA-06.json"
+    },
+    {
+      "root": "wiki",
+      "path": "history/evidence/2026-W29/DEMO-CLASS-29/DEMO-AGENDA-07.json"
+    },
+    {
+      "root": "wiki",
+      "path": "history/evidence/2026-W29/DEMO-CLASS-29/DEMO-AGENDA-08.json"
+    },
+    {
+      "root": "wiki",
+      "path": "history/evidence/2026-W29/DEMO-CLASS-29/_week.json"
+    },
+    {
+      "root": "wiki",
+      "path": "history/evidence/2026-W30/DEMO-CLASS-30/DEMO-AGENDA-09.json"
+    },
+    {
+      "root": "wiki",
+      "path": "history/evidence/2026-W30/DEMO-CLASS-30/DEMO-AGENDA-10.json"
+    },
+    {
+      "root": "wiki",
+      "path": "history/evidence/2026-W30/DEMO-CLASS-30/DEMO-AGENDA-11.json"
+    },
+    {
+      "root": "wiki",
+      "path": "history/evidence/2026-W30/DEMO-CLASS-30/DEMO-AGENDA-12.json"
+    },
+    {
+      "root": "wiki",
+      "path": "history/evidence/2026-W30/DEMO-CLASS-30/_week.json"
+    },
+    {
+      "root": "wiki",
+      "path": "history/topics/DEMO-TOPIC-01/DEMO-REV-01.json"
+    },
+    {
+      "root": "wiki",
+      "path": "history/topics/DEMO-TOPIC-02/DEMO-REV-02.json"
+    },
+    {
+      "root": "wiki",
+      "path": "history/topics/DEMO-TOPIC-03/DEMO-REV-03.json"
+    },
+    {
+      "root": "wiki",
+      "path": "history/topics/DEMO-TOPIC-04/DEMO-REV-04.json"
+    },
+    {
+      "root": "wiki",
+      "path": "history/topics/DEMO-TOPIC-05/DEMO-REV-05.json"
+    },
+    {
+      "root": "wiki",
+      "path": "history/topics/DEMO-TOPIC-06/DEMO-REV-06.json"
+    },
+    {
+      "root": "wiki",
+      "path": "history/topics/DEMO-TOPIC-07/DEMO-REV-07.json"
+    },
+    {
+      "root": "wiki",
+      "path": "history/topics/DEMO-TOPIC-08/DEMO-REV-08.json"
+    },
+    {
+      "root": "wiki",
+      "path": "history/topics/DEMO-TOPIC-09/DEMO-REV-09.json"
+    },
+    {
+      "root": "wiki",
+      "path": "history/topics/DEMO-TOPIC-10/DEMO-REV-10.json"
+    },
+    {
+      "root": "wiki",
+      "path": "history/topics/DEMO-TOPIC-11/DEMO-REV-11.json"
+    },
+    {
+      "root": "wiki",
+      "path": "history/topics/DEMO-TOPIC-12/DEMO-REV-12.json"
+    },
+    {
+      "root": "wiki",
+      "path": "history/weeks/2026-W30/DEMO-WEEK-REV-30A.json"
+    },
+    {
+      "root": "wiki",
+      "path": "relations/DEMO-REL-01.json"
+    },
+    {
+      "root": "wiki",
+      "path": "relations/DEMO-REL-02.json"
+    },
+    {
+      "root": "wiki",
+      "path": "relations/DEMO-REL-03.json"
+    },
+    {
+      "root": "wiki",
+      "path": "relations/DEMO-REL-04.json"
+    },
+    {
+      "root": "wiki",
+      "path": "relations/DEMO-REL-05.json"
+    },
+    {
+      "root": "wiki",
+      "path": "relations/DEMO-REL-06.json"
+    },
+    {
+      "root": "wiki",
+      "path": "relations/DEMO-REL-07.json"
+    },
+    {
+      "root": "wiki",
+      "path": "relations/DEMO-REL-08.json"
+    },
+    {
+      "root": "wiki",
+      "path": "relations/DEMO-REL-09.json"
+    },
+    {
+      "root": "wiki",
+      "path": "reviews/DEMO-REVIEW-ASSIGNMENT.json"
+    },
+    {
+      "root": "wiki",
+      "path": "reviews/DEMO-REVIEW-RELATION.json"
+    },
+    {
+      "root": "wiki",
+      "path": "topics/DEMO-TOPIC-01.json"
+    },
+    {
+      "root": "wiki",
+      "path": "topics/DEMO-TOPIC-02.json"
+    },
+    {
+      "root": "wiki",
+      "path": "topics/DEMO-TOPIC-03.json"
+    },
+    {
+      "root": "wiki",
+      "path": "topics/DEMO-TOPIC-04.json"
+    },
+    {
+      "root": "wiki",
+      "path": "topics/DEMO-TOPIC-05.json"
+    },
+    {
+      "root": "wiki",
+      "path": "topics/DEMO-TOPIC-06.json"
+    },
+    {
+      "root": "wiki",
+      "path": "topics/DEMO-TOPIC-07.json"
+    },
+    {
+      "root": "wiki",
+      "path": "topics/DEMO-TOPIC-08.json"
+    },
+    {
+      "root": "wiki",
+      "path": "topics/DEMO-TOPIC-09.json"
+    },
+    {
+      "root": "wiki",
+      "path": "topics/DEMO-TOPIC-10.json"
+    },
+    {
+      "root": "wiki",
+      "path": "topics/DEMO-TOPIC-11.json"
+    },
+    {
+      "root": "wiki",
+      "path": "topics/DEMO-TOPIC-12.json"
+    },
+    {
+      "root": "wiki",
+      "path": "weeks/2026-W28.json"
+    },
+    {
+      "root": "wiki",
+      "path": "weeks/2026-W29.json"
+    },
+    {
+      "root": "wiki",
+      "path": "weeks/2026-W30.json"
+    },
+    {
+      "root": "classification",
+      "path": "2026-W28.json"
+    },
+    {
+      "root": "classification",
+      "path": "2026-W29.json"
+    },
+    {
+      "root": "classification",
+      "path": "2026-W30.json"
+    }
+  ]
+}

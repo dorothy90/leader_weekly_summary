@@ -1,0 +1,32 @@
+{
+  "evidence_ref": "2026-W30/DEMO-CLASS-30/DEMO-AGENDA-11",
+  "week": "2026-W30",
+  "classification_run_id": "DEMO-CLASS-30",
+  "item": {
+    "agenda_id": "DEMO-AGENDA-11",
+    "mail_id": "dummy_mail_011",
+    "summary": "Petra 4P1 read 성능 검증",
+    "source_quote": "4ZZ 수율이 91.2%로 하락했습니다. 현재 기준정보에 등록되지 않은 LOTCD이므로 담당 Tech 확인이 필요합니다.",
+    "classification_context": "4ZZ 수율이 91.2%로 하락했습니다. 현재 기준정보에 등록되지 않은 LOTCD이므로 담당 Tech 확인이 필요합니다.",
+    "item_kind": "lotcd_specific",
+    "decision": {
+      "status": "confirmed",
+      "target_path": {
+        "domain": "NAND",
+        "tech": "Petra",
+        "lotcd": "4P1"
+      },
+      "matches": [],
+      "diagnostics": [],
+      "confidence": 0.96
+    },
+    "revision_count": 0,
+    "team": "NAND품질PTE",
+    "subject": "신규 LOTCD 4ZZ 수율 이상",
+    "received_at": "2026-07-10T15:35:00+09:00",
+    "source_path": "fixtures/knowledge/mails.json#dummy_mail_011",
+    "topic_hint": "Petra 4P1 read 성능 검증",
+    "state_hint": "monitoring"
+  },
+  "archived_at": "2026-07-20T03:00:00Z"
+}

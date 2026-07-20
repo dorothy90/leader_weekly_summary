@@ -1,0 +1,40 @@
+{
+  "week": "2026-W30",
+  "revision_id": "DEMO-WEEK-REV-30B",
+  "published_at": "2026-07-20T03:00:00Z",
+  "build_run_id": "DEMO-BUILD-30",
+  "new_topic_ids": [
+    "DEMO-TOPIC-09",
+    "DEMO-TOPIC-10",
+    "DEMO-TOPIC-11",
+    "DEMO-TOPIC-12"
+  ],
+  "changed_topic_ids": [
+    "DEMO-TOPIC-01",
+    "DEMO-TOPIC-04",
+    "DEMO-TOPIC-07"
+  ],
+  "resolved_topic_ids": [],
+  "reopened_topic_ids": [
+    "DEMO-TOPIC-05"
+  ],
+  "actions_and_decisions": [],
+  "new_relation_ids": [
+    "DEMO-REL-09"
+  ],
+  "relation_review_events": [],
+  "pending_assignment_count": 1,
+  "contradictions": [
+    "DEMO-REL-09 관계 검토 대기"
+  ],
+  "teams": [
+    "DRAM SRT 개발공정",
+    "DRAM수율전략",
+    "Heraion양산수율",
+    "NAND FA PTE",
+    "NAND품질PTE",
+    "Spica수율",
+    "공정기술PTE",
+    "분석FA"
+  ]
+}

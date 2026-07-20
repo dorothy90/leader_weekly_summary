@@ -1,0 +1,35 @@
+{
+  "topic_id": "DEMO-TOPIC-04",
+  "title": "검사 장비 calibration 영향",
+  "topic_kind": "observation",
+  "primary_area": "process_equipment",
+  "secondary_areas": [],
+  "state": "monitoring",
+  "importance": "medium",
+  "first_seen_week": "2026-W28",
+  "last_updated_week": "2026-W28",
+  "target_paths": [
+    {
+      "domain": "DRAM",
+      "tech": "Spica",
+      "lotcd": "4SA"
+    },
+    {
+      "domain": "NAND",
+      "tech": "Heraion",
+      "lotcd": "4H1"
+    }
+  ],
+  "teams": [
+    "공정기술PTE",
+    "NAND품질PTE"
+  ],
+  "source_agenda_ids": [
+    "DEMO-AGENDA-04"
+  ],
+  "related_topic_ids": [
+    "DEMO-TOPIC-02",
+    "DEMO-TOPIC-07"
+  ],
+  "current_revision_id": "DEMO-REV-04"
+}

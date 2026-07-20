@@ -1,0 +1,30 @@
+{
+  "week": "2026-W29",
+  "revision_id": "DEMO-WEEK-REV-29",
+  "published_at": "2026-07-20T03:00:00Z",
+  "build_run_id": "DEMO-BUILD-29",
+  "new_topic_ids": [
+    "DEMO-TOPIC-05",
+    "DEMO-TOPIC-06",
+    "DEMO-TOPIC-07",
+    "DEMO-TOPIC-08"
+  ],
+  "changed_topic_ids": [],
+  "resolved_topic_ids": [
+    "DEMO-TOPIC-06"
+  ],
+  "reopened_topic_ids": [
+    "DEMO-TOPIC-05"
+  ],
+  "actions_and_decisions": [],
+  "new_relation_ids": [],
+  "relation_review_events": [],
+  "pending_assignment_count": 0,
+  "contradictions": [],
+  "teams": [
+    "DRAM수율전략",
+    "Heraion양산수율",
+    "공정기술PTE",
+    "분석FA"
+  ]
+}

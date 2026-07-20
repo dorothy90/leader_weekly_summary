@@ -1,0 +1,369 @@
+[
+  {
+    "topic_id": "DEMO-TOPIC-01",
+    "title": "4SA chamber A 편차와 수율 하락",
+    "topic_kind": "issue",
+    "primary_area": "yield_defect",
+    "secondary_areas": [],
+    "state": "investigating",
+    "importance": "critical",
+    "first_seen_week": "2026-W28",
+    "last_updated_week": "2026-W28",
+    "target_paths": [
+      {
+        "domain": "DRAM",
+        "tech": "Spica",
+        "lotcd": "4SA"
+      }
+    ],
+    "teams": [
+      "Spica수율",
+      "공정기술PTE"
+    ],
+    "source_agenda_ids": [
+      "DEMO-AGENDA-01"
+    ],
+    "related_topic_ids": [
+      "DEMO-TOPIC-02",
+      "DEMO-TOPIC-03"
+    ],
+    "current_revision_id": "DEMO-REV-01"
+  },
+  {
+    "topic_id": "DEMO-TOPIC-02",
+    "title": "4SA 장비 조건 원복 검증",
+    "topic_kind": "issue",
+    "primary_area": "process_equipment",
+    "secondary_areas": [],
+    "state": "action_in_progress",
+    "importance": "high",
+    "first_seen_week": "2026-W28",
+    "last_updated_week": "2026-W28",
+    "target_paths": [
+      {
+        "domain": "DRAM",
+        "tech": "Spica",
+        "lotcd": "4SA"
+      }
+    ],
+    "teams": [
+      "공정기술PTE"
+    ],
+    "source_agenda_ids": [
+      "DEMO-AGENDA-02"
+    ],
+    "related_topic_ids": [
+      "DEMO-TOPIC-01",
+      "DEMO-TOPIC-04"
+    ],
+    "current_revision_id": "DEMO-REV-02"
+  },
+  {
+    "topic_id": "DEMO-TOPIC-03",
+    "title": "Spica Edge defect 세정 recipe",
+    "topic_kind": "observation",
+    "primary_area": "experiment_validation",
+    "secondary_areas": [],
+    "state": "monitoring",
+    "importance": "high",
+    "first_seen_week": "2026-W28",
+    "last_updated_week": "2026-W28",
+    "target_paths": [
+      {
+        "domain": "DRAM",
+        "tech": "Spica",
+        "lotcd": "4SA"
+      },
+      {
+        "domain": "DRAM",
+        "tech": "Spica",
+        "lotcd": "6SA"
+      }
+    ],
+    "teams": [
+      "Spica수율",
+      "DRAM수율전략"
+    ],
+    "source_agenda_ids": [
+      "DEMO-AGENDA-03"
+    ],
+    "related_topic_ids": [
+      "DEMO-TOPIC-01"
+    ],
+    "current_revision_id": "DEMO-REV-03"
+  },
+  {
+    "topic_id": "DEMO-TOPIC-04",
+    "title": "검사 장비 calibration 영향",
+    "topic_kind": "observation",
+    "primary_area": "process_equipment",
+    "secondary_areas": [],
+    "state": "monitoring",
+    "importance": "medium",
+    "first_seen_week": "2026-W28",
+    "last_updated_week": "2026-W28",
+    "target_paths": [
+      {
+        "domain": "DRAM",
+        "tech": "Spica",
+        "lotcd": "4SA"
+      },
+      {
+        "domain": "NAND",
+        "tech": "Heraion",
+        "lotcd": "4H1"
+      }
+    ],
+    "teams": [
+      "공정기술PTE",
+      "NAND품질PTE"
+    ],
+    "source_agenda_ids": [
+      "DEMO-AGENDA-04"
+    ],
+    "related_topic_ids": [
+      "DEMO-TOPIC-02",
+      "DEMO-TOPIC-07"
+    ],
+    "current_revision_id": "DEMO-REV-04"
+  },
+  {
+    "topic_id": "DEMO-TOPIC-05",
+    "title": "Canopus 4SS Test fail 증가",
+    "topic_kind": "issue",
+    "primary_area": "quality_analysis",
+    "secondary_areas": [],
+    "state": "reopened",
+    "importance": "high",
+    "first_seen_week": "2026-W29",
+    "last_updated_week": "2026-W29",
+    "target_paths": [
+      {
+        "domain": "DRAM",
+        "tech": "Canopus",
+        "lotcd": "4SS"
+      }
+    ],
+    "teams": [
+      "DRAM수율전략",
+      "분석FA"
+    ],
+    "source_agenda_ids": [
+      "DEMO-AGENDA-05"
+    ],
+    "related_topic_ids": [
+      "DEMO-TOPIC-06"
+    ],
+    "current_revision_id": "DEMO-REV-05"
+  },
+  {
+    "topic_id": "DEMO-TOPIC-06",
+    "title": "Canopus 6SS 관리 범위 회복",
+    "topic_kind": "observation",
+    "primary_area": "yield_defect",
+    "secondary_areas": [],
+    "state": "resolved",
+    "importance": "medium",
+    "first_seen_week": "2026-W29",
+    "last_updated_week": "2026-W29",
+    "target_paths": [
+      {
+        "domain": "DRAM",
+        "tech": "Canopus",
+        "lotcd": "6SS"
+      }
+    ],
+    "teams": [
+      "DRAM수율전략"
+    ],
+    "source_agenda_ids": [
+      "DEMO-AGENDA-06"
+    ],
+    "related_topic_ids": [
+      "DEMO-TOPIC-05"
+    ],
+    "current_revision_id": "DEMO-REV-06"
+  },
+  {
+    "topic_id": "DEMO-TOPIC-07",
+    "title": "Heraion channel hole 편차",
+    "topic_kind": "issue",
+    "primary_area": "yield_defect",
+    "secondary_areas": [],
+    "state": "investigating",
+    "importance": "critical",
+    "first_seen_week": "2026-W29",
+    "last_updated_week": "2026-W29",
+    "target_paths": [
+      {
+        "domain": "NAND",
+        "tech": "Heraion",
+        "lotcd": "4H1"
+      }
+    ],
+    "teams": [
+      "Heraion양산수율",
+      "공정기술PTE"
+    ],
+    "source_agenda_ids": [
+      "DEMO-AGENDA-07"
+    ],
+    "related_topic_ids": [
+      "DEMO-TOPIC-04",
+      "DEMO-TOPIC-08"
+    ],
+    "current_revision_id": "DEMO-REV-07"
+  },
+  {
+    "topic_id": "DEMO-TOPIC-08",
+    "title": "6H1 조건 최적화 split",
+    "topic_kind": "issue",
+    "primary_area": "experiment_validation",
+    "secondary_areas": [],
+    "state": "action_in_progress",
+    "importance": "high",
+    "first_seen_week": "2026-W29",
+    "last_updated_week": "2026-W29",
+    "target_paths": [
+      {
+        "domain": "NAND",
+        "tech": "Heraion",
+        "lotcd": "6H1"
+      }
+    ],
+    "teams": [
+      "Heraion양산수율"
+    ],
+    "source_agenda_ids": [
+      "DEMO-AGENDA-08"
+    ],
+    "related_topic_ids": [
+      "DEMO-TOPIC-07",
+      "DEMO-TOPIC-09"
+    ],
+    "current_revision_id": "DEMO-REV-08"
+  },
+  {
+    "topic_id": "DEMO-TOPIC-09",
+    "title": "Colosseum word line 저항 상관성",
+    "topic_kind": "issue",
+    "primary_area": "quality_analysis",
+    "secondary_areas": [],
+    "state": "investigating",
+    "importance": "high",
+    "first_seen_week": "2026-W30",
+    "last_updated_week": "2026-W30",
+    "target_paths": [
+      {
+        "domain": "NAND",
+        "tech": "Colosseum",
+        "lotcd": "4C1"
+      },
+      {
+        "domain": "NAND",
+        "tech": "Colosseum",
+        "lotcd": "6C1"
+      }
+    ],
+    "teams": [
+      "NAND FA PTE",
+      "NAND품질PTE"
+    ],
+    "source_agenda_ids": [
+      "DEMO-AGENDA-09"
+    ],
+    "related_topic_ids": [
+      "DEMO-TOPIC-08"
+    ],
+    "current_revision_id": "DEMO-REV-09"
+  },
+  {
+    "topic_id": "DEMO-TOPIC-10",
+    "title": "DRAM/NAND 공통 검사 중지 계획",
+    "topic_kind": "observation",
+    "primary_area": "schedule_delivery",
+    "secondary_areas": [],
+    "state": "monitoring",
+    "importance": "medium",
+    "first_seen_week": "2026-W30",
+    "last_updated_week": "2026-W30",
+    "target_paths": [
+      {
+        "domain": "DRAM",
+        "tech": "Spica",
+        "lotcd": "4SA"
+      },
+      {
+        "domain": "NAND",
+        "tech": "Heraion",
+        "lotcd": "4H1"
+      }
+    ],
+    "teams": [
+      "공정기술PTE",
+      "DRAM수율전략",
+      "Heraion양산수율"
+    ],
+    "source_agenda_ids": [
+      "DEMO-AGENDA-10"
+    ],
+    "related_topic_ids": [
+      "DEMO-TOPIC-11"
+    ],
+    "current_revision_id": "DEMO-REV-10"
+  },
+  {
+    "topic_id": "DEMO-TOPIC-11",
+    "title": "Petra 4P1 read 성능 검증",
+    "topic_kind": "observation",
+    "primary_area": "experiment_validation",
+    "secondary_areas": [],
+    "state": "monitoring",
+    "importance": "medium",
+    "first_seen_week": "2026-W30",
+    "last_updated_week": "2026-W30",
+    "target_paths": [
+      {
+        "domain": "NAND",
+        "tech": "Petra",
+        "lotcd": "4P1"
+      }
+    ],
+    "teams": [
+      "NAND품질PTE"
+    ],
+    "source_agenda_ids": [
+      "DEMO-AGENDA-11"
+    ],
+    "related_topic_ids": [
+      "DEMO-TOPIC-10"
+    ],
+    "current_revision_id": "DEMO-REV-11"
+  },
+  {
+    "topic_id": "DEMO-TOPIC-12",
+    "title": "Lucy 6E2 저온 retention fail",
+    "topic_kind": "issue",
+    "primary_area": "quality_analysis",
+    "secondary_areas": [],
+    "state": "review_required",
+    "importance": "high",
+    "first_seen_week": "2026-W30",
+    "last_updated_week": "2026-W30",
+    "target_paths": [
+      {
+        "domain": "DRAM",
+        "tech": "Lucy",
+        "lotcd": "6E2"
+      }
+    ],
+    "teams": [
+      "DRAM SRT 개발공정"
+    ],
+    "source_agenda_ids": [
+      "DEMO-AGENDA-12"
+    ],
+    "related_topic_ids": [],
+    "current_revision_id": "DEMO-REV-12"
+  }
+]

@@ -1,0 +1,32 @@
+{
+  "evidence_ref": "2026-W28/DEMO-CLASS-28/DEMO-AGENDA-01",
+  "week": "2026-W28",
+  "classification_run_id": "DEMO-CLASS-28",
+  "item": {
+    "agenda_id": "DEMO-AGENDA-01",
+    "mail_id": "dummy_mail_001",
+    "summary": "4SA chamber A 편차와 수율 하락",
+    "source_quote": "DRAM 전 Tech의 주간 수율 판단 기준을 95.0%로 통일합니다. 이번 기준은 28주차부터 적용합니다. Spica는 신규 기준 적용 전 영향도를 별도 점검해 주세요.",
+    "classification_context": "DRAM 전 Tech의 주간 수율 판단 기준을 95.0%로 통일합니다. 이번 기준은 28주차부터 적용합니다. Spica는 신규 기준 적용 전 영향도를 별도 점검해 주세요.",
+    "item_kind": "lotcd_specific",
+    "decision": {
+      "status": "confirmed",
+      "target_path": {
+        "domain": "DRAM",
+        "tech": "Spica",
+        "lotcd": "4SA"
+      },
+      "matches": [],
+      "diagnostics": [],
+      "confidence": 0.96
+    },
+    "revision_count": 0,
+    "team": "Spica수율",
+    "subject": "[DRAM 수율] 28주차 공통 기준 변경",
+    "received_at": "2026-07-06T09:10:00+09:00",
+    "source_path": "fixtures/knowledge/mails.json#dummy_mail_001",
+    "topic_hint": "4SA chamber A 편차와 수율 하락",
+    "state_hint": "investigating"
+  },
+  "archived_at": "2026-07-20T03:00:00Z"
+}

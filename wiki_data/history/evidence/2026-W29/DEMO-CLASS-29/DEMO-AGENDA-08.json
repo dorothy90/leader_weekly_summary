@@ -1,0 +1,32 @@
+{
+  "evidence_ref": "2026-W29/DEMO-CLASS-29/DEMO-AGENDA-08",
+  "week": "2026-W29",
+  "classification_run_id": "DEMO-CLASS-29",
+  "item": {
+    "agenda_id": "DEMO-AGENDA-08",
+    "mail_id": "dummy_mail_008",
+    "summary": "6H1 조건 최적화 split",
+    "source_quote": "Colosseum QLC 1T 제품군에서 program fail 증가가 확인됐습니다. 4C1과 6C1 공통으로 word line resistance 상관성을 분석합니다.",
+    "classification_context": "Colosseum QLC 1T 제품군에서 program fail 증가가 확인됐습니다. 4C1과 6C1 공통으로 word line resistance 상관성을 분석합니다.",
+    "item_kind": "lotcd_specific",
+    "decision": {
+      "status": "confirmed",
+      "target_path": {
+        "domain": "NAND",
+        "tech": "Heraion",
+        "lotcd": "6H1"
+      },
+      "matches": [],
+      "diagnostics": [],
+      "confidence": 0.96
+    },
+    "revision_count": 0,
+    "team": "Heraion양산수율",
+    "subject": "CO QLC 1T program fail 분석",
+    "received_at": "2026-07-09T11:45:00+09:00",
+    "source_path": "fixtures/knowledge/mails.json#dummy_mail_008",
+    "topic_hint": "6H1 조건 최적화 split",
+    "state_hint": "action_in_progress"
+  },
+  "archived_at": "2026-07-20T03:00:00Z"
+}

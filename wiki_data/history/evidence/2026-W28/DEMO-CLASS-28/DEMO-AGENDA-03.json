@@ -1,0 +1,32 @@
+{
+  "evidence_ref": "2026-W28/DEMO-CLASS-28/DEMO-AGENDA-03",
+  "week": "2026-W28",
+  "classification_run_id": "DEMO-CLASS-28",
+  "item": {
+    "agenda_id": "DEMO-AGENDA-03",
+    "mail_id": "dummy_mail_003",
+    "summary": "Spica Edge defect 세정 recipe",
+    "source_quote": "SP LPDDR5 24G 제품군의 Edge defect가 증가했습니다. Fab 공통 세정 recipe 변경안을 4SA와 6SA에 순차 적용할 예정입니다.",
+    "classification_context": "SP LPDDR5 24G 제품군의 Edge defect가 증가했습니다. Fab 공통 세정 recipe 변경안을 4SA와 6SA에 순차 적용할 예정입니다.",
+    "item_kind": "lotcd_specific",
+    "decision": {
+      "status": "confirmed",
+      "target_path": {
+        "domain": "DRAM",
+        "tech": "Spica",
+        "lotcd": "4SA"
+      },
+      "matches": [],
+      "diagnostics": [],
+      "confidence": 0.96
+    },
+    "revision_count": 0,
+    "team": "Spica수율",
+    "subject": "SP LPDDR5 24G 공통 개선안 검토",
+    "received_at": "2026-07-07T08:40:00+09:00",
+    "source_path": "fixtures/knowledge/mails.json#dummy_mail_003",
+    "topic_hint": "Spica Edge defect 세정 recipe",
+    "state_hint": "monitoring"
+  },
+  "archived_at": "2026-07-20T03:00:00Z"
+}
