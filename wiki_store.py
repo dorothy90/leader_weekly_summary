@@ -368,6 +368,15 @@ class JsonWikiStore:
             TopicRelation,
         )
 
+    def relations(self) -> list[TopicRelation]:
+        return sorted(
+            (
+                _load(path, TopicRelation)
+                for path in self.root.joinpath("relations").glob("*.json")
+            ),
+            key=lambda item: item.relation_id,
+        )
+
     def reviews(self, status: str | None = None) -> list[WikiReview]:
         values = [
             _load(path, WikiReview)

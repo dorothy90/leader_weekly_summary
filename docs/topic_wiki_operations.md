@@ -157,7 +157,7 @@ retention approval are complete.
 ## Build an approved week
 
 Set the OpenAI-compatible connection variables required by the deployment,
-including its base URL and API key. The default model is `z-ai/glm-5.2` unless
+including its base URL and API key. The default model is `z-ai/glm-4.7-flash` unless
 `KNOWLEDGE_LLM_MODEL` or `LLM_MODEL` overrides it. A non-loopback provider requires
 an explicit data-policy acknowledgement. `KNOWLEDGE_LLM_DATA_POLICY_ACK=true`
 records a deployment-level acknowledgement; `process_wiki.py
@@ -166,7 +166,7 @@ previous value afterward. Loopback providers do not require this external-data
 gate.
 
 ```bash
-export KNOWLEDGE_LLM_MODEL='z-ai/glm-5.2'
+export KNOWLEDGE_LLM_MODEL='z-ai/glm-4.7-flash'
 export KNOWLEDGE_LLM_DATA_POLICY_ACK='true'
 python process_wiki.py --week 2026-W30 --allow-external-llm
 ```
@@ -185,7 +185,7 @@ the deployment environment before running `run_pipeline.py`:
 
 ```bash
 export ENABLE_TOPIC_WIKI='true'
-export KNOWLEDGE_LLM_MODEL='z-ai/glm-5.2'
+export KNOWLEDGE_LLM_MODEL='z-ai/glm-4.7-flash'
 export KNOWLEDGE_LLM_DATA_POLICY_ACK='true'
 python run_pipeline.py
 ```
@@ -368,4 +368,4 @@ pytest -q
 ```
 
 In the build metadata, verify that the configured default model is
-`z-ai/glm-5.2` unless the deployment intentionally overrides it.
+`z-ai/glm-4.7-flash` unless the deployment intentionally overrides it.

@@ -409,6 +409,11 @@ class WikiTopicDetail(StrictModel):
     relations: list[TopicRelation]
 
 
+class WikiGraphView(StrictModel):
+    topics: list[TopicListItem]
+    relations: list[TopicRelation]
+
+
 class LotcdWikiView(StrictModel):
     domain: Literal["DRAM", "NAND"]
     tech: str

@@ -130,6 +130,36 @@ def test_topic_and_lotcd_routes_read_same_topic(api_app):
     assert topic["topic"]["topic_id"] in lotcd["topic_ids"]
 
 
+def test_wiki_graph_returns_topics_and_non_rejected_relations(api_app):
+    store = api_app.state.wiki_store
+    store.save_relation(TopicRelation(
+        relation_id="REL-accepted",
+        source_topic_id="T-001",
+        target_topic_id="T-002",
+        kind="supports",
+        agenda_ids=["A-001"],
+        confidence=0.9,
+        review_state="accepted",
+    ))
+    store.save_relation(TopicRelation(
+        relation_id="REL-rejected",
+        source_topic_id="T-001",
+        target_topic_id="T-003",
+        kind="contradicts",
+        agenda_ids=["A-001"],
+        confidence=0.7,
+        review_state="rejected",
+    ))
+
+    response = request(api_app, "/api/knowledge/wiki/graph")
+
+    assert response.status_code == 200
+    assert [item["topic_id"] for item in response.json()["topics"]] == ["T-001"]
+    assert [item["relation_id"] for item in response.json()["relations"]] == [
+        "REL-accepted"
+    ]
+
+
 def test_week_route_preserves_snapshot_action_rows(api_app):
     store = api_app.state.wiki_store
     current = store.topic("T-001")

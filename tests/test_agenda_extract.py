@@ -10,11 +10,11 @@ FIXTURES = ROOT / "fixtures" / "knowledge"
 def taxonomy():
     return TaxonomyDocument.model_validate_json((ROOT / "config/classification_rules.json").read_text(encoding="utf-8"))
 
-def test_llm_connection_defaults_to_glm_52(monkeypatch):
+def test_llm_connection_defaults_to_glm_47_flash(monkeypatch):
     monkeypatch.setenv("KNOWLEDGE_LLM_BASE_URL", "http://localhost:8000/v1")
     for name in ("KNOWLEDGE_LLM_MODEL", "LLM_MODEL"):
         monkeypatch.delenv(name, raising=False)
-    assert llm_connection().model == "z-ai/glm-5.2"
+    assert llm_connection().model == "z-ai/glm-4.7-flash"
 
 def test_group_alias_stays_conflict_candidate():
     resolved = CanonicalResolver(taxonomy()).resolve("SP LPDDR5 24G Edge defect")

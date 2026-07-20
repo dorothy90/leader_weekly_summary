@@ -33,6 +33,7 @@ from knowledge_models import (
     WeekClassificationSummary,
     WeekWikiView,
     WikiBuildRun,
+    WikiGraphView,
     WikiReview,
     WikiReviewResolution,
     WikiTopicDetail,
@@ -298,6 +299,19 @@ def wiki_topics(
 ) -> list[TopicListItem]:
     return list_topics(
         get_wiki_store(), q=q, state=state, area=area, team=team, lotcd=lotcd
+    )
+
+
+@router.get("/wiki/graph", response_model=WikiGraphView)
+def wiki_graph() -> WikiGraphView:
+    store = get_wiki_store()
+    return WikiGraphView(
+        topics=list_topics(store),
+        relations=[
+            relation
+            for relation in store.relations()
+            if relation.review_state != "rejected"
+        ],
     )
 
 
