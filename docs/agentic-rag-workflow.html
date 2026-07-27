@@ -1,0 +1,1442 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: data:; style-src 'unsafe-inline' blob: data:; img-src blob: data:; font-src blob: data:; media-src blob: data:; worker-src blob:; connect-src blob: data:; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>Agentic Rag Workflow</title>
+<style>:root {
+  color-scheme: light dark;
+  background-color: var(--background) !important;
+
+  /* Agent-facing contract; keep in sync with SKILL.md. */
+  --background: light-dark(rgb(255 255 255), rgb(24 24 24));
+  --foreground: light-dark(rgb(26 28 31), rgb(255 255 255));
+  --card: color-mix(in oklab, var(--foreground) 5%, transparent);
+  --card-foreground: var(--foreground);
+  --popover: light-dark(rgb(255 255 255), rgb(45 45 45));
+  --popover-foreground: var(--foreground);
+  --primary: light-dark(rgb(51 156 255), rgb(131 195 255));
+  --primary-foreground: light-dark(rgb(255 255 255), rgb(13 13 13));
+  --secondary: light-dark(rgb(255 255 255 / 96%), rgb(54 54 54 / 96%));
+  --secondary-foreground: var(--foreground);
+  --muted: color-mix(in srgb, var(--foreground) 10%, transparent);
+  --muted-foreground: light-dark(
+    rgb(26 28 31 / 49.4%),
+    rgb(255 255 255 / 49.8%)
+  );
+  --accent: light-dark(rgb(229 242 255), rgb(13 39 63));
+  --accent-foreground: var(--primary);
+  --destructive: light-dark(rgb(226 85 7), rgb(255 133 73));
+  --border: light-dark(rgb(26 28 31 / 8%), rgb(255 255 255 / 8.2%));
+  --input: light-dark(
+    rgb(26 28 31 / 11.8%),
+    color-mix(in oklab, rgb(0 0 0) 10%, transparent)
+  );
+  --ring: light-dark(rgb(51 156 255), rgb(131 195 255 / 76%));
+  --font-size-base: 14px;
+  --viz-series-1: var(--primary);
+  --viz-series-2: light-dark(rgb(243 136 59), rgb(245 154 86));
+  --viz-series-3: light-dark(rgb(93 201 119), rgb(116 213 139));
+  --viz-series-4: light-dark(rgb(235 119 177), rgb(240 143 192));
+  --viz-series-5: light-dark(rgb(155 121 236), rgb(170 145 239));
+  --viz-series-6: light-dark(rgb(58 185 177), rgb(90 203 194));
+
+  /* Internal implementation variables; not part of the agent contract. */
+  --font-sans: -apple-system, system-ui, "Segoe UI", sans-serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono",
+    monospace;
+  --font-size-normal: max(11px, var(--font-size-base));
+  --font-size-small: max(11px, calc(var(--font-size-base) - 2px));
+  --font-size-h1: calc(var(--font-size-normal) * 1.7142857143);
+  --font-size-h2: calc(var(--font-size-normal) * 1.4285714286);
+  --font-size-h3: calc(var(--font-size-normal) * 1.2857142857);
+  --font-weight-normal: 430;
+  --font-weight-medium: 500;
+  --line-height-normal: calc(var(--font-size-normal) * 1.5);
+  --line-height-small: calc(var(--font-size-small) + 4px);
+  --radius: 12.5px;
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-2xl: calc(var(--radius) * 1.6);
+  --radius-full: 9999px;
+  --shadow-sm: 0 1px 2px -1px rgb(0 0 0 / 8%);
+  --checkmark-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 17 17'%3E%3Cpath d='M12.8961 3.64101C13.1297 3.41418 13.4984 3.37523 13.7779 3.56581C14.0571 3.75635 14.1554 4.11331 14.0299 4.41347L13.9615 4.53847L7.71151 13.7045C7.59411 13.8767 7.4063 13.9877 7.19881 14.0072C6.99136 14.0267 6.78564 13.9533 6.63826 13.806L2.88826 10.056L2.79842 9.9457C2.6192 9.67407 2.64927 9.30496 2.88826 9.06581C3.12738 8.82669 3.49647 8.79676 3.76815 8.97597L3.8785 9.06581L7.03084 12.2182L12.8053 3.74941L12.8961 3.64101Z'/%3E%3C/svg%3E");
+
+  /* Legacy aliases; not part of the current agent contract. */
+  --viz-bg: transparent;
+  --viz-panel: var(--card);
+  --viz-border: var(--border);
+  --viz-text: var(--foreground);
+  --viz-muted: var(--muted-foreground);
+  --viz-accent: var(--primary);
+  --viz-accent-text: var(--primary-foreground);
+  --viz-accent-bg: var(--accent);
+  --viz-font-size: var(--font-size-base);
+  --viz-warning: var(--destructive);
+  --color-background-primary: var(--background);
+  --color-text-primary: var(--foreground);
+  --color-border-secondary: var(--border);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html > body {
+  margin: 0;
+  padding: 5px;
+  color: var(--foreground);
+  background: transparent !important;
+  font-family: var(--font-sans);
+  font-size: var(--font-size-normal);
+  font-weight: var(--font-weight-normal);
+  line-height: var(--line-height-normal);
+}
+
+a {
+  color: color-mix(in srgb, var(--viz-accent) 80%, var(--viz-text) 20%);
+  cursor: pointer;
+  font-weight: var(--viz-font-weight-medium);
+  text-decoration: none;
+  text-underline-offset: 2px;
+}
+
+a:is(:hover, :focus-visible) {
+  text-decoration-line: underline;
+  text-decoration-style: dashed;
+  text-decoration-thickness: 0.5px;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+p {
+  margin-block: 0;
+}
+
+h1 {
+  font-size: var(--font-size-h1);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+h2 {
+  font-size: var(--font-size-h2);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+h3,
+h4,
+h5,
+h6 {
+  font-size: var(--font-size-h3);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.3;
+}
+
+b,
+strong,
+th {
+  font-weight: var(--font-weight-medium);
+}
+
+code:not(pre code) {
+  display: inline;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  corner-shape: superellipse(1.5);
+  background: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  overflow-wrap: anywhere;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  word-break: break-word;
+}
+
+.table-responsive {
+  width: 100%;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  color: var(--foreground);
+  font: inherit;
+  text-align: start;
+}
+
+.table :is(th, td) {
+  padding-block: 10px;
+  padding-inline: 0 24px;
+  overflow-wrap: anywhere;
+  border-bottom: 1px solid var(--border);
+  text-align: start;
+  vertical-align: top;
+}
+
+.table-responsive > .table :is(th, td) {
+  overflow-wrap: break-word;
+}
+
+.table :is(th, td):last-child {
+  padding-inline-end: 0;
+}
+
+.table :is(caption, thead th) {
+  font-weight: 600;
+}
+
+.table thead th {
+  padding-block: 8px;
+  border-bottom-color: color-mix(in srgb, var(--foreground) 16%, transparent);
+}
+
+.table tbody tr:last-child :is(th, td) {
+  border-bottom: 0;
+}
+
+.table.table-sm :is(th, td) {
+  padding-block: 6px;
+}
+
+.table.table-sm :is(th, td):not(:last-child) {
+  padding-inline-end: 16px;
+}
+
+.table :is(.text-end, [align="right"]) {
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+.table :is(.text-center, [align="center"]) {
+  text-align: center;
+}
+
+.table .text-nowrap {
+  white-space: nowrap;
+}
+
+#widget {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  padding: 0;
+  background: transparent !important;
+}
+
+.card {
+  min-width: 0;
+  padding: 12px;
+  overflow: hidden;
+  overflow-wrap: break-word;
+  border-radius: var(--radius-2xl);
+  corner-shape: superellipse(1.5);
+  color: var(--card-foreground);
+  background: var(--card);
+}
+
+#widget > :not(.card) {
+  width: 100% !important;
+  max-width: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+
+.viz-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(max(180px, 24%), 1fr));
+  gap: 10px;
+}
+
+.viz-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.viz-stat-value {
+  font-size: var(--font-size-h2);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+.viz-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.viz-badge {
+  padding: 3px 8px;
+  border-radius: var(--radius-full);
+  color: var(--accent-foreground);
+  background: var(--accent);
+  font-weight: var(--font-weight-medium);
+}
+
+small,
+.text-small,
+.viz-badge {
+  font-size: var(--font-size-small);
+  line-height: var(--line-height-small);
+}
+
+.text-muted {
+  color: var(--muted-foreground);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.viz-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.viz-controls > .form-label {
+  display: grid;
+  min-width: min(100%, 260px);
+  flex: 1 1 280px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 2px 12px;
+  margin-bottom: 0;
+}
+
+.viz-controls > .form-label > :is(.form-control, .form-range, .form-select) {
+  grid-column: 1 / -1;
+}
+
+.btn,
+.form-check-input,
+.form-control,
+.form-range,
+.form-select {
+  font: inherit;
+}
+
+.btn {
+  appearance: button;
+  display: inline-flex;
+  inline-size: fit-content;
+  max-inline-size: 100%;
+  min-height: 28px;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  margin: 0;
+  padding: 0 8px;
+  -webkit-app-region: no-drag;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-lg);
+  corner-shape: superellipse(1.5);
+  color: var(--secondary-foreground);
+  background: var(--secondary);
+  cursor: var(--cursor-interaction, pointer);
+  text-align: center;
+  text-decoration: none;
+  white-space: nowrap;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+.btn:is(.btn-block, .viz-tile) {
+  inline-size: 100%;
+}
+
+.btn.viz-tile {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+a.btn {
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.btn:not(:disabled):hover {
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.btn-primary {
+  border-color: transparent;
+  color: var(--primary-foreground);
+  background: var(--foreground);
+  background-clip: padding-box;
+}
+
+.btn-primary .text-muted {
+  color: color-mix(in srgb, var(--primary-foreground) 50%, transparent);
+}
+
+.btn-primary:not(:disabled):hover {
+  background: color-mix(in srgb, var(--foreground) 80%, transparent);
+  background-clip: padding-box;
+}
+
+.btn-ghost {
+  border-color: transparent;
+  color: var(--muted-foreground);
+  background: transparent;
+}
+
+.btn-ghost:not(:disabled):hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+
+.form-label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--foreground);
+}
+
+.form-control {
+  display: block;
+  width: 100%;
+  min-height: 28px;
+  padding: 0 8px;
+  outline: none;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-lg);
+  corner-shape: superellipse(1.5);
+  color: var(--foreground);
+  background: var(--secondary);
+}
+
+.form-control::placeholder {
+  color: var(--muted-foreground);
+}
+
+.form-control[type="file"] {
+  padding: 0;
+  overflow: hidden;
+  cursor: var(--cursor-interaction, pointer);
+}
+
+.form-control[type="file"]::file-selector-button {
+  min-height: 26px;
+  margin-right: 8px;
+  padding: 0 8px;
+  border: 0;
+  border-right: 1px solid var(--input);
+  color: var(--secondary-foreground);
+  background: var(--secondary);
+  cursor: inherit;
+  font: inherit;
+}
+
+.form-control[type="file"]:not(:disabled):hover::file-selector-button {
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.form-control-color[type="color"] {
+  width: 40px;
+  height: 28px;
+  padding: 3px;
+  cursor: var(--cursor-interaction, pointer);
+}
+
+.form-control-color[type="color"]::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.form-control-color[type="color"]::-webkit-color-swatch {
+  border: 0;
+  border-radius: calc(var(--radius-lg) - 4px);
+  corner-shape: superellipse(1.5);
+}
+
+textarea.form-control {
+  height: auto;
+  min-height: 72px;
+  padding: 8px 10px;
+  resize: vertical;
+}
+
+.form-control:focus-visible {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-control:disabled,
+.form-select:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.form-select {
+  appearance: none;
+  display: block;
+  width: 100%;
+  min-height: 28px;
+  margin: 0;
+  padding: 0 32px 0 8px;
+  outline: none;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-lg);
+  corner-shape: superellipse(1.5);
+  color: var(--foreground);
+  background-color: var(--secondary);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--muted-foreground) 50%),
+    linear-gradient(135deg, var(--muted-foreground) 50%, transparent 50%);
+  background-position:
+    calc(100% - 14px) 50%,
+    calc(100% - 10px) 50%;
+  background-repeat: no-repeat;
+  background-size: 4px 4px;
+  cursor: var(--cursor-interaction, default);
+}
+
+.form-select:not(:disabled):hover {
+  background-color: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.form-select:focus-visible {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-check {
+  display: flex;
+  min-height: 20px;
+  align-items: center;
+  gap: 6px;
+}
+
+.form-check-input {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  margin: 0;
+  border: 1px solid var(--input);
+  color: var(--primary-foreground);
+  background-color: transparent;
+  cursor: var(--cursor-interaction, default);
+  transition:
+    background-color 150ms,
+    border-color 150ms,
+    box-shadow 150ms;
+}
+
+.form-check:not(.form-switch) .form-check-input[type="checkbox"] {
+  border-color: var(--input);
+  border-radius: var(--radius-sm);
+  corner-shape: superellipse(1.5);
+  background-color: var(--secondary);
+  box-shadow: var(--shadow-sm);
+}
+
+.form-check:not(.form-switch)
+  .form-check-input:not(:disabled):not(:checked):hover {
+  background-color: var(--card);
+}
+
+.form-check:not(.form-switch) .form-check-input[type="checkbox"]:checked {
+  border-color: var(--primary);
+  background-color: var(--primary);
+}
+
+.form-check:not(.form-switch)
+  .form-check-input[type="checkbox"]:checked::before {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--primary-foreground);
+  content: "";
+  mask: var(--checkmark-image) center / 12px 12px no-repeat;
+}
+
+.form-check-input[type="radio"] {
+  width: 14px;
+  height: 14px;
+  border-radius: var(--radius-full);
+}
+
+.form-check-input[type="radio"]:checked {
+  border: 2px solid var(--primary);
+  background:
+    radial-gradient(circle, var(--primary-foreground) 0 2.5px, transparent 3px),
+    var(--primary);
+}
+
+.form-check:not(.form-switch) .form-check-input:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.form-check:not(.form-switch) .form-check-input:disabled {
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.form-check:not(.form-switch) .form-check-input:disabled + .form-check-label {
+  cursor: not-allowed;
+}
+
+.form-switch .form-check-input:disabled,
+.form-switch .form-check-input:disabled + .form-check-label {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.form-check-label {
+  color: var(--foreground);
+  cursor: var(--cursor-interaction, default);
+}
+
+.form-switch .form-check-input {
+  position: relative;
+  width: 32px;
+  height: 20px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--muted);
+  box-shadow: none;
+  transition: background-color 200ms cubic-bezier(0, 0, 0.2, 1);
+}
+
+.form-switch .form-check-input::before {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 16px;
+  height: 16px;
+  box-sizing: border-box;
+  border: 1px solid light-dark(var(--primary-foreground), var(--foreground));
+  border-radius: var(--radius-full);
+  background: light-dark(var(--primary-foreground), var(--foreground));
+  box-shadow: var(--shadow-sm);
+  content: "";
+  transform: translate(2px, -50%);
+  transition: transform 200ms cubic-bezier(0, 0, 0.2, 1);
+}
+
+.form-switch .form-check-input:checked {
+  background: var(--primary);
+}
+
+.form-switch .form-check-input:checked::before {
+  transform: translate(14px, -50%);
+}
+
+.form-switch .form-check-input:focus-visible {
+  box-shadow: 0 0 0 2px var(--ring);
+}
+
+.form-range {
+  appearance: none;
+  display: block;
+  width: 100%;
+  height: 28px;
+  flex: 1;
+  margin: 0;
+  padding: 0;
+  outline: none;
+  border: 0;
+  accent-color: var(--primary);
+  background: linear-gradient(
+      color-mix(in srgb, var(--foreground) 7%, transparent),
+      color-mix(in srgb, var(--foreground) 7%, transparent)
+    )
+    center / 100% 2px no-repeat;
+}
+
+.form-range::-webkit-slider-runnable-track {
+  height: 28px;
+  background: transparent;
+}
+
+.form-range::-webkit-slider-thumb {
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  margin-top: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: light-dark(var(--primary-foreground), var(--foreground));
+}
+
+.form-range:focus-visible::-webkit-slider-thumb {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-range::-moz-range-track {
+  height: 28px;
+  background: transparent;
+}
+
+.form-range::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: light-dark(var(--primary-foreground), var(--foreground));
+}
+
+.form-range:focus-visible::-moz-range-thumb {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-range:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.btn:not(.btn-primary, .viz-tile):is(
+    [aria-pressed="true"],
+    [aria-selected="true"],
+    .is-selected
+  ) {
+  border-color: var(--primary);
+  color: var(--primary-foreground);
+  background: var(--primary);
+}
+
+.btn.viz-tile:is([aria-pressed="true"], [aria-selected="true"], .is-selected) {
+  border-color: var(--primary);
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+#widget > svg {
+  width: 100%;
+}
+
+.text-warning,
+.text-destructive {
+  color: var(--destructive);
+}
+
+html>body{padding:0}</style>
+</head>
+<body>
+<section id="agentic-rag-workflow" aria-label="Hybrid Agentic RAG 실행 흐름">
+  <style>
+    #agentic-rag-workflow {
+      color: var(--foreground);
+      display: grid;
+      gap: 1rem;
+      min-width: 0;
+    }
+
+    #agentic-rag-workflow .viz-controls {
+      justify-content: flex-start;
+    }
+
+    #agentic-rag-workflow .rag-step-button {
+      font-variant-numeric: tabular-nums;
+    }
+
+    #agentic-rag-workflow .rag-step-button[aria-pressed="true"]::after {
+      content: " · 현재";
+    }
+
+    #agentic-rag-workflow .rag-graph-wrap {
+      min-width: 0;
+      max-width: 100%;
+      overflow-x: auto;
+      overscroll-behavior-inline: contain;
+    }
+
+    #agentic-rag-workflow .rag-graph {
+      display: block;
+      width: 100%;
+      height: auto;
+      color: var(--foreground);
+      overflow: visible;
+    }
+
+    #agentic-rag-workflow .rag-edge {
+      fill: none;
+      stroke: var(--border);
+      stroke-width: 1.5;
+      vector-effect: non-scaling-stroke;
+      transition: stroke 160ms ease, opacity 160ms ease;
+    }
+
+    #agentic-rag-workflow .rag-edge.is-traversed {
+      stroke: var(--viz-series-1);
+      opacity: .52;
+    }
+
+    #agentic-rag-workflow .rag-edge.is-active {
+      stroke: var(--viz-series-1);
+      stroke-width: 2.5;
+      stroke-dasharray: 4 7;
+      animation: rag-signal 900ms linear infinite;
+      opacity: 1;
+    }
+
+    #agentic-rag-workflow .rag-edge.rag-retry.is-traversed,
+    #agentic-rag-workflow .rag-edge.rag-retry.is-active {
+      stroke: var(--viz-series-2);
+    }
+
+    #agentic-rag-workflow .rag-edge.rag-validation.is-traversed,
+    #agentic-rag-workflow .rag-edge.rag-validation.is-active {
+      stroke: var(--viz-series-3);
+    }
+
+    #agentic-rag-workflow .rag-node rect,
+    #agentic-rag-workflow .rag-node circle {
+      fill: var(--muted);
+      stroke: var(--border);
+      stroke-width: 1.5;
+      vector-effect: non-scaling-stroke;
+      transition: fill 160ms ease, stroke 160ms ease;
+    }
+
+    #agentic-rag-workflow .rag-node text {
+      fill: var(--foreground);
+      font-weight: 400;
+      text-anchor: middle;
+      pointer-events: none;
+    }
+
+    #agentic-rag-workflow .rag-node.is-traversed rect,
+    #agentic-rag-workflow .rag-node.is-traversed circle {
+      fill: color-mix(in srgb, var(--viz-series-1) 10%, var(--muted));
+      stroke: var(--viz-series-1);
+    }
+
+    #agentic-rag-workflow .rag-node.is-active rect,
+    #agentic-rag-workflow .rag-node.is-active circle {
+      fill: color-mix(in srgb, var(--viz-series-1) 20%, var(--card));
+      stroke: var(--viz-series-1);
+      stroke-width: 2.5;
+    }
+
+    #agentic-rag-workflow .rag-node.is-active text {
+      font-weight: 500;
+    }
+
+    #agentic-rag-workflow .rag-node[data-node="start"] circle,
+    #agentic-rag-workflow .rag-node[data-node="end"] circle {
+      fill: var(--background);
+    }
+
+    #agentic-rag-workflow .rag-node.is-terminal circle {
+      fill: var(--primary);
+      stroke: var(--primary);
+      stroke-width: 2.5;
+    }
+
+    #agentic-rag-workflow .rag-node.is-terminal text {
+      fill: var(--primary-foreground);
+      font-weight: 500;
+    }
+
+    #agentic-rag-workflow .rag-edge-label,
+    #agentic-rag-workflow .rag-lane-label {
+      fill: var(--muted-foreground);
+      text-anchor: middle;
+    }
+
+    #agentic-rag-workflow .rag-lane-rule {
+      stroke: var(--border);
+      stroke-width: 1;
+      stroke-dasharray: 2 5;
+      vector-effect: non-scaling-stroke;
+    }
+
+    #agentic-rag-workflow .rag-legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .5rem 1rem;
+      color: var(--muted-foreground);
+    }
+
+    #agentic-rag-workflow .rag-legend-item {
+      display: inline-flex;
+      align-items: center;
+      gap: .4rem;
+    }
+
+    #agentic-rag-workflow .rag-key {
+      display: inline-block;
+      width: 1.4rem;
+      height: 2px;
+      background: var(--border);
+    }
+
+    #agentic-rag-workflow .rag-key-normal {
+      background: var(--viz-series-1);
+    }
+
+    #agentic-rag-workflow .rag-key-retry {
+      background: var(--viz-series-2);
+    }
+
+    #agentic-rag-workflow .rag-key-validation {
+      background: var(--viz-series-3);
+    }
+
+    #agentic-rag-workflow .rag-detail-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: .75rem 1rem;
+      margin-bottom: 1rem;
+    }
+
+    #agentic-rag-workflow .rag-detail-title,
+    #agentic-rag-workflow .rag-detail-kicker,
+    #agentic-rag-workflow .rag-detail-section,
+    #agentic-rag-workflow .rag-detail-copy {
+      margin: 0;
+    }
+
+    #agentic-rag-workflow .rag-detail-kicker,
+    #agentic-rag-workflow .rag-detail-section {
+      color: var(--card-foreground);
+      font-weight: 500;
+    }
+
+    #agentic-rag-workflow .rag-counter-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .5rem;
+      font-variant-numeric: tabular-nums;
+    }
+
+    #agentic-rag-workflow .rag-detail-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 1rem;
+    }
+
+    #agentic-rag-workflow .rag-detail-cell {
+      min-width: 0;
+      border-top: 1px solid var(--border);
+      padding-top: .75rem;
+    }
+
+    #agentic-rag-workflow .rag-detail-copy {
+      margin-top: .35rem;
+      overflow-wrap: anywhere;
+    }
+
+    #agentic-rag-workflow .rag-list {
+      margin: .5rem 0 0;
+      padding-left: 1.1rem;
+    }
+
+    #agentic-rag-workflow .rag-list li + li {
+      margin-top: .3rem;
+    }
+
+    #agentic-rag-workflow .rag-lanes {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: .5rem 1rem;
+      margin-top: 1rem;
+      padding-top: .75rem;
+      border-top: 1px solid var(--border);
+    }
+
+    #agentic-rag-workflow .rag-lane {
+      display: flex;
+      justify-content: space-between;
+      gap: .75rem;
+      min-width: 0;
+    }
+
+    #agentic-rag-workflow .rag-task-id {
+      color: var(--card-foreground);
+    }
+
+    #agentic-rag-workflow .rag-evidence {
+      margin-top: 1rem;
+      padding-top: .75rem;
+      border-top: 1px solid var(--border);
+    }
+
+    #agentic-rag-workflow .rag-final-answer {
+      color: var(--card-foreground);
+      margin: .5rem 0 0;
+    }
+
+    #agentic-rag-workflow .rag-footer {
+      justify-content: space-between;
+    }
+
+    #agentic-rag-workflow .rag-position {
+      color: var(--muted-foreground);
+      font-variant-numeric: tabular-nums;
+    }
+
+    @keyframes rag-signal {
+      to { stroke-dashoffset: -22; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      #agentic-rag-workflow .rag-edge.is-active {
+        animation: none;
+        stroke-dasharray: none;
+      }
+    }
+
+    @media (max-width: 620px) {
+      #agentic-rag-workflow .rag-graph {
+        min-width: 760px;
+      }
+
+      #agentic-rag-workflow .rag-detail-grid,
+      #agentic-rag-workflow .rag-lanes {
+        grid-template-columns: 1fr;
+      }
+
+      #agentic-rag-workflow .rag-annotation {
+        display: none;
+      }
+
+      #agentic-rag-workflow .rag-footer {
+        justify-content: flex-start;
+      }
+    }
+  </style>
+
+  <div class="viz-controls" aria-label="실행 단계 선택"></div>
+
+  <div class="rag-graph-wrap" role="region" aria-label="워크플로 그래프. 좁은 화면에서는 가로로 스크롤하여 전체 노드를 확인할 수 있습니다.">
+    <svg class="rag-graph" viewBox="0 0 980 390" role="img" aria-labelledby="rag-flow-title rag-flow-desc">
+      <title id="rag-flow-title">Hybrid Agentic RAG 워크플로</title>
+      <desc id="rag-flow-desc">질문을 general, statistics, search 경로로 라우팅하고, search 경로에서는 검색·쿼리 재작성·답변 수정 횟수를 제한한 채 계획, 평가, 재검색, 답변 검증 후 종료하는 그래프입니다.</desc>
+
+      <defs>
+        <marker id="rag-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+          <path d="M0,0 L8,4 L0,8 Z" fill="var(--border)"></path>
+        </marker>
+      </defs>
+
+      <g aria-hidden="true">
+        <path class="rag-edge" data-edge="start-router" d="M77 83 H111" marker-end="url(#rag-arrow)"></path>
+        <path class="rag-edge" data-edge="router-plan" d="M211 83 H255" marker-end="url(#rag-arrow)"></path>
+        <path class="rag-edge" data-edge="router-general" d="M161 61 V28 H386" marker-end="url(#rag-arrow)"></path>
+        <path class="rag-edge" data-edge="router-statistics" d="M161 105 V140 H386" marker-end="url(#rag-arrow)"></path>
+        <path class="rag-edge" data-edge="plan-execute" d="M375 83 H419" marker-end="url(#rag-arrow)"></path>
+        <path class="rag-edge" data-edge="execute-grade" d="M539 83 H583" marker-end="url(#rag-arrow)"></path>
+        <path class="rag-edge rag-retry" data-edge="grade-rewrite" d="M643 105 V168" marker-end="url(#rag-arrow)"></path>
+        <path class="rag-edge rag-retry" data-edge="rewrite-execute" d="M583 190 H479 V105" marker-end="url(#rag-arrow)"></path>
+        <path class="rag-edge" data-edge="grade-limited" d="M703 83 H744 V190 H785" marker-end="url(#rag-arrow)"></path>
+        <path class="rag-edge" data-edge="grade-answer" d="M703 83 H747" marker-end="url(#rag-arrow)"></path>
+        <path class="rag-edge" data-edge="general-answer" d="M446 28 H807 V61" marker-end="url(#rag-arrow)"></path>
+        <path class="rag-edge" data-edge="statistics-answer" d="M446 140 H747 V105" marker-end="url(#rag-arrow)"></path>
+        <path class="rag-edge rag-validation" data-edge="answer-evaluate" d="M867 83 H911 V252 H867" marker-end="url(#rag-arrow)"></path>
+        <path class="rag-edge rag-validation" data-edge="limited-evaluate" d="M845 212 V230" marker-end="url(#rag-arrow)"></path>
+        <path class="rag-edge rag-validation" data-edge="evaluate-revise" d="M785 252 H747" marker-end="url(#rag-arrow)"></path>
+        <path class="rag-edge rag-validation" data-edge="revise-evaluate" d="M687 274 V308 H845 V274" marker-end="url(#rag-arrow)"></path>
+        <path class="rag-edge rag-retry" data-edge="evaluate-rewrite" d="M785 252 H643 V212" marker-end="url(#rag-arrow)"></path>
+        <path class="rag-edge rag-validation" data-edge="evaluate-finalize" d="M845 274 V334 H703" marker-end="url(#rag-arrow)"></path>
+        <path class="rag-edge" data-edge="finalize-end" d="M583 334 H536" marker-end="url(#rag-arrow)"></path>
+      </g>
+
+      <g class="rag-node" data-node="start" transform="translate(37 64)">
+        <circle cx="20" cy="19" r="19"></circle><text x="20" y="23">START</text>
+      </g>
+      <g class="rag-node" data-node="router" transform="translate(111 61)">
+        <rect width="100" height="44" rx="8"></rect><text x="50" y="27">router</text>
+      </g>
+      <g class="rag-node" data-node="general" transform="translate(386 6)">
+        <rect width="120" height="44" rx="8"></rect><text x="60" y="27">general answer</text>
+      </g>
+      <g class="rag-node" data-node="statistics" transform="translate(386 118)">
+        <rect width="120" height="44" rx="8"></rect><text x="60" y="27">statistics</text>
+      </g>
+      <g class="rag-node" data-node="plan" transform="translate(255 61)">
+        <rect width="120" height="44" rx="8"></rect><text x="60" y="27">plan retrieval</text>
+      </g>
+      <g class="rag-node" data-node="execute" transform="translate(419 61)">
+        <rect width="120" height="44" rx="8"></rect><text x="60" y="27">execute searches</text>
+      </g>
+      <g class="rag-node" data-node="grade" transform="translate(583 61)">
+        <rect width="120" height="44" rx="8"></rect><text x="60" y="27">grade retrieval</text>
+      </g>
+      <g class="rag-node" data-node="rewrite" transform="translate(583 168)">
+        <rect width="120" height="44" rx="8"></rect><text x="60" y="27">rewrite query</text>
+      </g>
+      <g class="rag-node" data-node="limited" transform="translate(785 168)">
+        <rect width="120" height="44" rx="8"></rect><text x="60" y="27">limited answer</text>
+      </g>
+      <g class="rag-node" data-node="answer" transform="translate(747 61)">
+        <rect width="120" height="44" rx="8"></rect><text x="60" y="27">generate answer</text>
+      </g>
+      <g class="rag-node" data-node="evaluate" transform="translate(785 230)">
+        <rect width="120" height="44" rx="8"></rect><text x="60" y="27">evaluate answer</text>
+      </g>
+      <g class="rag-node" data-node="revise" transform="translate(627 230)">
+        <rect width="120" height="44" rx="8"></rect><text x="60" y="27">revise answer</text>
+      </g>
+      <g class="rag-node" data-node="finalize" transform="translate(583 312)">
+        <rect width="120" height="44" rx="8"></rect><text x="60" y="27">finalize</text>
+      </g>
+      <g class="rag-node" data-node="end" transform="translate(476 315)">
+        <circle cx="20" cy="19" r="19"></circle><text x="20" y="23">END</text>
+      </g>
+
+      <g class="rag-annotation" aria-hidden="true">
+        <text class="rag-edge-label" x="285" y="20">general</text>
+        <text class="rag-edge-label" x="278" y="136">statistics</text>
+        <text class="rag-edge-label" x="234" y="75">search</text>
+        <text class="rag-edge-label" x="651" y="132">insufficient</text>
+        <text class="rag-edge-label" x="740" y="76">sufficient</text>
+        <text class="rag-edge-label" x="744" y="246">fail</text>
+        <text class="rag-edge-label" x="756" y="329">pass</text>
+        <line class="rag-lane-rule" x1="255" y1="372" x2="905" y2="372"></line>
+        <text class="rag-lane-label" x="580" y="386">bounded loops · search ≤ 2 · rewrite ≤ 2 · answer revision ≤ 1</text>
+      </g>
+    </svg>
+  </div>
+
+  <div class="rag-legend text-small" aria-label="선 종류 범례">
+    <span class="rag-legend-item"><span class="rag-key rag-key-normal" aria-hidden="true"></span>일반 흐름</span>
+    <span class="rag-legend-item"><span class="rag-key" aria-hidden="true"></span>조건 분기</span>
+    <span class="rag-legend-item"><span class="rag-key rag-key-retry" aria-hidden="true"></span>재시도</span>
+    <span class="rag-legend-item"><span class="rag-key rag-key-validation" aria-hidden="true"></span>답변 검증</span>
+    <span class="viz-badge">MAX_SEARCH_ATTEMPTS=2 · MAX_QUERY_REWRITES=2 · MAX_ANSWER_REVISIONS=1</span>
+  </div>
+
+  <div id="rag-step-detail" class="card" aria-live="polite"></div>
+
+  <div class="viz-row rag-footer" aria-label="단계 이동">
+    <button type="button" class="btn" id="rag-prev">이전</button>
+    <span id="rag-position" class="rag-position" aria-live="polite"></span>
+    <button type="button" class="btn btn-primary" id="rag-next">다음</button>
+  </div>
+
+  <script>
+    (() => {
+      const root = document.getElementById("agentic-rag-workflow");
+      if (!root) return;
+
+      const steps = [
+        {
+          id: "route", node: "router", edge: "start-router", title: "1. 질문 분석 및 라우팅", decision: "search", counters: { search: 0, rewrite: 0, revision: 0 },
+          input: "최근 4주간 PROCESS팀과 YIELD팀의 수율 이슈를 비교하고 공통 원인을 알려줘.",
+          action: "검색이 필요한 비교 질문으로 분류하고 명시된 4주 조건을 보존합니다.",
+          output: "route=search · team=[PROCESS, YIELD] · week=2026-25…2026-28",
+          state: "route, team, week 초기화"
+        },
+        {
+          id: "plan", node: "plan", edge: "router-plan", title: "2. 검색 계획", decision: "comparison · mail + wiki", counters: { search: 0, rewrite: 0, revision: 0 },
+          input: "route=search · 두 팀 · 4개 주차",
+          action: "비교 의도를 확인하고 메일·위키를 선택하며 hybrid 검색 가중치와 허용 필터를 고정합니다.",
+          output: "intent=comparison · selected_sources=[mail, wiki]",
+          state: "intent, selected_sources, team/week filters 추가"
+        },
+        {
+          id: "decompose", node: "plan", edge: "router-plan", title: "3. 복합 질문 분해", decision: "5 sub-questions", counters: { search: 0, rewrite: 0, revision: 0 },
+          input: "comparison · PROCESS/YIELD · 2026-25…28",
+          action: "팀별 이슈, 주차 변화, 공통 원인, 비교 종합으로 검색 의도를 분해합니다.",
+          output: "sub_questions=5",
+          state: "분해된 질문과 비교 synthesis 의도 저장",
+          tasks: [
+            "PROCESS팀 수율 이슈 · 2026-25…28",
+            "YIELD팀 수율 이슈 · 2026-25…28",
+            "두 팀의 주차별 변화",
+            "반복되는 공통 원인",
+            "근거 기반 비교 종합"
+          ]
+        },
+        {
+          id: "search-1", node: "execute", edge: "plan-execute", title: "4. 병렬 검색", decision: "12 bounded source tasks", counters: { search: 1, rewrite: 0, revision: 0 },
+          input: "build_search_tasks(sub_questions) · ordered cap=12",
+          action: "팀별 질문을 먼저 mail/wiki로 만들고, 일반 질문은 PROCESS mail/wiki 다음 YIELD mail/wiki 순서로 확장해 최대 12개를 실행합니다.",
+          output: "mail 6 hits · wiki 8 hits · raw results=14",
+          state: "search_attempts=1 · MAX_PARALLEL_SEARCH_TASKS=12 · 5번째 비교 종합 질문은 synthesis에 남지만 별도 검색은 cap 이후라 생성하지 않음",
+          tasks: [
+            "1. PROCESS팀 이슈 · mail",
+            "2. PROCESS팀 이슈 · wiki",
+            "3. YIELD팀 이슈 · mail",
+            "4. YIELD팀 이슈 · wiki",
+            "5. 주차별 변화 · PROCESS · mail",
+            "6. 주차별 변화 · PROCESS · wiki",
+            "7. 주차별 변화 · YIELD · mail",
+            "8. 주차별 변화 · YIELD · wiki",
+            "9. 공통 원인 · PROCESS · mail",
+            "10. 공통 원인 · PROCESS · wiki",
+            "11. 공통 원인 · YIELD · mail",
+            "12. 공통 원인 · YIELD · wiki"
+          ]
+        },
+        {
+          id: "rerank-1", node: "execute", edge: "plan-execute", title: "5. 중복 제거 및 리랭킹", decision: "14 → 8 documents · S1…S8", counters: { search: 1, rewrite: 0, revision: 0 },
+          input: "raw results=14",
+          action: "청크를 정규화하고 중복 6개를 제거한 뒤 소스·어휘·팀·주차 점수로 재정렬합니다.",
+          output: "selected=8 · citation_ids=[S1…S8]",
+          state: "result_count=14 · duplicate_count=6 · selected_count=8",
+          evidence: [
+            "[S1] PROCESS팀 4주 이슈 요약",
+            "[S3] YIELD팀 2026-25·26·28 근거",
+            "[S6] 두 팀 공통 공정 편차 요약"
+          ]
+        },
+        {
+          id: "grade-1", node: "grade", edge: "execute-grade", title: "6. 검색 충분성 평가", decision: "insufficient · YIELD팀 2026-27 근거 부족", counters: { search: 1, rewrite: 0, revision: 0 },
+          input: "8 selected documents · S1…S8",
+          action: "요청한 팀과 모든 주차의 관련성·커버리지를 검사합니다.",
+          output: "retrieval_grade=insufficient",
+          state: "missing_information=[YIELD팀 2026-27 수율 이슈 근거]"
+        },
+        {
+          id: "rewrite", node: "rewrite", edge: "grade-rewrite", title: "7. 부족 정보 중심 재작성", decision: "append absent token: 2026-27", counters: { search: 1, rewrite: 1, revision: 0 },
+          input: "missing_information=YIELD팀 2026-27",
+          action: "기존 쿼리의 YIELD팀은 유지하고, missing_information 중 기존 쿼리에 없는 토큰 2026-27만 뒤에 추가합니다.",
+          output: "rewritten_query=최근 4주간 PROCESS팀과 YIELD팀의 수율 이슈를 비교하고 공통 원인을 알려줘. 2026-27",
+          state: "rewrite_count=1 · prior evidence 유지"
+        },
+        {
+          id: "search-2", node: "execute", edge: "rewrite-execute", title: "8. 추가 검색·병합·재평가", decision: "4 deduplicated retry tasks · sufficient", counters: { search: 2, rewrite: 1, revision: 0 },
+          input: "rewritten full query replaces sub_questions",
+          action: "재작성된 전체 쿼리로 sub_questions를 교체하고 허용된 PROCESS·YIELD 각각을 mail/wiki로 확장한 뒤, 정확히 같은 실행 검색 키를 중복 제거해 4개 작업을 검색합니다.",
+          output: "retrieval_grade=sufficient · selected citations stable",
+          state: "search_attempts=2/2 · rewrite_count=1/2 · executed_search_keys deduplicated · missing_information=[]",
+          evidence: [
+            "retry 1 · PROCESS · mail · rewritten full query",
+            "retry 2 · PROCESS · wiki · rewritten full query",
+            "retry 3 · YIELD · mail · rewritten full query",
+            "retry 4 · YIELD · wiki · rewritten full query"
+          ]
+        },
+        {
+          id: "answer", node: "answer", edge: "grade-answer", title: "9. 근거 기반 초안 생성", decision: "S1, S3, S6 citations", counters: { search: 2, rewrite: 1, revision: 0 },
+          input: "coverage 통과한 선택 문서",
+          action: "선택된 문맥 안의 사실만 사용해 팀별 차이와 공통 원인을 인용과 함께 작성합니다.",
+          output: "draft_answer with [S1], [S3], [S6]",
+          state: "final_answer 초안 · limited_answer=false"
+        },
+        {
+          id: "evaluate", node: "evaluate", edge: "answer-evaluate", title: "10. 답변 검증", decision: "fail · unsupported number", counters: { search: 2, rewrite: 1, revision: 0 },
+          input: "인용이 포함된 초안",
+          action: "각 주장과 인용을 대조해 근거성, 완결성, 인용 유효성을 평가합니다.",
+          output: "fail · ‘12.4%’ 수치는 선택 근거에서 확인되지 않음",
+          state: "unsupported_claims=[12.4%] · missing_answers=[] · citation_valid=true"
+        },
+        {
+          id: "revise", node: "revise", edge: "evaluate-revise", title: "11. 답변 1회 수정", decision: "remove unsupported 12.4%", counters: { search: 2, rewrite: 1, revision: 1 },
+          input: "unsupported_claims=[12.4%]",
+          action: "지원되지 않은 수치만 제거하고 근거가 있는 팀·주차·이슈·공통 원인 문장은 유지합니다.",
+          output: "revised_answer · supported claims only",
+          state: "answer_revision_count=1/1 · unsupported_claims=[]"
+        },
+        {
+          id: "finalize", node: "finalize", edge: "evaluate-finalize", title: "12. 검증 통과 및 종료", decision: "grounded · complete · citations valid", counters: { search: 2, rewrite: 1, revision: 1 },
+          input: "1회 수정된 답변",
+          action: "근거성·완결성·인용 유효성이 기준을 통과해 답변을 확정합니다.",
+          output: "groundedness=0.94 · completeness=1.00 · citation_valid=true",
+          state: "search_attempts=2/2 · rewrite_count=1/2 · answer_revision_count=1/1 · END",
+          evidence: [
+            "예시 답변 — 실제 OpenSearch 결과가 아닌 설명용 실행 trace",
+            "PROCESS팀은 4주 동안 설비 조건 편차가 반복됐고 [S1], YIELD팀은 2026-27을 포함해 소재·조건 변경 영향이 확인됩니다 [S3]. 두 팀의 공통 원인은 변경 조건의 사전 검증과 추적 부족입니다 [S6]."
+          ]
+        }
+      ];
+
+      let currentStep = 0;
+      const controls = root.querySelector(".viz-controls");
+      const detail = root.querySelector("#rag-step-detail");
+      const previousButton = root.querySelector("#rag-prev");
+      const nextButton = root.querySelector("#rag-next");
+      const position = root.querySelector("#rag-position");
+      const stepButtons = [];
+
+      function appendText(parent, tagName, className, text) {
+        const element = document.createElement(tagName);
+        if (className) element.className = className;
+        element.textContent = text;
+        parent.appendChild(element);
+        return element;
+      }
+
+      function appendList(parent, items, label) {
+        if (!items || !items.length) return;
+        appendText(parent, "p", "rag-detail-section", label);
+        const list = document.createElement("ul");
+        list.className = "rag-list";
+        items.forEach((item) => appendText(list, "li", "", item));
+        parent.appendChild(list);
+      }
+
+      function renderDetail(step) {
+        detail.replaceChildren();
+        const header = document.createElement("div");
+        header.className = "rag-detail-head";
+        const heading = document.createElement("div");
+        appendText(heading, "p", "rag-detail-kicker text-small", "ILLUSTRATIVE TRACE · LIVE OPENSEARCH 아님");
+        appendText(heading, "h3", "rag-detail-title", step.title);
+        header.appendChild(heading);
+
+        const counters = document.createElement("div");
+        counters.className = "rag-counter-row";
+        [
+          `search ${step.counters.search}/2`,
+          `rewrite ${step.counters.rewrite}/2`,
+          `revision ${step.counters.revision}/1`
+        ].forEach((value) => appendText(counters, "span", "viz-badge", value));
+        header.appendChild(counters);
+        detail.appendChild(header);
+
+        const grid = document.createElement("div");
+        grid.className = "rag-detail-grid";
+        [
+          ["입력 상태", step.input],
+          ["판단 · 행동", `${step.decision} — ${step.action}`],
+          ["출력", step.output],
+          ["GraphState", step.state]
+        ].forEach(([label, value]) => {
+          const cell = document.createElement("div");
+          cell.className = "rag-detail-cell";
+          appendText(cell, "p", "rag-detail-section text-small", label);
+          appendText(cell, "p", "rag-detail-copy", value);
+          grid.appendChild(cell);
+        });
+        detail.appendChild(grid);
+
+        if (step.tasks && step.id === "search-1") {
+          const lanes = document.createElement("div");
+          lanes.className = "rag-lanes";
+          step.tasks.forEach((task, index) => {
+            const lane = document.createElement("div");
+            lane.className = "rag-lane";
+            appendText(lane, "span", "", task);
+            appendText(lane, "span", "rag-task-id text-small", `T${index + 1}`);
+            lanes.appendChild(lane);
+          });
+          detail.appendChild(lanes);
+        } else if (step.tasks) {
+          const tasks = document.createElement("div");
+          tasks.className = "rag-evidence";
+          appendList(tasks, step.tasks, "분해된 검색 의도");
+          detail.appendChild(tasks);
+        }
+
+        if (step.evidence) {
+          const evidence = document.createElement("div");
+          evidence.className = "rag-evidence";
+          appendList(evidence, step.evidence, step.id === "finalize" ? "최종 답변 · 설명용 예시" : "선택 근거 요약");
+          detail.appendChild(evidence);
+        }
+      }
+
+      function renderStep(index) {
+        currentStep = Math.max(0, Math.min(steps.length - 1, index));
+        const step = steps[currentStep];
+
+        stepButtons.forEach((button, buttonIndex) => {
+          button.setAttribute("aria-pressed", String(buttonIndex === currentStep));
+        });
+
+        root.querySelectorAll("[data-node], [data-edge]").forEach((element) => {
+          element.classList.remove("is-active", "is-traversed", "is-terminal");
+        });
+
+        steps.slice(0, currentStep).forEach((priorStep) => {
+          const priorNode = root.querySelector(`[data-node="${priorStep.node}"]`);
+          const priorEdge = root.querySelector(`[data-edge="${priorStep.edge}"]`);
+          if (priorNode) priorNode.classList.add("is-traversed");
+          if (priorEdge) priorEdge.classList.add("is-traversed");
+        });
+
+        const activeNode = root.querySelector(`[data-node="${step.node}"]`);
+        const activeEdge = root.querySelector(`[data-edge="${step.edge}"]`);
+        if (activeNode) activeNode.classList.add("is-active");
+        if (activeEdge) activeEdge.classList.add("is-active");
+
+        if (currentStep === steps.length - 1) {
+          const revisionReturn = root.querySelector('[data-edge="revise-evaluate"]');
+          const terminalEdge = root.querySelector('[data-edge="finalize-end"]');
+          const terminalNode = root.querySelector('[data-node="end"]');
+          if (revisionReturn) revisionReturn.classList.add("is-traversed");
+          if (terminalEdge) terminalEdge.classList.add("is-traversed");
+          if (terminalNode) terminalNode.classList.add("is-terminal");
+        }
+
+        renderDetail(step);
+        previousButton.disabled = currentStep === 0;
+        nextButton.disabled = currentStep === steps.length - 1;
+        position.textContent = `${currentStep + 1} / ${steps.length}`;
+      }
+
+      steps.forEach((step, index) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "btn rag-step-button";
+        button.textContent = String(index + 1);
+        button.setAttribute("aria-label", step.title);
+        button.addEventListener("click", () => renderStep(index));
+        controls.appendChild(button);
+        stepButtons.push(button);
+      });
+
+      previousButton.addEventListener("click", () => renderStep(currentStep - 1));
+      nextButton.addEventListener("click", () => renderStep(currentStep + 1));
+      renderStep(0);
+
+      root.steps = steps;
+      root.renderStep = renderStep;
+    })();
+  </script>
+</section>
+
+
+</body>
+</html>

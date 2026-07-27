@@ -291,6 +291,13 @@ def call_chat_v2(
         return {"ok": False, "error": str(e)}
 
 
+def retain_server_conversation_id(data: Dict[str, Any]) -> None:
+    """Retain the canonical conversation ID returned by the API."""
+    conversation_id = data.get("conversation_id")
+    if conversation_id:
+        st.session_state.conversation_id = conversation_id
+
+
 # ==================== 사이드바 ====================
 def render_sidebar():
     with st.sidebar:
@@ -562,6 +569,7 @@ def main():
 
             if result["ok"]:
                 data = result["data"]
+                retain_server_conversation_id(data)
                 answer = data.get("answer", "답변을 생성하지 못했습니다.")
                 tool_calls = data.get("tool_calls", [])
                 tool_results = data.get("tool_results", [])

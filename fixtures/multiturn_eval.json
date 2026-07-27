@@ -1,0 +1,120 @@
+[
+  {
+    "id": "refine_inherits_context",
+    "tags": ["refine", "inherited_filters"],
+    "question": "더 자세히 알려줘",
+    "memory": {"active_topic": "수율 이슈", "standalone_question": "YIELD팀 수율 이슈", "search_query": "YIELD팀 수율 이슈", "route": "search", "teams": ["YIELD팀"], "weeks": ["2026-28"], "mail_type": "weekly_report"},
+    "expected": {"follow_up_type": "refine", "route": "search", "teams": ["YIELD팀"], "weeks": ["2026-28"], "mail_type": "weekly_report"}
+  },
+  {
+    "id": "continue_keeps_search",
+    "tags": ["continue"],
+    "question": "계속",
+    "memory": {"standalone_question": "PROCESS팀 particle 이슈", "search_query": "PROCESS팀 particle 이슈", "route": "search", "teams": ["PROCESS팀"]},
+    "expected": {"follow_up_type": "continue", "route": "search", "teams": ["PROCESS팀"]}
+  },
+  {
+    "id": "evidence_with_snapshot",
+    "tags": ["evidence", "evidence_present"],
+    "question": "그 근거를 보여줘",
+    "memory": {"standalone_question": "YIELD팀 수율 이슈", "route": "search", "teams": ["YIELD팀"], "cited_evidence": [{"document_id": "mail:yield-1:0", "source_type": "mail", "snippet": "수율 저하 근거"}]},
+    "expected": {"follow_up_type": "evidence", "route": "search"},
+    "expected_next_route": "restore_prior_evidence"
+  },
+  {
+    "id": "evidence_without_snapshot",
+    "tags": ["evidence", "evidence_absent"],
+    "question": "출처만 다시 알려줘",
+    "memory": {"standalone_question": "YIELD팀 수율 이슈", "route": "search", "teams": ["YIELD팀"]},
+    "expected": {"follow_up_type": "evidence", "route": "search"},
+    "expected_next_route": "router"
+  },
+  {
+    "id": "compare_follow_up",
+    "tags": ["compare"],
+    "question": "지난 답변과 비교해줘",
+    "memory": {"standalone_question": "PROCESS팀 수율 이슈", "route": "search", "teams": ["PROCESS팀"], "weeks": ["2026-27"]},
+    "expected": {"follow_up_type": "compare", "teams": ["PROCESS팀"], "weeks": ["2026-27"]}
+  },
+  {
+    "id": "expand_follow_up",
+    "tags": ["expand"],
+    "question": "다른 팀도 알려줘",
+    "memory": {"standalone_question": "PROCESS팀 수율 이슈", "route": "search", "teams": ["PROCESS팀"]},
+    "expected": {"follow_up_type": "expand", "route": "search", "teams": ["PROCESS팀"]}
+  },
+  {
+    "id": "explicit_team_override",
+    "tags": ["compare", "explicit_team_override"],
+    "question": "YIELD팀과 비교해줘",
+    "memory": {"standalone_question": "PROCESS팀 수율 이슈", "route": "search", "teams": ["PROCESS팀"], "weeks": ["2026-28"]},
+    "expected": {"follow_up_type": "compare", "teams": ["PROCESS팀", "YIELD팀"], "weeks": ["2026-28"]}
+  },
+  {
+    "id": "explicit_week_override",
+    "tags": ["refine", "explicit_week_override"],
+    "question": "2026-29로 다시 알려줘",
+    "memory": {"standalone_question": "YIELD팀 수율 이슈", "route": "search", "teams": ["YIELD팀"], "weeks": ["2026-28"]},
+    "expected": {"follow_up_type": "refine", "teams": ["YIELD팀"], "weeks": ["2026-29"]}
+  },
+  {
+    "id": "new_topic_resets_filters",
+    "tags": ["new_topic_reset", "topic_switch"],
+    "question": "ALD 공정 원리를 알려줘",
+    "memory": {"active_topic": "수율 이슈", "route": "search", "teams": ["YIELD팀"], "weeks": ["2026-28"], "mail_type": "weekly_report"},
+    "expected": {"follow_up_type": "new_topic", "route": "search", "teams": [], "weeks": [], "mail_type": null}
+  },
+  {
+    "id": "greeting_then_pronoun_clarifies",
+    "tags": ["greeting_pronoun_clarification"],
+    "question": "그 팀은?",
+    "history": [{"role": "user", "content": "안녕하세요"}, {"role": "assistant", "content": "무엇을 도와드릴까요?"}],
+    "memory": {},
+    "expected": {"follow_up_type": "clarify", "route": "clarify", "teams": [], "weeks": []},
+    "expected_next_route": "finalize"
+  },
+  {
+    "id": "statistics_continuation",
+    "tags": ["statistics_continuation", "continue"],
+    "question": "계속해줘",
+    "memory": {"standalone_question": "이번 주 팀별 보고서 제출 현황", "route": "statistics"},
+    "expected": {"follow_up_type": "continue", "route": "statistics"}
+  },
+  {
+    "id": "statistics_topic_switch",
+    "tags": ["topic_switch"],
+    "question": "이번 주 미제출 팀은 몇 개야?",
+    "memory": {"standalone_question": "YIELD팀 수율 이슈", "route": "search", "teams": ["YIELD팀"], "weeks": ["2026-28"]},
+    "expected": {"follow_up_type": "new_topic", "route": "statistics", "teams": [], "weeks": []}
+  },
+  {
+    "id": "explicit_two_team_new_comparison",
+    "tags": ["compare", "new_topic_reset"],
+    "question": "PROCESS팀과 YIELD팀 수율을 비교해줘",
+    "memory": {},
+    "expected": {"follow_up_type": "new_topic", "route": "search", "teams": ["PROCESS팀", "YIELD팀"]}
+  },
+  {
+    "id": "history_resolves_refine",
+    "tags": ["refine", "inherited_filters"],
+    "question": "좀 더 구체적으로 알려줘",
+    "history": [{"role": "user", "content": "PROCESS팀 2026-28 수율 이슈"}, {"role": "assistant", "content": "요약 답변"}],
+    "memory": {},
+    "expected": {"follow_up_type": "refine", "route": "search", "teams": ["PROCESS팀"], "weeks": ["2026-28"]}
+  },
+  {
+    "id": "evidence_without_any_context_clarifies",
+    "tags": ["evidence", "evidence_absent", "greeting_pronoun_clarification"],
+    "question": "그 인용을 보여줘",
+    "memory": {},
+    "expected": {"follow_up_type": "clarify", "route": "clarify"},
+    "expected_next_route": "finalize"
+  },
+  {
+    "id": "daily_report_override",
+    "tags": ["refine", "inherited_filters"],
+    "question": "데일리 보고서로 다시 알려줘",
+    "memory": {"standalone_question": "YIELD팀 수율 이슈", "route": "search", "teams": ["YIELD팀"], "mail_type": "weekly_report"},
+    "expected": {"follow_up_type": "refine", "route": "search", "teams": ["YIELD팀"], "mail_type": "daily_report"}
+  }
+]
