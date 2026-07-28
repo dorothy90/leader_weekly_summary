@@ -16,44 +16,41 @@
 
 ## 구현 접근 비교
 
-### 1. 독립 Streamlit 페이지 — 선택
+### 1. 독립 React + Vite SPA — 선택
 
-`streamlit_mail_setup.py`를 별도 실행 화면으로 만든다. 기존 RAG 채팅 앱을 변경하지 않아 회귀 위험이 작고, 더미 UX를 빠르게 검증할 수 있다. 향후 Streamlit multipage 앱의 설정 페이지로 이동할 수 있다.
+`frontend/` 아래에 React + Vite + TypeScript SPA를 만든다. 기존 Python RAG 코드와 Streamlit 테스트 화면을 변경하지 않아 회귀 위험이 작고, 실제 웹 프론트엔드와 동일한 상호작용을 검증할 수 있다. 향후 API base URL만 연결해 별도 프론트엔드로 배포할 수 있다.
 
-### 2. 기존 채팅 사이드바에 포함
+### 2. 기존 Streamlit 화면에 포함
 
 파일 수는 줄지만 인증, 폴더 선택, RAG 필터가 한 화면에 섞여 복잡해진다. 채팅 사용자가 설정 폼을 반복해서 보게 되므로 이번 범위에서는 제외한다.
 
-### 3. 완전한 설정 대시보드
+### 3. 순수 HTML/CSS 목업
 
-동기화 상태와 인덱싱 작업까지 확장하기 좋지만 현재 더미 UI 검증 범위를 넘는다. 실제 백엔드 연결 단계에서 필요성을 다시 판단한다.
+초기 구현은 빠르지만 상태 관리, 폼 검증, 이후 API 연동을 다시 작성해야 한다. 더미 화면 이후 실제 기능으로 발전시키기 어려워 제외한다.
 
 ## 구성 요소
 
-### `mail_source_service.py`
+### `frontend/src/services/mailSourceService.ts`
 
 UI와 실제 Exchange 구현 사이의 경계를 제공한다.
 
 - `MailFolder`: 폴더 ID, 표시 이름, 경로, 항목 수, 기본 선택 여부
 - `SavedMailSource`: 사용자 표시 ID와 선택된 폴더 ID 목록
-- `DummyMailSourceService.connect(user_id, password)`: 검증된 더미 폴더 목록 반환
-- `DummyMailSourceService.save_selection(user_id, folder_ids)`: 선택값을 저장소에 기록
-- 인메모리 저장소: Streamlit 세션 중 저장 결과 유지
+- `connect(userId, password)`: 검증된 더미 폴더 목록을 Promise로 반환
+- `saveSelection(userId, folderIds)`: 선택값을 검증하고 저장 결과를 Promise로 반환
+- 더미 저장소: 브라우저 `localStorage`에 비밀번호를 제외한 선택 결과만 유지
 
 더미 서비스도 빈 ID/비밀번호, 존재하지 않는 폴더 ID, 선택 항목 없음에 대해 명시적 오류를 반환한다. 이 인터페이스는 이후 EWS 또는 Microsoft Graph 구현과 DB repository로 교체한다.
 
-### `streamlit_mail_setup.py`
+### `frontend/src/App.tsx` 및 UI 컴포넌트
 
-- 페이지 제목과 짧은 설명
-- 2단계 진행 표시기
-- ID/비밀번호 입력 폼
-- 연결 성공/실패 피드백
-- 폴더 이름 검색
-- 폴더별 체크박스와 메일 개수
-- 이전, 저장, 다시 설정 버튼
-- 저장 성공 요약
+- `ConnectionStep`: ID/비밀번호 입력, 필드 검증, 연결 피드백
+- `FolderSelectionStep`: 폴더 검색, 체크박스, 메일 개수, 이전/저장
+- `CompletionState`: 저장된 폴더 요약과 수정 버튼
+- `StepIndicator`: 현재 단계와 완료 단계를 표시
+- `App`: 현재 단계, 연결 결과, 선택 폴더 ID, 저장 완료 상태 관리
 
-Streamlit `session_state`에는 현재 단계, 더미 연결 결과, 선택 폴더 ID, 저장 완료 상태만 둔다. 비밀번호는 연결 호출 이후 상태에 보관하지 않는다.
+React 상태에는 현재 단계, 더미 연결 결과, 선택 폴더 ID, 저장 완료 상태만 둔다. 비밀번호는 연결 호출 직후 입력 상태에서 제거하고 `localStorage` 또는 저장 모델에 포함하지 않는다.
 
 ## 시각 디자인
 
@@ -65,23 +62,24 @@ Streamlit `session_state`에는 현재 단계, 더미 연결 결과, 선택 폴�
 - 시스템 산세리프 글꼴과 작은 음수 자간
 - 장식용 그라데이션, 큰 아이콘, 과도한 배지는 사용하지 않음
 - 데스크톱에서는 중앙 720–820px, 모바일에서는 한 열 전체 폭
+- CSS Modules나 단일 전용 스타일시트로 범위를 격리하며 UI 프레임워크는 추가하지 않음
 
 ## 데이터 흐름
 
 1. 사용자가 ID/비밀번호를 제출한다.
-2. UI가 더미 서비스의 `connect`를 호출한다.
+2. React UI가 더미 서비스의 `connect`를 호출한다.
 3. 서비스가 안정적인 폴더 ID가 포함된 폴더 목록을 반환한다.
 4. UI는 기본 폴더를 선택한 상태로 두 번째 단계로 이동한다.
 5. 사용자가 선택값을 제출한다.
-6. 서비스는 요청된 ID가 반환된 폴더 집합에 속하는지 검증하고 저장한다.
+6. 서비스는 요청된 ID가 반환된 폴더 집합에 속하는지 검증하고 비밀번호 없이 `localStorage`에 저장한다.
 7. UI는 비밀번호 없이 저장 결과를 표시한다.
 
 ## 향후 실제 연동 경계
 
 실제 연동 시 UI를 유지하고 다음 구현만 교체한다.
 
-- `DummyMailSourceService` → `EwsMailSourceService` 또는 `GraphMailSourceService`
-- 인메모리 저장소 → 사용자/메일소스/선택폴더 DB repository
+- 더미 `mailSourceService` → FastAPI 백엔드를 호출하는 HTTP client
+- `localStorage` 저장 → 사용자/메일소스/선택폴더 DB API
 - 더미 폴더 조회 → EWS `FindFolder` 또는 Graph mailFolders 조회
 - 저장 완료 후 → 선택 폴더별 증분 수집 작업 enqueue
 
@@ -101,7 +99,8 @@ DB에는 비밀번호가 아니라 암호화된 자격증명 참조 또는 OAuth
 - 빈 자격증명을 거부하는지 검증
 - 유효한 선택값만 저장하는지 검증
 - 빈 선택 및 알 수 없는 폴더 ID를 거부하는지 검증
-- Streamlit 파일이 컴파일되고 앱이 headless 모드에서 시작되는지 확인
+- Vitest와 React Testing Library로 단계 이동과 폴더 선택/저장 흐름 검증
+- TypeScript typecheck, ESLint, Vite production build 성공 확인
 - 비밀번호가 저장 모델과 화면 결과에 노출되지 않는지 확인
 
 ## 제외 범위
