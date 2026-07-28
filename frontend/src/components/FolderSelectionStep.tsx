@@ -80,7 +80,8 @@ export function FolderSelectionStep({
         <strong>{selectedIds.length}개 선택됨</strong>
       </div>
 
-      <div className="folder-list" role="group" aria-label="Outlook 폴더">
+      <fieldset className="folder-list">
+        <legend className="sr-only">Outlook 폴더</legend>
         {visibleFolders.length > 0 ? (
           visibleFolders.map((folder) => (
             <label className="folder-row" key={folder.id}>
@@ -107,7 +108,7 @@ export function FolderSelectionStep({
             <span>다른 검색어를 입력해 보세요.</span>
           </div>
         )}
-      </div>
+      </fieldset>
 
       {error && (
         <p className="form-message is-error" role="alert">

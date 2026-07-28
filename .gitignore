@@ -126,6 +126,7 @@ data/2025-48/베네피아/.DS_Store
 .superpowers/
 frontend/node_modules/
 frontend/dist/
+frontend/*.tsbuildinfo
 output/layer2_2025-48_20260107_213212.html
 output/layer2_2025-48_20260107_213212.md
 output/layer2_2025-48_20260111_225720.html

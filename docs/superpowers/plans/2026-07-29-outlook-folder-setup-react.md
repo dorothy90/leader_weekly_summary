@@ -98,7 +98,7 @@ Use this package manifest:
     "eslint-plugin-react-hooks": "7.1.1",
     "eslint-plugin-react-refresh": "0.5.3",
     "globals": "17.8.0",
-    "jsdom": "30.0.0",
+    "jsdom": "29.0.0",
     "typescript": "6.0.3",
     "typescript-eslint": "8.65.0",
     "vitest": "4.1.10"
@@ -328,9 +328,9 @@ export class DummyMailSourceService {
 
 - [ ] **Step 6: Run service tests, typecheck, and lint**
 
-Run: `cd frontend && npm test -- src/services/mailSourceService.test.ts && npm run build && npm run lint`
+Run: `cd frontend && npm test -- src/services/mailSourceService.test.ts && npx tsc -p tsconfig.app.json && npm run lint`
 
-Expected: all service tests pass; TypeScript, Vite build, and ESLint exit 0.
+Expected: all service tests pass; TypeScript and ESLint exit 0. The Vite production build runs after Task 2 creates `src/main.tsx`.
 
 - [ ] **Step 7: Commit the foundation**
 

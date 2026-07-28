@@ -62,4 +62,25 @@ describe('Outlook folder setup wizard', () => {
       screen.getByRole('heading', { name: 'Outlook 계정 연결' }),
     ).toBeInTheDocument()
   })
+
+  it('exposes the wizard and folder choices with semantic progress markup', async () => {
+    const user = userEvent.setup()
+    render(<App service={new DummyMailSourceService(window.localStorage)} />)
+
+    expect(screen.getByText('계정 연결').closest('li')).toHaveAttribute(
+      'aria-current',
+      'step',
+    )
+    await user.type(screen.getByLabelText('사용자 ID'), 'user@company.com')
+    await user.type(screen.getByLabelText('비밀번호'), 'dummy')
+    await user.click(screen.getByRole('button', { name: '연결하고 다음' }))
+
+    expect(
+      await screen.findByRole('group', { name: 'Outlook 폴더' }),
+    ).toHaveProperty('tagName', 'FIELDSET')
+    expect(screen.getByText('폴더 선택').closest('li')).toHaveAttribute(
+      'aria-current',
+      'step',
+    )
+  })
 })
