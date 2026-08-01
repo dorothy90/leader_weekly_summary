@@ -1,6 +1,6 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { RagApiClient } from '../../services/ragApiService'
 import type {
@@ -37,6 +37,10 @@ const baseService = (): RagApiClient => ({
   getReadiness: vi.fn().mockResolvedValue(readiness),
 })
 
+afterEach(() => {
+  vi.useRealTimers()
+})
+
 async function submitQuestion(user: ReturnType<typeof userEvent.setup>, mode: 'Fast' | 'Deep') {
   await user.type(screen.getByLabelText('user_id'), 'kim')
   await user.click(screen.getByRole('button', { name: mode }))
@@ -45,6 +49,17 @@ async function submitQuestion(user: ReturnType<typeof userEvent.setup>, mode: 'F
 }
 
 describe('RagLabApp', () => {
+  it('provides explicit mobile panel switching without hiding diagnostics from desktop', async () => {
+    const user = userEvent.setup()
+    render(<RagLabApp service={baseService()} />)
+
+    const nav = screen.getByRole('navigation', { name: '모바일 패널' })
+    await user.click(screen.getByRole('button', { name: '검사기 패널' }))
+
+    expect(nav.parentElement).toHaveAttribute('data-mobile-view', 'inspector')
+    expect(screen.getByLabelText('API 검사기')).toBeInTheDocument()
+  })
+
   it('shows Fast answer, evidence, exact fallback, quality, and exchange diagnostics', async () => {
     const user = userEvent.setup()
     const service = baseService()
@@ -139,6 +154,8 @@ describe('RagLabApp', () => {
     expect(await screen.findByText(/완료된 보고서/)).toBeInTheDocument()
     expect(screen.getByText('100%')).toBeInTheDocument()
     expect(screen.getByText('completed')).toBeInTheDocument()
+    expect(screen.getByText('trace-deep')).toBeInTheDocument()
+    expect(screen.getByText('owner: kim')).toBeInTheDocument()
     await waitFor(() =>
       expect(service.researchAction).toHaveBeenCalledWith('job-1', 'status', 'kim'),
     )
@@ -147,6 +164,192 @@ describe('RagLabApp', () => {
       'kim',
       expect.any(Function),
       expect.any(AbortSignal),
+    )
+  })
+
+  it('reconnects a failed Deep event stream once before polling status', async () => {
+    const user = userEvent.setup()
+    const service = baseService()
+    vi.mocked(service.sendChat).mockResolvedValue(
+      exchange<ChatResponse>(
+        {
+          conversation_id: 'conversation-3',
+          mode: 'deep_research',
+          answer: null,
+          references: [],
+          quality: null,
+          disclosures: [],
+          trace_id: 'trace-reconnect',
+          job_id: 'job-reconnect',
+          status: 'queued',
+          plan_summary: '재연결 검사',
+        },
+        202,
+      ),
+    )
+    vi.mocked(service.streamResearchEvents)
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('stream unavailable'))
+    vi.mocked(service.researchAction).mockResolvedValue(
+      exchange<ResearchJobResponse>({
+        job_id: 'job-reconnect',
+        status: 'running',
+        progress: 20,
+        plan_summary: '재연결 검사',
+        result_markdown: null,
+        references: [],
+        disclosures: [],
+        error_code: null,
+      }),
+    )
+
+    render(<RagLabApp service={service} />)
+    await submitQuestion(user, 'Deep')
+
+    await waitFor(() =>
+      expect(service.streamResearchEvents).toHaveBeenCalledTimes(2),
+    )
+    await user.click(screen.getByRole('tab', { name: 'Events' }))
+    expect(await screen.findByText('SSE 재연결 시도')).toBeInTheDocument()
+    expect(await screen.findByText(/상태 조회로 전환됨/)).toBeInTheDocument()
+  })
+
+  it('shows safe API failures in the result panel as well as the inspector', async () => {
+    const user = userEvent.setup()
+    const service = baseService()
+    vi.mocked(service.sendChat).mockResolvedValue({
+      request: {
+        method: 'POST',
+        path: '/v1/chat',
+        body: { user_id: 'kim', message: '질문', response_mode: 'fast' },
+      },
+      status: 503,
+      durationMs: 12,
+      receivedAt: '2026-08-02T00:00:00Z',
+      error: {
+        code: 'INDEX_UNAVAILABLE',
+        message: '검색 서비스를 현재 사용할 수 없습니다.',
+        retryable: true,
+      },
+    })
+
+    render(<RagLabApp service={service} />)
+    await submitQuestion(user, 'Fast')
+
+    const resultPanel = screen.getByLabelText('대화 및 결과')
+    const resultAlert = await within(resultPanel).findByRole('alert')
+    expect(resultAlert).toHaveTextContent('INDEX_UNAVAILABLE')
+    expect(resultAlert).toHaveTextContent('재시도 가능')
+    const requestForm = screen.getByRole('heading', { name: 'RAG 검증 콘솔' })
+      .closest('form')
+    expect(requestForm).not.toBeNull()
+    expect(within(requestForm!).getByRole('alert')).toHaveTextContent(
+      '검색 서비스를 현재 사용할 수 없습니다.',
+    )
+  })
+
+  it('polls again when the terminal event status fetch is temporarily unavailable', async () => {
+    const user = userEvent.setup()
+    const service = baseService()
+    vi.mocked(service.sendChat).mockResolvedValue(
+      exchange<ChatResponse>(
+        {
+          conversation_id: 'conversation-terminal',
+          mode: 'deep_research',
+          answer: null,
+          references: [],
+          quality: null,
+          disclosures: [],
+          trace_id: 'trace-terminal',
+          job_id: 'job-terminal',
+          status: 'queued',
+          plan_summary: '최종 상태 재시도',
+        },
+        202,
+      ),
+    )
+    vi.mocked(service.streamResearchEvents).mockImplementation(
+      async (_jobId, _userId, onEvent) => {
+        onEvent({ job_id: 'job-terminal', status: 'completed', progress: 100 })
+      },
+    )
+    vi.mocked(service.researchAction)
+      .mockResolvedValueOnce({
+        request: { method: 'POST', path: '/status', body: { user_id: 'kim' } },
+        status: 503,
+        durationMs: 5,
+        receivedAt: '2026-08-02T00:00:00Z',
+        error: { code: 'INDEX_UNAVAILABLE', message: '일시 장애', retryable: true },
+      })
+      .mockResolvedValueOnce(
+        exchange<ResearchJobResponse>({
+          job_id: 'job-terminal',
+          status: 'completed',
+          progress: 100,
+          plan_summary: '최종 상태 재시도',
+          result_markdown: '복구된 보고서',
+          references: [],
+          disclosures: [],
+          error_code: null,
+        }),
+      )
+
+    render(<RagLabApp service={service} pollIntervalMs={1} />)
+    await submitQuestion(user, 'Deep')
+
+    await waitFor(() => expect(service.researchAction).toHaveBeenCalledTimes(2))
+    expect(await screen.findByText('복구된 보고서')).toBeInTheDocument()
+  })
+
+  it('carries the server conversation id into the next turn', async () => {
+    const user = userEvent.setup()
+    const service = baseService()
+    vi.mocked(service.sendChat)
+      .mockResolvedValueOnce(
+        exchange<ChatResponse>({
+          conversation_id: 'conversation-followup',
+          mode: 'fast_rag',
+          answer: '첫 답변',
+          references: [],
+          quality: {
+            citation_valid: true,
+            limited_answer: false,
+            retrieval_mode: 'hybrid',
+          },
+          disclosures: [],
+          trace_id: 'trace-first',
+        }),
+      )
+      .mockResolvedValueOnce(
+        exchange<ChatResponse>({
+          conversation_id: 'conversation-followup',
+          mode: 'fast_rag',
+          answer: '후속 답변',
+          references: [],
+          quality: {
+            citation_valid: true,
+            limited_answer: false,
+            retrieval_mode: 'hybrid',
+          },
+          disclosures: [],
+          trace_id: 'trace-second',
+        }),
+      )
+
+    render(<RagLabApp service={service} />)
+    await submitQuestion(user, 'Fast')
+    await screen.findByText('첫 답변')
+    expect(screen.getByLabelText('conversation_id 선택')).toHaveValue(
+      'conversation-followup',
+    )
+
+    await user.clear(screen.getByLabelText('질문'))
+    await user.type(screen.getByLabelText('질문'), '후속 질문')
+    await user.click(screen.getByRole('button', { name: '실행' }))
+
+    await waitFor(() => expect(service.sendChat).toHaveBeenCalledTimes(2))
+    expect(service.sendChat).toHaveBeenLastCalledWith(
+      expect.objectContaining({ conversation_id: 'conversation-followup' }),
     )
   })
 })

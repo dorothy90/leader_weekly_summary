@@ -79,6 +79,27 @@ Terminate both processes gracefully during deployment. Running jobs are recovere
 
 Set `FAST_DEADLINE_SECONDS` to the synchronous end-to-end Fast RAG deadline. The deadline covers planning, all bounded retrieval rounds, generation, citation validation, and structured claim-support validation; timeout returns a limited response.
 
+## RAG verification console
+
+The existing React/Vite frontend includes a development verification console at `/rag`. It calls the real FastAPI service and displays safe request/response JSON, HTTP status, latency, trace/conversation/job identifiers, citation status, references, disclosures, and Deep job events. It never authenticates callers and is not an authorization boundary; the upstream gateway must still bind the verified principal to request-body `user_id`.
+
+Start the API as shown above, then start the frontend in another terminal:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Open `http://127.0.0.1:5173/rag`. Vite proxies `/api/*` to `http://127.0.0.1:8000` by default. To target another development API without adding permissive CORS middleware:
+
+```bash
+cd frontend
+RAG_API_TARGET=http://127.0.0.1:8010 npm run dev
+```
+
+The console exposes only explicit Fast and Deep choices. It does not use automatic routing or combine the two systems. Runtime counters that are not part of the API response are labeled `서버 미제공`; the UI does not estimate token or search usage. Requests, responses, `user_id`, and event payloads remain in React memory only and are not written to browser storage.
+
 ## Health and recovery
 
 Process liveness:

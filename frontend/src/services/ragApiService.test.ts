@@ -59,7 +59,7 @@ describe('RagApiService', () => {
       filters: {
         teams: ['YIELD'],
         weeks: ['2026-31'],
-        mail_type: 'weekly',
+        mail_type: 'weekly_report',
       },
     })
 
@@ -74,7 +74,7 @@ describe('RagApiService', () => {
           filters: {
             teams: ['YIELD'],
             weeks: ['2026-31'],
-            mail_type: 'weekly',
+            mail_type: 'weekly_report',
           },
         }),
       }),
@@ -144,6 +144,52 @@ describe('RagApiService', () => {
 
     expect(exchange.error?.message).toBe('요청을 처리할 수 없습니다.')
     expect(JSON.stringify(exchange)).not.toContain('/srv/private')
+  })
+
+  it('returns a safe protocol error for a successful malformed response', async () => {
+    fetchMock.mockResolvedValue(
+      new Response('<html>unexpected success</html>', {
+        status: 200,
+        headers: { 'content-type': 'text/html' },
+      }),
+    )
+
+    const exchange = await new RagApiService('/api').getHealth()
+
+    expect(exchange.response).toBeUndefined()
+    expect(exchange.error).toEqual({
+      code: 'INVALID_RESPONSE',
+      message: 'API 응답 형식을 확인할 수 없습니다.',
+      retryable: true,
+    })
+  })
+
+  it('rejects malformed nested references in an otherwise successful chat', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        conversation_id: 'c1',
+        mode: 'fast_rag',
+        answer: '답변',
+        references: [null],
+        quality: {
+          citation_valid: true,
+          limited_answer: false,
+          retrieval_mode: 'hybrid',
+        },
+        disclosures: [],
+        trace_id: 'trace-1',
+      }),
+    )
+
+    const exchange = await new RagApiService('/api').sendChat({
+      user_id: 'kim',
+      message: '질문',
+      response_mode: 'fast',
+      filters: { teams: [], weeks: [] },
+    })
+
+    expect(exchange.response).toBeUndefined()
+    expect(exchange.error?.code).toBe('INVALID_RESPONSE')
   })
 
   it('parses split POST event-stream frames and sends the owner', async () => {

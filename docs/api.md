@@ -28,6 +28,8 @@ Request body:
 
 `response_mode` is `auto`, `fast`, or `deep`. `mail_type` is `weekly_report`, `daily_report`, `other`, or null. Fast RAG returns HTTP 200:
 
+The development RAG verification console always sends `fast` or `deep`; it never sends `auto`. It is available at the Vite frontend's `/rag` path and proxies API calls through `/api`. The console is a QA client, not an authentication or authorization layer.
+
 Fast mode is bounded by `FAST_DEADLINE_SECONDS` end-to-end, including planning, retrieval, generation, citation validation, and claim-support validation. Deadline exhaustion returns a deterministic limited response rather than publishing an ungrounded answer.
 
 ```json

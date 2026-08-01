@@ -10,7 +10,7 @@ export type ResearchStatus =
 export interface RetrievalFilters {
   teams: string[]
   weeks: string[]
-  mail_type?: string
+  mail_type?: 'weekly_report' | 'daily_report' | 'other'
 }
 
 export interface ChatPayload {

@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import type { ApiExchange, ChatResponse, RecordedResearchEvent } from '../types'
 import { InspectorPanel } from '../InspectorPanel'
@@ -41,7 +41,14 @@ const events: RecordedResearchEvent[] = [
 describe('InspectorPanel', () => {
   it('switches between summary, safe JSON, and event diagnostics', async () => {
     const user = userEvent.setup()
-    render(<InspectorPanel exchange={selectedExchange} events={events} />)
+    const copyText = vi.fn().mockResolvedValue(undefined)
+    render(
+      <InspectorPanel
+        exchange={selectedExchange}
+        events={events}
+        copyText={copyText}
+      />,
+    )
 
     expect(screen.getByText('42 ms')).toBeInTheDocument()
     expect(screen.getByText('trace-1')).toBeInTheDocument()
@@ -50,8 +57,14 @@ describe('InspectorPanel', () => {
     expect(screen.getByText(/"user_id": "kim"/)).toBeInTheDocument()
     expect(screen.queryByText(/authorization/i)).not.toBeInTheDocument()
     expect(screen.queryByText(/cookie/i)).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '요청 JSON 복사' }))
+    expect(copyText).toHaveBeenCalledWith(
+      JSON.stringify(selectedExchange.request, null, 2),
+    )
 
-    await user.click(screen.getByRole('tab', { name: 'Events' }))
+    await user.click(screen.getByRole('tab', { name: 'JSON' }))
+    await user.keyboard('{ArrowRight}')
+    expect(screen.getByRole('tab', { name: 'Events' })).toHaveFocus()
     expect(screen.getByText('running')).toBeInTheDocument()
     expect(screen.getByText('40%')).toBeInTheDocument()
   })

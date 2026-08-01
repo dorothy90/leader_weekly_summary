@@ -1,10 +1,19 @@
 import { useState, type FormEvent } from 'react'
 
-import type { ExecutionMode, RagRequestDraft } from './types'
+import type {
+  ExecutionMode,
+  RagRequestDraft,
+  RetrievalFilters,
+  SafeApiError,
+} from './types'
 
 interface RequestPanelProps {
   disabled: boolean
   onSubmit: (draft: RagRequestDraft) => void
+  conversationId: string
+  conversationOwner?: string
+  onConversationIdChange: (value: string) => void
+  apiError?: SafeApiError
 }
 
 const splitValues = (value: string) =>
@@ -17,15 +26,26 @@ const splitValues = (value: string) =>
     ),
   )
 
-export function RequestPanel({ disabled, onSubmit }: RequestPanelProps) {
+export function RequestPanel({
+  disabled,
+  onSubmit,
+  conversationId,
+  conversationOwner,
+  onConversationIdChange,
+  apiError,
+}: RequestPanelProps) {
   const [userId, setUserId] = useState('')
   const [mode, setMode] = useState<ExecutionMode>('fast')
-  const [conversationId, setConversationId] = useState('')
   const [teams, setTeams] = useState('')
   const [weeks, setWeeks] = useState('')
-  const [mailType, setMailType] = useState('')
+  const [mailType, setMailType] = useState<RetrievalFilters['mail_type']>()
   const [question, setQuestion] = useState('')
   const [error, setError] = useState('')
+  const [errorField, setErrorField] = useState<'user_id' | 'question' | 'weeks'>()
+  const describedBy = (field: typeof errorField) =>
+    [errorField === field ? 'rag-request-error' : '', apiError ? 'rag-api-error' : '']
+      .filter(Boolean)
+      .join(' ') || undefined
 
   const submit = (event: FormEvent) => {
     event.preventDefault()
@@ -34,17 +54,21 @@ export function RequestPanel({ disabled, onSubmit }: RequestPanelProps) {
     const normalizedWeeks = splitValues(weeks)
     if (!owner) {
       setError('user_id를 입력해 주세요.')
+      setErrorField('user_id')
       return
     }
     if (!prompt) {
       setError('질문을 입력해 주세요.')
+      setErrorField('question')
       return
     }
     if (normalizedWeeks.some((week) => !/^\d{4}-\d{2}$/.test(week))) {
       setError('주차는 YYYY-WW 형식으로 입력해 주세요.')
+      setErrorField('weeks')
       return
     }
     setError('')
+    setErrorField(undefined)
     onSubmit({
       userId: owner,
       mode,
@@ -71,8 +95,17 @@ export function RequestPanel({ disabled, onSubmit }: RequestPanelProps) {
       <label className="field">
         <span>user_id</span>
         <input
+          required
+          aria-invalid={errorField === 'user_id'}
+          aria-describedby={describedBy('user_id')}
           value={userId}
-          onChange={(event) => setUserId(event.target.value)}
+          onChange={(event) => {
+            const nextUserId = event.target.value
+            setUserId(nextUserId)
+            if (nextUserId.trim() !== conversationOwner) {
+              onConversationIdChange('')
+            }
+          }}
           autoComplete="off"
           placeholder="kim"
         />
@@ -99,7 +132,7 @@ export function RequestPanel({ disabled, onSubmit }: RequestPanelProps) {
         <span>conversation_id <small>선택</small></span>
         <input
           value={conversationId}
-          onChange={(event) => setConversationId(event.target.value)}
+          onChange={(event) => onConversationIdChange(event.target.value)}
           autoComplete="off"
           placeholder="새 대화는 비워두세요"
         />
@@ -118,6 +151,8 @@ export function RequestPanel({ disabled, onSubmit }: RequestPanelProps) {
       <label className="field">
         <span>주차 필터</span>
         <input
+          aria-invalid={errorField === 'weeks'}
+          aria-describedby={describedBy('weeks')}
           value={weeks}
           onChange={(event) => setWeeks(event.target.value)}
           placeholder="2026-31, 2026-32"
@@ -126,10 +161,17 @@ export function RequestPanel({ disabled, onSubmit }: RequestPanelProps) {
 
       <label className="field">
         <span>메일 유형</span>
-        <select value={mailType} onChange={(event) => setMailType(event.target.value)}>
+        <select
+          value={mailType ?? ''}
+          onChange={(event) =>
+            setMailType(
+              (event.target.value || undefined) as RetrievalFilters['mail_type'],
+            )
+          }
+        >
           <option value="">전체</option>
-          <option value="weekly">weekly</option>
-          <option value="daily">daily</option>
+          <option value="weekly_report">weekly_report</option>
+          <option value="daily_report">daily_report</option>
           <option value="other">other</option>
         </select>
       </label>
@@ -137,6 +179,9 @@ export function RequestPanel({ disabled, onSubmit }: RequestPanelProps) {
       <label className="field">
         <span>질문</span>
         <textarea
+          required
+          aria-invalid={errorField === 'question'}
+          aria-describedby={describedBy('question')}
           value={question}
           onChange={(event) => setQuestion(event.target.value)}
           placeholder="최근 4주 수율 저하 원인을 보고서로 정리해줘."
@@ -144,7 +189,12 @@ export function RequestPanel({ disabled, onSubmit }: RequestPanelProps) {
         />
       </label>
 
-      {error ? <p className="form-error" role="alert">{error}</p> : null}
+      {error ? <p id="rag-request-error" className="form-error" role="alert">{error}</p> : null}
+      {apiError ? (
+        <p id="rag-api-error" className="form-error" role="alert">
+          <strong>{apiError.code}</strong> · {apiError.message}
+        </p>
+      ) : null}
       <button className="button button-primary rag-run-button" disabled={disabled}>
         {disabled ? '실행 중…' : '실행'}
       </button>

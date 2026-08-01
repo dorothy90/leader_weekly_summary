@@ -1,9 +1,10 @@
-import type { ChatResponse, ResearchJobResponse } from './types'
+import type { ChatResponse, ResearchJobResponse, SafeApiError } from './types'
 
 interface ConversationPanelProps {
   question?: string
   chat?: ChatResponse
   job?: ResearchJobResponse
+  error?: SafeApiError
   onCancel: () => void
   onRetry: () => void
 }
@@ -15,6 +16,7 @@ export function ConversationPanel({
   question,
   chat,
   job,
+  error,
   onCancel,
   onRetry,
 }: ConversationPanelProps) {
@@ -45,10 +47,30 @@ export function ConversationPanel({
             <p>왼쪽에서 소유자, 필터, 실행 시스템과 질문을 입력하세요.</p>
           </div>
         ) : null}
+        {error ? (
+          <div className="error-diagnostic result-error" role="alert">
+            <strong>{error.code}</strong>
+            <p>{error.message}</p>
+            <small>{error.retryable ? '재시도 가능' : '재시도 불가'}</small>
+          </div>
+        ) : null}
+        {job?.error_code ? (
+          <div className="error-diagnostic result-error" role="alert">
+            <strong>{job.error_code}</strong>
+            <p>Deep Research 작업이 {job.status} 상태로 종료되었습니다.</p>
+          </div>
+        ) : null}
         {job && !result ? (
           <div className="message is-system">
             <strong>{job.plan_summary || '조사 계획을 준비하고 있습니다.'}</strong>
-            <div className="progress-track" aria-label={`조사 진행률 ${job.progress}%`}>
+            <div
+              className="progress-track"
+              role="progressbar"
+              aria-label="조사 진행률"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={job.progress}
+            >
               <span style={{ width: `${job.progress}%` }} />
             </div>
           </div>

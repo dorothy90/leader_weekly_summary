@@ -8,28 +8,52 @@ interface ConnectionStatusProps {
 
 type ConnectionState = 'checking' | 'ready' | 'degraded' | 'offline'
 
+interface ConnectionResult {
+  state: Exclude<ConnectionState, 'checking'>
+  latency: number
+}
+
+async function checkConnection(
+  service: ConnectionStatusProps['service'],
+): Promise<ConnectionResult> {
+  const [health, readiness] = await Promise.all([
+    service.getHealth(),
+    service.getReadiness(),
+  ])
+
+  if (health.error || health.status === 0) {
+    return { state: 'offline', latency: Math.max(health.durationMs, readiness.durationMs) }
+  }
+
+  return {
+    state: readiness.response?.status === 'ready' ? 'ready' : 'degraded',
+    latency: Math.max(health.durationMs, readiness.durationMs),
+  }
+}
+
 export function ConnectionStatus({ service }: ConnectionStatusProps) {
   const [state, setState] = useState<ConnectionState>('checking')
   const [latency, setLatency] = useState<number | null>(null)
 
   const refresh = async () => {
     setState('checking')
-    const [health, readiness] = await Promise.all([
-      service.getHealth(),
-      service.getReadiness(),
-    ])
-    setLatency(Math.max(health.durationMs, readiness.durationMs))
-    if (health.error || health.status === 0) {
-      setState('offline')
-    } else if (readiness.response?.status === 'ready') {
-      setState('ready')
-    } else {
-      setState('degraded')
-    }
+    const result = await checkConnection(service)
+    setLatency(result.latency)
+    setState(result.state)
   }
 
   useEffect(() => {
-    void refresh()
+    let ignore = false
+
+    void checkConnection(service).then((result) => {
+      if (ignore) return
+      setLatency(result.latency)
+      setState(result.state)
+    })
+
+    return () => {
+      ignore = true
+    }
   }, [service])
 
   return (
