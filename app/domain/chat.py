@@ -3,6 +3,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.domain.evidence import Evidence, RetrievalFilters
+from app.domain.research import ResearchStatus
 
 BM25_FALLBACK_DISCLOSURE = (
     "임베딩 서비스를 사용할 수 없어 키워드(BM25) 검색만 사용했습니다. "
@@ -15,7 +16,11 @@ class ChatRequest(BaseModel):
 
     user_id: str = Field(min_length=1, max_length=128)
     message: str = Field(min_length=1, max_length=4000)
-    conversation_id: str | None = Field(default=None, max_length=128)
+    conversation_id: str | None = Field(
+        default=None,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9_.:-]+$",
+    )
     filters: RetrievalFilters = Field(default_factory=RetrievalFilters)
     response_mode: Literal["auto", "fast", "deep"] = "auto"
 
@@ -42,14 +47,28 @@ class FastRAGResult(BaseModel):
     disclosures: list[str] = Field(default_factory=list)
 
 
+class ChatReference(BaseModel):
+    """Public evidence metadata; ownership and storage fields stay internal."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    evidence_id: str = Field(min_length=1, max_length=32)
+    source_type: Literal["mail", "wiki", "statistic"]
+    document_id: str = Field(min_length=1, max_length=256)
+    title: str = Field(default="", max_length=500)
+    excerpt: str = Field(min_length=1, max_length=8000)
+    team: str | None = Field(default=None, max_length=100)
+    week: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}$")
+
+
 class ChatResponse(BaseModel):
     conversation_id: str
     mode: Literal["fast_rag", "deep_research"]
     answer: str | None = None
-    references: list[Evidence] = Field(default_factory=list)
+    references: list[ChatReference] = Field(default_factory=list)
     quality: QualityStatus | None = None
     disclosures: list[str] = Field(default_factory=list)
     trace_id: str
     job_id: str | None = None
-    status: str | None = None
+    status: ResearchStatus | None = None
     plan_summary: str | None = None

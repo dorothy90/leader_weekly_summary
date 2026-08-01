@@ -4,16 +4,18 @@ from hashlib import sha256
 
 def sanitize_text(value: str) -> str:
     sanitized = re.sub(
-        r"<think>.*?</think>",
+        r"<(think|analysis|reasoning)(?:\s[^>]*)?>.*?</\1\s*>",
         "",
         value,
         flags=re.DOTALL | re.IGNORECASE,
     )
-    sanitized = re.sub(
-        r"(?im)^.*(?:chain[- ]of[- ]thought|internal reasoning|내부 추론).*$",
-        "",
+    if re.search(r"(?i)<(?:think|analysis|reasoning)(?:\s|>)", sanitized):
+        return ""
+    if re.search(
+        r"(?im)^.*(?:chain[- ]of[- ]thought|internal reasoning|내부 추론|reasoning\s*:).*$",
         sanitized,
-    )
+    ):
+        return ""
     sanitized = re.sub(
         r"(?i)https?://[^\s/@:]+:[^\s/@]+@[^\s]+",
         "[REDACTED_URL]",
@@ -21,6 +23,11 @@ def sanitize_text(value: str) -> str:
     )
     sanitized = re.sub(
         r"(?i)\b(?:authorization\s*:\s*)?bearer\s+\S+",
+        "[REDACTED]",
+        sanitized,
+    )
+    sanitized = re.sub(
+        r"(?i)\b(?:sk-(?:proj-)?[a-z0-9_-]{3,}|gh[pousr]_[a-z0-9_]{3,}|github_pat_[a-z0-9_]{3,}|AKIA[A-Z0-9]{8,})\b",
         "[REDACTED]",
         sanitized,
     )
