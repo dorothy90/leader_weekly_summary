@@ -18,6 +18,8 @@ class RetrievalFilters(BaseModel):
             year, separator, week = value.strip().partition("-")
             if (
                 separator != "-"
+                or len(year) != 4
+                or len(week) not in (1, 2)
                 or not year.isdigit()
                 or not week.isdigit()
                 or not 1 <= int(week) <= 53

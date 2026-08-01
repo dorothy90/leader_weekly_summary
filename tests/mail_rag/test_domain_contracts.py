@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -7,6 +8,11 @@ from app.domain.chat import ChatRequest
 from app.domain.evidence import Evidence
 from app.domain.policy import PolicyContext
 from app.domain.research import ResearchJob, ResearchStatus
+
+
+def test_runtime_requirements_pin_pydantic_settings():
+    requirements = Path("requirements.txt").read_text(encoding="utf-8").splitlines()
+    assert "pydantic-settings==2.11.0" in requirements
 
 
 def test_policy_context_normalizes_bounded_request_owner():
@@ -27,6 +33,12 @@ def test_chat_request_keeps_user_id_in_body_and_normalizes_weeks():
     assert request.filters.weeks == ["2026-08"]
 
 
+@pytest.mark.parametrize("week", ["26-8", "20260-8", "2026-008"])
+def test_chat_request_rejects_noncanonical_week_widths(week):
+    with pytest.raises(ValidationError):
+        ChatRequest(user_id="kim", message="최근 이슈", filters={"weeks": [week]})
+
+
 def test_evidence_requires_owner_and_bounded_excerpt():
     with pytest.raises(ValidationError):
         Evidence(
@@ -42,4 +54,7 @@ def test_research_job_serializes_utc_state():
         question="12주 추세", status=ResearchStatus.QUEUED,
         created_at=datetime.now(UTC), updated_at=datetime.now(UTC),
     )
-    assert job.model_dump(mode="json")["status"] == "queued"
+    serialized = job.model_dump(mode="json")
+    assert serialized["status"] == "queued"
+    assert serialized["created_at"].endswith(("Z", "+00:00"))
+    assert serialized["updated_at"].endswith(("Z", "+00:00"))
