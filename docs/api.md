@@ -89,6 +89,8 @@ Valid statuses are `queued`, `running`, `completed`, `failed`, `cancelled`, and 
 
 `GET /health` returns `{"status":"ok"}`. It is a process liveness probe only; it does not prove OpenSearch, MongoDB, embedding, or LLM readiness.
 
+`GET /ready` checks MongoDB ping, OpenSearch cluster health, and all configured mail-parent/Wiki aliases. It returns `200` with `status=ready` only when every check succeeds; otherwise it returns `503` with safe per-dependency availability states.
+
 ## Errors
 
 Application errors use one safe envelope and include the same trace ID exposed in the `x-trace-id` response header:

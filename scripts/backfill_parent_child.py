@@ -24,6 +24,8 @@ CHUNKER_VERSION = "child-v2"
 SCROLL_KEEPALIVE = "2m"
 CANONICAL_HASH_VERSION = "mapped-document-v1"
 MUTABLE_DOCUMENT_FIELDS = frozenset({"indexed_at", "created_at", "updated_at"})
+MAX_PARENT_BYTES = 12_000
+MAX_CHILD_BYTES = 4_000
 
 
 def stable_id(*parts: str) -> str:
@@ -75,11 +77,9 @@ def build_parent_child(
         "indexed_at": source.get("indexed_at") or "1970-01-01T00:00:00Z",
     }
     expected_content_id = mail_content_id(user_id, mail_id)
-    if (
-        source.get("content_id") == expected_content_id
-        and source.get("document_locator")
-        == mail_content_locator(expected_content_id)
-    ):
+    if source.get("content_id") == expected_content_id and source.get(
+        "document_locator"
+    ) == mail_content_locator(expected_content_id):
         parent["content_id"] = expected_content_id
         parent["document_locator"] = mail_content_locator(expected_content_id)
     child_id = stable_id(parent_id, chunker_version, "0")
@@ -91,6 +91,90 @@ def build_parent_child(
         "total_parts": 1,
     }
     return [parent], [child]
+
+
+def build_grouped_parent_children(
+    sources: list[dict],
+    parser_version: str = PARSER_VERSION,
+    chunker_version: str = CHUNKER_VERSION,
+) -> tuple[list[dict], list[dict]]:
+    """Build bounded section parents and retrieval children from ordered legacy chunks."""
+    if not sources:
+        return [], []
+    ordered = sorted(sources, key=lambda item: int(item.get("part_index", 0)))
+    first = ordered[0]
+    user_id = str(first.get("user_id") or "").strip()
+    mail_id = str(first.get("mail_id") or "").strip()
+    if not user_id or not mail_id:
+        return [], []
+    parents: list[dict] = []
+    children: list[dict] = []
+    batches: list[list[dict]] = []
+    current: list[dict] = []
+    current_bytes = 0
+    for source in ordered:
+        text = str(source.get("text") or "").strip()
+        if not text:
+            continue
+        size = len(text.encode("utf-8")) + (2 if current else 0)
+        if current and current_bytes + size > MAX_PARENT_BYTES:
+            batches.append(current)
+            current, current_bytes = [], 0
+        current.append(source)
+        current_bytes += size
+    if current:
+        batches.append(current)
+
+    for batch_ordinal, batch in enumerate(batches):
+        parent_text = "\n\n".join(str(item["text"]).strip() for item in batch)
+        section = str(first.get("section") or first.get("source_type") or "body")
+        parent_id = stable_id(
+            user_id, mail_id, section, parser_version, str(batch_ordinal)
+        )
+        parent = {
+            "parent_id": parent_id,
+            "mail_id": mail_id,
+            "user_id": user_id,
+            "text": parent_text,
+            "team": first.get("team") or "",
+            "week": first.get("week") or "",
+            "mail_type": first.get("mail_type") or "other",
+            "section_ordinal": batch_ordinal,
+            "content_hash": sha256(parent_text.encode()).hexdigest(),
+            "parser_version": parser_version,
+            "chunker_version": chunker_version,
+            "embedding_model": first.get("embedding_model") or "legacy",
+            "indexed_at": first.get("indexed_at") or "1970-01-01T00:00:00Z",
+        }
+        parents.append(parent)
+        child_texts: list[tuple[str, object | None]] = []
+        for source in batch:
+            legacy_text = str(source.get("text") or "").strip()
+            encoded = legacy_text.encode("utf-8")
+            if len(encoded) <= MAX_CHILD_BYTES:
+                child_texts.append((legacy_text, source.get("embedding")))
+                continue
+            for offset in range(0, len(encoded), MAX_CHILD_BYTES):
+                text = encoded[offset : offset + MAX_CHILD_BYTES].decode(
+                    "utf-8", errors="ignore"
+                )
+                if text:
+                    child_texts.append((text, None))
+        total = len(child_texts)
+        for child_ordinal, (text, embedding) in enumerate(child_texts):
+            child_id = stable_id(parent_id, chunker_version, str(child_ordinal))
+            child = {
+                **parent,
+                "child_id": child_id,
+                "text": text,
+                "content_hash": sha256(text.encode()).hexdigest(),
+                "part_index": child_ordinal,
+                "total_parts": total,
+            }
+            if embedding is not None:
+                child["embedding"] = embedding
+            children.append(child)
+    return parents, children
 
 
 @dataclass
@@ -126,6 +210,8 @@ def plan_migration(
     seen = seen_parent_hashes if seen_parent_hashes is not None else {}
     parents: dict[str, dict] = {}
     children: dict[str, dict] = {}
+    grouped: dict[tuple[str, str, str], list[dict]] = {}
+    source_ids: dict[tuple[str, str, str], list[str]] = {}
     for record in records:
         report.scanned += 1
         source_id = str(record.get("_id") or "<unknown>")
@@ -137,17 +223,33 @@ def plan_migration(
         if owner not in allowed:
             report.unknown_owner_ids.append(source_id)
             continue
-        parent_docs, child_docs = build_parent_child(
-            source, parser_version, chunker_version
-        )
-        if not parent_docs:
+        if (
+            not str(source.get("mail_id") or "").strip()
+            or not str(source.get("text") or "").strip()
+        ):
             report.invalid_source_ids.append(source_id)
             continue
-        parent, child = parent_docs[0], child_docs[0]
-        candidates = (
-            (parent["parent_id"], parent, parents),
-            (f"child:{child['child_id']}", child, children),
+        key = (
+            owner,
+            str(source.get("mail_id")).strip(),
+            str(source.get("section") or source.get("source_type") or "body"),
         )
+        grouped.setdefault(key, []).append(source)
+        source_ids.setdefault(key, []).append(source_id)
+
+    for key, sources in grouped.items():
+        unique_sources = {}
+        for item in sources:
+            unique_sources.setdefault(int(item.get("part_index", 0)), item)
+        if len(unique_sources) != len(sources):
+            report.collision_ids.append(stable_id(*key, "duplicate-part-index"))
+        parent_docs, child_docs = build_grouped_parent_children(
+            list(unique_sources.values()), parser_version, chunker_version
+        )
+        candidates = [
+            *((parent["parent_id"], parent, parents) for parent in parent_docs),
+            *((f"child:{child['child_id']}", child, children) for child in child_docs),
+        ]
         collision = False
         for collision_key, document, _ in candidates:
             document_hash = canonical_document_hash(document)

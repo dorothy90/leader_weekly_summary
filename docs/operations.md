@@ -85,9 +85,10 @@ Process liveness:
 
 ```bash
 curl --fail --silent http://127.0.0.1:8000/health
+curl --fail --silent http://127.0.0.1:8000/ready
 ```
 
-Expected output is `{"status":"ok"}`. This endpoint is not dependency readiness. Before cutover, separately verify authenticated OpenSearch cluster health, expected aliases, MongoDB read/write access, and one controlled embedding and LLM request without logging inputs or outputs.
+`/health` returns `{"status":"ok"}` and is liveness only. `/ready` returns success only after MongoDB ping, OpenSearch cluster health, and configured alias checks pass. Before cutover, also verify one controlled embedding and LLM request without logging inputs or outputs.
 
 For a failed or cancelled job, call `POST /v1/research/{job_id}/retry` with the verified owner in the body. For a stuck running job, first confirm that no worker still owns its lease; the worker will reclaim it after expiry. Do not edit lease tokens or job owners manually. Cancellation is requested through the API so queued/running transitions remain consistent.
 
@@ -96,8 +97,12 @@ For a failed or cancelled job, call `POST /v1/research/{job_id}/retry` with the 
 The user backfill targets only documents where `user_id` is missing. Always run the default dry-run first and reconcile its eligible count to an approved owner manifest:
 
 ```bash
-python scripts/backfill_user_id.py --index weekly_mail_v1 --user-id kim
-python scripts/backfill_user_id.py --index weekly_mail_v1 --user-id kim --apply
+python scripts/backfill_user_id.py --index weekly_mail_v1 --user-id kim \
+  --partition-field corpus_id --partition-value legacy-2026-h1 \
+  --expected-count 1240 --checkpoint var/migrations/kim-owner.json
+python scripts/backfill_user_id.py --index weekly_mail_v1 --user-id kim \
+  --partition-field corpus_id --partition-value legacy-2026-h1 \
+  --expected-count 1240 --checkpoint var/migrations/kim-owner.json --apply
 ```
 
 Run a separate approved command per owner partition. A team-to-owner guess is not an owner manifest. Stop on any unexpected count; documents not explicitly backfilled remain invisible.

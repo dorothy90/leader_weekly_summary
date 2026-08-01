@@ -56,6 +56,8 @@ class DeepLLM:
     async def complete_model(self, system, user, schema):
         if schema.__name__ == "ResearchPlan":
             return schema.model_validate({"sub_questions": self.sub_questions})
+        if schema.__name__ == "ClaimSupportDecision":
+            return schema.model_validate({"supported": True})
         value = (
             self.gaps.pop(0)
             if self.gaps
@@ -267,3 +269,51 @@ async def test_deep_graph_enforces_elapsed_time_budget(monkeypatch):
         )
 
     assert error.value.code == ErrorCode.BUDGET_EXCEEDED
+
+
+@async_test
+async def test_deep_total_branch_outage_fails_transiently():
+    retrieval = DeepRetrieval()
+
+    async def fail(*_args):
+        raise AppError(ErrorCode.INDEX_UNAVAILABLE, "down", retryable=True)
+
+    retrieval.search = fail
+    with pytest.raises(AppError) as error:
+        await DeepResearchWorkflow(retrieval, DeepLLM()).invoke(
+            "질문", PolicyContext.from_user_id("kim")
+        )
+    assert error.value.code == ErrorCode.INDEX_UNAVAILABLE
+    assert error.value.retryable is True
+
+
+@async_test
+async def test_deep_support_checker_failure_fails_closed():
+    class BrokenChecker(DeepLLM):
+        async def complete_model(self, system, user, schema):
+            if schema.__name__ == "ClaimSupportDecision":
+                raise TimeoutError("checker down")
+            return await super().complete_model(system, user, schema)
+
+    result = await DeepResearchWorkflow(DeepRetrieval(), BrokenChecker()).invoke(
+        "질문", PolicyContext.from_user_id("kim")
+    )
+    assert result.citation_valid is False
+    assert result.evidence == []
+
+
+@async_test
+async def test_deep_resume_uses_completed_checkpoint_without_repeating_search():
+    retrieval = DeepRetrieval()
+    saved = evidence("kim", "saved", "saved evidence").model_dump(mode="json")
+    checkpoint = {
+        "pending_queries": [],
+        "branch_results": [{"question": "done", "evidence": [saved], "failed": False}],
+        "searches": 1,
+        "rounds": 1,
+    }
+    result = await DeepResearchWorkflow(
+        retrieval, DeepLLM(reports=["resumed [S1]"])
+    ).invoke("질문", PolicyContext.from_user_id("kim"), checkpoint=checkpoint)
+    assert retrieval.calls == []
+    assert result.completed_sub_questions == 1

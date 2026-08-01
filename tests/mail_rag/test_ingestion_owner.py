@@ -30,7 +30,7 @@ from scripts.backfill_parent_child import (
     run_migration,
     validate_checkpoint,
 )
-from scripts.backfill_user_id import build_update_query, parse_args
+from scripts.backfill_user_id import build_update_query, parse_args, run_backfill
 from scripts.shadow_retrieval import compare_rankings, run_shadow
 
 
@@ -136,8 +136,7 @@ def test_indexing_writes_owner_to_every_chunk(tmp_path, monkeypatch):
     sources = [item["_source"] for item in captured]
     assert all("html_path" not in source for source in sources)
     assert all(
-        source["document_locator"].startswith("/v1/mail-content/")
-        for source in sources
+        source["document_locator"].startswith("/v1/mail-content/") for source in sources
     )
 
 
@@ -218,15 +217,84 @@ def test_same_mail_id_has_distinct_index_ids_for_different_owners(
 
 
 def test_backfill_targets_only_missing_owner_and_uses_explicit_value():
-    body = build_update_query("kim")
-    assert body["query"] == {"bool": {"must_not": {"exists": {"field": "user_id"}}}}
+    body = build_update_query("kim", "corpus_id", "legacy-2026")
+    assert body["query"] == {
+        "bool": {
+            "filter": [{"term": {"corpus_id": "legacy-2026"}}],
+            "must_not": [{"exists": {"field": "user_id"}}],
+        }
+    }
     assert body["script"]["params"] == {"user_id": "kim"}
 
 
 def test_backfill_is_dry_run_by_default_and_rejects_blank_owner():
-    assert parse_args(["--index", "mail", "--user-id", "kim"]).apply is False
+    args = parse_args(
+        [
+            "--index",
+            "mail",
+            "--user-id",
+            "kim",
+            "--partition-field",
+            "corpus_id",
+            "--partition-value",
+            "legacy",
+            "--expected-count",
+            "2",
+        ]
+    )
+    assert args.apply is False
     with pytest.raises(ValueError):
-        build_update_query(" ")
+        build_update_query(" ", "corpus_id", "legacy")
+
+
+def test_backfill_mixed_corpus_changes_only_approved_partition(tmp_path):
+    class Client:
+        def __init__(self):
+            self.docs = [
+                {"corpus_id": "approved"},
+                {"corpus_id": "approved"},
+                {"corpus_id": "other"},
+                {"corpus_id": "approved", "user_id": "lee"},
+            ]
+
+        def count(self, index, body):
+            query = body["query"]
+            partition = query["bool"]["filter"][0]["term"]
+            docs = [
+                d for d in self.docs if all(d.get(k) == v for k, v in partition.items())
+            ]
+            if query["bool"].get("must_not"):
+                docs = [d for d in docs if "user_id" not in d]
+            if query["bool"].get("filter", [None, None])[-1] != {"term": partition}:
+                owner = query["bool"]["filter"][-1].get("term", {}).get("user_id")
+                if owner:
+                    docs = [d for d in docs if d.get("user_id") == owner]
+            return {"count": len(docs)}
+
+        def update_by_query(self, index, body, **kwargs):
+            for doc in self.docs:
+                if doc.get("corpus_id") == "approved" and "user_id" not in doc:
+                    doc["user_id"] = body["script"]["params"]["user_id"]
+            return {"updated": 2, "version_conflicts": 0}
+
+    client = Client()
+    report = run_backfill(
+        client,
+        index="mail",
+        user_id="kim",
+        partition_field="corpus_id",
+        partition_value="approved",
+        expected_count=2,
+        checkpoint_path=tmp_path / "checkpoint.json",
+        apply=True,
+    )
+    assert (
+        report["updated"] == 2
+        and report["conflicts"] == 0
+        and report["eligible_after"] == 0
+    )
+    assert client.docs[2] == {"corpus_id": "other"}
+    assert client.docs[3]["user_id"] == "lee"
 
 
 def test_parent_child_is_deterministic_and_reuses_existing_embedding():
@@ -242,6 +310,41 @@ def test_parent_child_is_deterministic_and_reuses_existing_embedding():
 
     assert first == second
     assert first[1][0]["embedding"] == [0.1, 0.2]
+
+
+def test_parent_child_groups_compatible_legacy_chunks_and_only_reuses_exact_embedding():
+    records = [
+        {
+            "_id": "p0",
+            "_source": {
+                "user_id": "kim",
+                "mail_id": "m1",
+                "section": "body",
+                "part_index": 0,
+                "text": "first",
+                "embedding": [0.1],
+            },
+        },
+        {
+            "_id": "p1",
+            "_source": {
+                "user_id": "kim",
+                "mail_id": "m1",
+                "section": "body",
+                "part_index": 1,
+                "text": "second",
+                "embedding": [0.2],
+            },
+        },
+    ]
+    plan = plan_migration(records, allowed_owners={"kim"})
+    assert len(plan.parent_actions) == 1
+    assert plan.parent_actions[0]["_source"]["text"] == "first\n\nsecond"
+    children = sorted(
+        plan.child_actions, key=lambda item: item["_source"]["part_index"]
+    )
+    assert [item["_source"]["text"] for item in children] == ["first", "second"]
+    assert [item["_source"].get("embedding") for item in children] == [[0.1], [0.2]]
 
 
 def test_parent_child_migration_is_dry_run_by_default():

@@ -11,6 +11,40 @@ class ServiceContainer:
     jobs: Any
     mail_content: Any = None
     traces: Any = None
+    readiness: Any = None
+
+
+class DependencyReadiness:
+    def __init__(self, opensearch_client, mongo_client, aliases):
+        self.opensearch_client = opensearch_client
+        self.mongo_client = mongo_client
+        self.aliases = tuple(aliases)
+
+    async def check(self):
+        import asyncio
+
+        status = {}
+        try:
+            await self.mongo_client.admin.command("ping")
+            status["mongo"] = "ready"
+        except Exception:
+            status["mongo"] = "unavailable"
+        try:
+            await asyncio.to_thread(self.opensearch_client.cluster.health)
+            status["opensearch"] = "ready"
+        except Exception:
+            status["opensearch"] = "unavailable"
+        try:
+            for alias in self.aliases:
+                exists = await asyncio.to_thread(
+                    self.opensearch_client.indices.exists_alias, name=alias
+                )
+                if not exists:
+                    raise RuntimeError("alias unavailable")
+            status["aliases"] = "ready"
+        except Exception:
+            status["aliases"] = "unavailable"
+        return status
 
 
 def build_opensearch_client(settings=None):
@@ -59,7 +93,8 @@ def build_container(settings=None, trace_sink=None) -> ServiceContainer:
         base_url=current.openrouter_base_url or None,
     )
     llm = OpenAILLMGateway(ai, current.llm_model)
-    search = AsyncOpenSearchGateway(build_opensearch_client(current))
+    opensearch_client = build_opensearch_client(current)
+    search = AsyncOpenSearchGateway(opensearch_client)
     embeddings = OpenAIEmbeddingGateway(ai, current.embedding_model)
     retrieval = RetrievalService(
         search,
@@ -69,7 +104,8 @@ def build_container(settings=None, trace_sink=None) -> ServiceContainer:
         current.wiki_index,
         trace_sink=traces,
     )
-    database = AsyncIOMotorClient(current.mongo_uri)[current.mongo_db]
+    mongo_client = AsyncIOMotorClient(current.mongo_uri)
+    database = mongo_client[current.mongo_db]
     jobs = MongoResearchJobStore(database.research_jobs)
 
     class RouterService:
@@ -78,10 +114,20 @@ def build_container(settings=None, trace_sink=None) -> ServiceContainer:
 
     return ServiceContainer(
         router=RouterService(),
-        fast=FastRAGWorkflow(retrieval, llm, trace_sink=traces),
+        fast=FastRAGWorkflow(
+            retrieval,
+            llm,
+            trace_sink=traces,
+            deadline_seconds=current.fast_deadline_seconds,
+        ),
         deep=DeepCoordinator(jobs),
         conversations=MongoConversationStore(database.conversations),
         jobs=jobs,
         mail_content=MailContentStore(current.mail_content_root),
         traces=traces,
+        readiness=DependencyReadiness(
+            opensearch_client,
+            mongo_client,
+            [current.mail_child_index, current.mail_parent_index, current.wiki_index],
+        ),
     )

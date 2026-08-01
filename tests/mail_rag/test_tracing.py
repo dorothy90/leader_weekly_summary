@@ -303,7 +303,7 @@ def test_worker_emits_error_class_without_exception_or_job_payload():
             return None
 
     class Workflow:
-        async def invoke(self, question, policy, filters):
+        async def invoke(self, question, policy, filters, **kwargs):
             raise RuntimeError("raw worker exception")
 
     sink = RecordingTraceSink()

@@ -1,3 +1,4 @@
+import asyncio
 import re
 from time import perf_counter
 from typing import Literal, TypedDict
@@ -34,6 +35,7 @@ MAX_EVIDENCE = 8
 MAX_EVIDENCE_TOKENS = 16_000
 LIMITED_ANSWER = "확인 가능한 근거가 없어 답변할 수 없습니다."
 INVALID_ANSWER = "근거로 확인된 내용만으로는 답변을 제공할 수 없습니다."
+TIMEOUT_ANSWER = "답변 시간 한도를 초과해 확인된 답변을 제공할 수 없습니다."
 INCOMPLETE_ANSWER_PREFIX = "제공된 근거가 불완전하여 확인된 범위만 답변합니다."
 
 
@@ -44,6 +46,11 @@ class RetrievalPlan(BaseModel):
 class EvidenceGrade(BaseModel):
     sufficient: bool
     missing_information: list[str] = Field(default_factory=list, max_length=6)
+
+
+class ClaimSupportDecision(BaseModel):
+    supported: bool
+    unsupported_claims: list[str] = Field(default_factory=list, max_length=8)
 
 
 class FastState(TypedDict, total=False):
@@ -135,11 +142,12 @@ def _with_limitation(answer: str, state: FastState) -> str:
 
 
 class FastRAGWorkflow:
-    def __init__(self, retrieval, llm, trace_sink=None):
+    def __init__(self, retrieval, llm, trace_sink=None, deadline_seconds: float = 20):
         self.retrieval = retrieval
         self.llm = llm
         self.validator = CitationValidator()
         self.trace_sink = trace_sink
+        self.deadline_seconds = max(0.001, float(deadline_seconds))
         self.graph = self._build()
 
     def _build(self):
@@ -229,9 +237,9 @@ class FastRAGWorkflow:
     async def _retrieve(self, state: FastState) -> dict:
         remaining = max(0, MAX_SEARCHES - state["searches"])
         tasks = state["tasks"][:remaining]
-        results = []
-        for task in tasks:
-            results.append(await self.retrieval.search(task, state["policy"]))
+        results = await asyncio.gather(
+            *(self.retrieval.search(task, state["policy"]) for task in tasks)
+        )
 
         policy = state["policy"]
         previous = list(state.get("evidence", []))
@@ -369,7 +377,18 @@ class FastRAGWorkflow:
     ) -> FastRAGResult:
         started = perf_counter()
         try:
-            result = await self._invoke(request, policy, conversation)
+            async with asyncio.timeout(self.deadline_seconds):
+                result = await self._invoke(request, policy, conversation)
+        except TimeoutError:
+            result = FastRAGResult(
+                answer=TIMEOUT_ANSWER,
+                evidence=[],
+                quality=QualityStatus(
+                    citation_valid=False,
+                    limited_answer=True,
+                    retrieval_mode="hybrid",
+                ),
+            )
         except Exception as error:
             emit_trace(
                 self.trace_sink,
@@ -420,13 +439,23 @@ class FastRAGWorkflow:
     ) -> FastRAGResult:
         if request.user_id != policy.user_id:
             raise ValueError("request owner and policy owner must match exactly")
-        state = await self.graph.ainvoke(
-            {
-                "request": request,
-                "policy": policy,
-                "conversation": conversation,
-            }
-        )
+        try:
+            async with asyncio.timeout(self.deadline_seconds):
+                state = await self.graph.ainvoke(
+                    {
+                        "request": request,
+                        "policy": policy,
+                        "conversation": conversation,
+                    }
+                )
+        except TimeoutError:
+            return FastRAGResult(
+                answer=TIMEOUT_ANSWER,
+                evidence=[],
+                quality=QualityStatus(
+                    citation_valid=False, limited_answer=True, retrieval_mode="hybrid"
+                ),
+            )
         evidence = state.get("evidence", [])
         answer = sanitize_text(state["answer"])
         disclosures = state.get("disclosures", [])
@@ -437,6 +466,24 @@ class FastRAGWorkflow:
             if evidence
             else True
         )
+        support_valid = citation_valid
+        if evidence and citation_valid:
+            try:
+                support = await self.llm.complete_model(
+                    "Check each factual claim against the supplied evidence. "
+                    "Citations alone are not proof. Return supported=false for any "
+                    "claim not entailed by the evidence.",
+                    f"Draft:\n{answer}\nEvidence:\n{_evidence_context(evidence)}",
+                    ClaimSupportDecision,
+                )
+                support_valid = support.supported
+            except Exception:
+                support_valid = False
+            if not support_valid:
+                answer = _with_limitation(INVALID_ANSWER, state)
+                if disclosures:
+                    answer = f"{answer}\n\n" + "\n".join(disclosures)
+                citation_valid = False
         limited = (
             not evidence or not citation_valid or not state.get("sufficient", False)
         )

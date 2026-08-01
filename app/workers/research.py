@@ -79,7 +79,17 @@ class ResearchWorker:
             await self.jobs.mark_cancelled(job.job_id, policy, job.lease_token)
             return True
         try:
-            result = await self.workflow.invoke(job.question, policy, job.filters)
+
+            async def persist_progress(payload):
+                await self.jobs.checkpoint(job.job_id, policy, job.lease_token, payload)
+
+            result = await self.workflow.invoke(
+                job.question,
+                policy,
+                job.filters,
+                checkpoint=getattr(job, "checkpoint", {}) or {},
+                progress_callback=persist_progress,
+            )
             current = await self.jobs.get(job.job_id, policy)
             if current.status == ResearchStatus.CANCELLING:
                 trace["status"] = "cancelled"

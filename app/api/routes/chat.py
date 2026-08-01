@@ -24,6 +24,9 @@ from app.security.redaction import opaque_identifier, sanitize_text
 router = APIRouter()
 _NOT_FOUND = "대화를 찾을 수 없습니다."
 _INVALID_CITATIONS = "검증된 근거만으로 답변을 제공할 수 없습니다."
+CONTEXT_UNAVAILABLE_DISCLOSURE = (
+    "대화 저장소를 사용할 수 없어 이번 요청은 단일 턴으로 처리했습니다."
+)
 
 
 def _policy_for(payload: ChatRequest) -> PolicyContext:
@@ -112,11 +115,16 @@ async def _load_memory(services, conversation_id, policy, supplied):
                 "대화 저장소를 사용할 수 없습니다.",
                 retryable=True,
             )
-        return None
-    memory = await services.conversations.load(conversation_id, policy)
+        return None, []
+    try:
+        memory = await services.conversations.load(conversation_id, policy)
+    except AppError:
+        raise
+    except Exception:
+        return None, [CONTEXT_UNAVAILABLE_DISCLOSURE]
     if supplied and memory is None:
         raise AppError(ErrorCode.UNAUTHORIZED_RESOURCE, _NOT_FOUND)
-    return memory
+    return memory, []
 
 
 async def _save_messages(
@@ -129,21 +137,29 @@ async def _save_messages(
     cited_evidence=None,
 ):
     if services.conversations is None:
-        return
+        return True
     prior = list(memory.messages if memory else [])
     prior.extend(
         {"role": role, "content": sanitize_text(content) or "[REDACTED]"}
         for role, content in messages
     )
-    await services.conversations.save(
-        conversation_id,
-        policy,
-        ConversationMemory(
-            messages=prior[-20:],
-            filters=sanitize_filters_for_memory(payload.filters),
-            cited_evidence=(cited_evidence if cited_evidence is not None else [])[:8],
-        ),
-    )
+    try:
+        await services.conversations.save(
+            conversation_id,
+            policy,
+            ConversationMemory(
+                messages=prior[-20:],
+                filters=sanitize_filters_for_memory(payload.filters),
+                cited_evidence=(cited_evidence if cited_evidence is not None else [])[
+                    :8
+                ],
+            ),
+        )
+    except AppError:
+        raise
+    except Exception:
+        return False
+    return True
 
 
 @router.post(
@@ -161,7 +177,9 @@ async def chat(payload: ChatRequest, request: Request, response: Response):
     supplied_id = payload.conversation_id is not None
     conversation_id = payload.conversation_id or uuid.uuid4().hex
     policy = _policy_for(payload)
-    memory = await _load_memory(services, conversation_id, policy, supplied=supplied_id)
+    memory, context_disclosures = await _load_memory(
+        services, conversation_id, policy, supplied=supplied_id
+    )
     decision = await services.router.route(payload)
 
     if decision.route == "clarify":
@@ -169,7 +187,7 @@ async def chat(payload: ChatRequest, request: Request, response: Response):
             decision.clarification_question
             or "조회할 팀이나 기간을 구체적으로 알려주세요."
         )
-        await _save_messages(
+        saved = await _save_messages(
             services,
             conversation_id,
             policy,
@@ -177,11 +195,14 @@ async def chat(payload: ChatRequest, request: Request, response: Response):
             memory,
             [("user", payload.message), ("assistant", answer)],
         )
+        if not saved and CONTEXT_UNAVAILABLE_DISCLOSURE not in context_disclosures:
+            context_disclosures.append(CONTEXT_UNAVAILABLE_DISCLOSURE)
         return ChatResponse(
             conversation_id=conversation_id,
             mode="fast_rag",
             answer=answer,
             quality=QualityStatus(citation_valid=True, limited_answer=True),
+            disclosures=context_disclosures,
             trace_id=trace_id,
         )
 
@@ -190,7 +211,7 @@ async def chat(payload: ChatRequest, request: Request, response: Response):
         answer, references, quality, disclosures, owned = _safe_fast_result(
             result, policy
         )
-        await _save_messages(
+        saved = await _save_messages(
             services,
             conversation_id,
             policy,
@@ -199,13 +220,15 @@ async def chat(payload: ChatRequest, request: Request, response: Response):
             [("user", payload.message), ("assistant", answer)],
             owned,
         )
+        if not saved and CONTEXT_UNAVAILABLE_DISCLOSURE not in context_disclosures:
+            context_disclosures.append(CONTEXT_UNAVAILABLE_DISCLOSURE)
         return ChatResponse(
             conversation_id=conversation_id,
             mode="fast_rag",
             answer=answer,
             references=references,
             quality=quality,
-            disclosures=disclosures,
+            disclosures=[*context_disclosures, *disclosures],
             trace_id=trace_id,
         )
 
@@ -217,7 +240,7 @@ async def chat(payload: ChatRequest, request: Request, response: Response):
                 retryable=True,
             )
         job = await services.deep.enqueue(payload, policy, trace_id)
-        await _save_messages(
+        saved = await _save_messages(
             services,
             conversation_id,
             policy,
@@ -225,6 +248,8 @@ async def chat(payload: ChatRequest, request: Request, response: Response):
             memory,
             [("user", payload.message)],
         )
+        if not saved and CONTEXT_UNAVAILABLE_DISCLOSURE not in context_disclosures:
+            context_disclosures.append(CONTEXT_UNAVAILABLE_DISCLOSURE)
         response.status_code = status.HTTP_202_ACCEPTED
         return ChatResponse(
             conversation_id=conversation_id,
@@ -233,11 +258,12 @@ async def chat(payload: ChatRequest, request: Request, response: Response):
             job_id=opaque_identifier(job.job_id),
             status=_research_status(job.status),
             plan_summary=sanitize_text(job.plan_summary),
+            disclosures=context_disclosures,
         )
 
     result = await services.fast.invoke(payload, policy, memory)
     answer, references, quality, disclosures, owned = _safe_fast_result(result, policy)
-    await _save_messages(
+    saved = await _save_messages(
         services,
         conversation_id,
         policy,
@@ -246,12 +272,14 @@ async def chat(payload: ChatRequest, request: Request, response: Response):
         [("user", payload.message), ("assistant", answer)],
         owned,
     )
+    if not saved and CONTEXT_UNAVAILABLE_DISCLOSURE not in context_disclosures:
+        context_disclosures.append(CONTEXT_UNAVAILABLE_DISCLOSURE)
     return ChatResponse(
         conversation_id=conversation_id,
         mode="fast_rag",
         answer=answer,
         references=references,
         quality=quality,
-        disclosures=disclosures,
+        disclosures=[*context_disclosures, *disclosures],
         trace_id=trace_id,
     )

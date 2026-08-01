@@ -46,11 +46,17 @@ class GapDecision(BaseModel):
     follow_up_questions: list[str] = Field(default_factory=list, max_length=24)
 
 
+class ClaimSupportDecision(BaseModel):
+    supported: bool
+    unsupported_claims: list[str] = Field(default_factory=list, max_length=16)
+
+
 class BranchResult(BaseModel):
     question: str
     evidence: list[Evidence] = Field(default_factory=list)
     failed: bool = False
     embedding_fallback: bool = False
+    error_code: str | None = None
 
 
 class DeepResearchResult(BaseModel):
@@ -75,6 +81,8 @@ class DeepState(TypedDict, total=False):
     disclosures: list[str]
     citation_valid: bool
     filters: RetrievalFilters
+    checkpoint: dict
+    progress_callback: object
 
 
 def _truncate_utf8(text: str, byte_limit: int) -> str:
@@ -142,6 +150,18 @@ class DeepResearchWorkflow:
 
     async def _plan(self, state: DeepState) -> dict:
         question = sanitize_text(state["question"]) or "메일 조사"
+        checkpoint = state.get("checkpoint") or {}
+        if checkpoint:
+            return {
+                "question": question,
+                "queries": checkpoint.get("pending_queries", []),
+                "branch_results": [
+                    BranchResult.model_validate(item)
+                    for item in checkpoint.get("branch_results", [])
+                ],
+                "searches": int(checkpoint.get("searches", 0)),
+                "rounds": int(checkpoint.get("rounds", 0)),
+            }
         try:
             plan = await self.llm.complete_model(
                 "Create objective, independent mail-research sub-questions.",
@@ -179,8 +199,16 @@ class DeepResearchWorkflow:
                     SearchTask(query=question, filters=filters, top_k=8),
                     policy,
                 )
+            except AppError as error:
+                return BranchResult(
+                    question=question, failed=True, error_code=error.code.value
+                )
             except Exception:
-                return BranchResult(question=question, failed=True)
+                return BranchResult(
+                    question=question,
+                    failed=True,
+                    error_code=ErrorCode.INDEX_UNAVAILABLE.value,
+                )
         owned = [item for item in result.evidence if item.user_id == policy.user_id]
         fallback = (
             result.embedding_error == "EMBEDDING_UNAVAILABLE"
@@ -196,6 +224,8 @@ class DeepResearchWorkflow:
         remaining = max(0, MAX_SEARCHES - state["searches"])
         queries = state["queries"][:remaining]
         semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
+        if not queries:
+            return {}
         fresh = await asyncio.gather(
             *(
                 self._research_one(
@@ -207,11 +237,49 @@ class DeepResearchWorkflow:
                 for item in queries
             )
         )
-        return {
+        updated = {
             "branch_results": [*state["branch_results"], *fresh],
             "searches": state["searches"] + len(queries),
             "rounds": state["rounds"] + 1,
         }
+        callback = state.get("progress_callback")
+        if callback is not None:
+            checkpoint_state = {**state, **updated}
+            compressed = self._safe_evidence(checkpoint_state)
+            safe_branches = []
+            for branch in updated["branch_results"]:
+                safe_branches.append(
+                    branch.model_copy(
+                        update={
+                            "evidence": [
+                                sanitize_evidence_for_memory(item, state["policy"])
+                                for item in branch.evidence
+                                if item.user_id == state["policy"].user_id
+                            ][:MAX_EVIDENCE]
+                        }
+                    )
+                )
+            completed = [
+                item.question for item in updated["branch_results"] if not item.failed
+            ]
+            await callback(
+                {
+                    "stage": "research_complete",
+                    "progress": min(90, 10 + len(completed) * 8),
+                    "completed_sub_questions": completed,
+                    "rounds_completed": updated["rounds"],
+                    "compressed_evidence": compressed,
+                    "checkpoint": {
+                        "pending_queries": [],
+                        "branch_results": [
+                            item.model_dump(mode="json") for item in safe_branches
+                        ],
+                        "searches": updated["searches"],
+                        "rounds": updated["rounds"],
+                    },
+                }
+            )
+        return updated
 
     async def _gap(self, state: DeepState) -> dict:
         if state["rounds"] >= MAX_ROUNDS or state["searches"] >= MAX_SEARCHES:
@@ -269,6 +337,13 @@ class DeepResearchWorkflow:
         return safe
 
     async def _synthesize(self, state: DeepState) -> dict:
+        branches = state["branch_results"]
+        if branches and all(item.failed for item in branches):
+            raise AppError(
+                ErrorCode.INDEX_UNAVAILABLE,
+                "검색 인덱스를 사용할 수 없습니다.",
+                retryable=True,
+            )
         evidence = self._safe_evidence(state)
         fallback = any(item.embedding_fallback for item in state["branch_results"])
         disclosures = [BM25_FALLBACK_DISCLOSURE] if fallback else []
@@ -321,6 +396,28 @@ class DeepResearchWorkflow:
                 "disclosures": disclosures,
                 "citation_valid": False,
             }
+        try:
+            support = await self.llm.complete_model(
+                "Check every factual claim against the supplied evidence. "
+                "A syntactically valid citation is not sufficient support.",
+                _bounded_model_input(
+                    "claim-support",
+                    [f"Draft:\n{report}\n", "Evidence:\n", context],
+                ),
+                ClaimSupportDecision,
+            )
+        except Exception:
+            support = ClaimSupportDecision(supported=False)
+        if not support.supported:
+            report, disclosures = normalize_bm25_fallback(
+                INVALID_REPORT, disclosures, max_bytes=MAX_REPORT_BYTES
+            )
+            return {
+                "report": report,
+                "evidence": [],
+                "disclosures": disclosures,
+                "citation_valid": False,
+            }
         evidence_by_id = {item.evidence_id: item for item in evidence}
         cited = [evidence_by_id[item] for item in validation.cited_ids]
         report, disclosures = normalize_bm25_fallback(
@@ -340,10 +437,14 @@ class DeepResearchWorkflow:
         question: str,
         policy: PolicyContext,
         filters: RetrievalFilters | None = None,
+        checkpoint: dict | None = None,
+        progress_callback=None,
     ) -> DeepResearchResult:
         started = perf_counter()
         try:
-            result = await self._invoke(question, policy, filters)
+            result = await self._invoke(
+                question, policy, filters, checkpoint, progress_callback
+            )
         except Exception as error:
             emit_trace(
                 self.trace_sink,
@@ -395,6 +496,8 @@ class DeepResearchWorkflow:
         question: str,
         policy: PolicyContext,
         filters: RetrievalFilters | None = None,
+        checkpoint: dict | None = None,
+        progress_callback=None,
     ) -> DeepResearchResult:
         if not isinstance(policy, PolicyContext):
             raise AppError(
@@ -407,6 +510,8 @@ class DeepResearchWorkflow:
                         "question": _truncate_utf8(sanitize_text(question), 4000),
                         "policy": policy,
                         "filters": filters or RetrievalFilters(),
+                        "checkpoint": checkpoint or {},
+                        "progress_callback": progress_callback,
                     }
                 )
         except TimeoutError:

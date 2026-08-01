@@ -36,3 +36,8 @@ class ResearchJob(BaseModel):
     result_evidence: list[Evidence] = Field(default_factory=list, max_length=32)
     disclosures: list[str] = Field(default_factory=list, max_length=4)
     filters: RetrievalFilters = Field(default_factory=RetrievalFilters)
+    stage: str = "queued"
+    completed_sub_questions: list[str] = Field(default_factory=list, max_length=12)
+    rounds_completed: int = Field(default=0, ge=0, le=2)
+    compressed_evidence: list[Evidence] = Field(default_factory=list, max_length=32)
+    checkpoint: dict = Field(default_factory=dict)

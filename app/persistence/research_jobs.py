@@ -111,6 +111,7 @@ class ResearchJobStore(Protocol):
     async def claim(self, lease_seconds=60): ...
     async def complete(self, job_id, policy, lease_token, result): ...
     async def fail(self, job_id, policy, lease_token, error_code): ...
+    async def checkpoint(self, job_id, policy, lease_token, payload): ...
 
 
 class InMemoryResearchJobStore:
@@ -224,6 +225,31 @@ class InMemoryResearchJobStore:
         )
         self.jobs[job_id] = completed
         return completed.model_copy(deep=True)
+
+    async def checkpoint(self, job_id, policy, lease_token, payload):
+        job = await self._leased(job_id, policy, lease_token)
+        evidence = [
+            sanitize_evidence_for_memory(item, policy)
+            for item in payload.get("compressed_evidence", [])[:32]
+        ]
+        updated = job.model_copy(
+            update={
+                "stage": sanitize_text(payload.get("stage", "research"))[:64],
+                "progress": max(0, min(99, int(payload.get("progress", 0)))),
+                "completed_sub_questions": [
+                    sanitize_text(str(item))[:1000]
+                    for item in payload.get("completed_sub_questions", [])[:12]
+                ],
+                "rounds_completed": max(
+                    0, min(2, int(payload.get("rounds_completed", 0)))
+                ),
+                "compressed_evidence": evidence,
+                "checkpoint": payload.get("checkpoint", {}),
+                "updated_at": datetime.now(UTC),
+            }
+        )
+        self.jobs[job_id] = updated
+        return updated.model_copy(deep=True)
 
     async def mark_cancelled(self, job_id, policy, lease_token):
         job = await self.get(job_id, policy)
@@ -437,6 +463,30 @@ class MongoResearchJobStore:
                 ],
                 "disclosures": disclosures,
                 "lease_until": None,
+            },
+        )
+
+    async def checkpoint(self, job_id, policy, lease_token, payload):
+        evidence = [
+            sanitize_evidence_for_memory(item, policy).model_dump(mode="python")
+            for item in payload.get("compressed_evidence", [])[:32]
+        ]
+        return await self._leased_update(
+            job_id,
+            policy,
+            lease_token,
+            {
+                "stage": sanitize_text(payload.get("stage", "research"))[:64],
+                "progress": max(0, min(99, int(payload.get("progress", 0)))),
+                "completed_sub_questions": [
+                    sanitize_text(str(item))[:1000]
+                    for item in payload.get("completed_sub_questions", [])[:12]
+                ],
+                "rounds_completed": max(
+                    0, min(2, int(payload.get("rounds_completed", 0)))
+                ),
+                "compressed_evidence": evidence,
+                "checkpoint": payload.get("checkpoint", {}),
             },
         )
 

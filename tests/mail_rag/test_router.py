@@ -79,7 +79,7 @@ def test_llm_gateway_validates_fenced_json_against_requested_schema():
     assert "RouteDecision" in completions.calls[0]["messages"][0]["content"]
 
 
-def test_structured_fast_decision_is_not_auto_upgraded_to_deep():
+def test_deterministic_deep_policy_overrides_structured_fast_decision():
     llm = RecordingLLM(
         RouteDecision(
             route="fast",
@@ -96,8 +96,38 @@ def test_structured_fast_decision_is_not_auto_upgraded_to_deep():
 
     decision = asyncio.run(route_request(request, llm))
 
+    assert decision.route == "deep"
+    assert decision.reason_code == "deterministic_long_period"
+
+
+def test_substantive_mail_question_cannot_be_routed_as_general():
+    llm = RecordingLLM(
+        RouteDecision(
+            route="general",
+            reason_code="model_general",
+            confidence=0.9,
+            estimated_searches=0,
+        )
+    )
+    decision = asyncio.run(
+        route_request(
+            ChatRequest(user_id="kim", message="지난주 수율 이슈 알려줘"), llm
+        )
+    )
     assert decision.route == "fast"
-    assert decision.reason_code == "model_fast"
+    assert decision.reason_code == "deterministic_mail"
+
+
+def test_non_mail_greeting_may_use_general_route():
+    llm = RecordingLLM(
+        RouteDecision(
+            route="general", reason_code="greeting", confidence=1, estimated_searches=0
+        )
+    )
+    decision = asyncio.run(
+        route_request(ChatRequest(user_id="kim", message="안녕하세요"), llm)
+    )
+    assert decision.route == "general"
 
 
 def test_router_redacts_credentials_and_file_uris_before_model_call():

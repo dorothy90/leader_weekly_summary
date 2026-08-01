@@ -1,4 +1,5 @@
 import asyncio
+from time import perf_counter
 
 import langchain_core.globals as langchain_globals
 import pytest
@@ -71,6 +72,8 @@ class ScriptedLLM:
         self.model_calls.append((system, user, schema.__name__))
         if schema.__name__ == "RetrievalPlan":
             return schema.model_validate({"tasks": self.tasks})
+        if schema.__name__ == "ClaimSupportDecision":
+            return schema.model_validate({"supported": True})
         return schema.model_validate(
             {
                 "sufficient": self.sufficient,
@@ -224,6 +227,79 @@ def test_fast_rag_enforces_six_search_budget_and_request_policy_identity():
     assert len(retrieval.calls) == 6
     assert all(call_policy is policy for _, call_policy in retrieval.calls)
     assert all(task.filters == request.filters for task, _ in retrieval.calls)
+
+
+def test_fast_rag_runs_independent_planned_searches_concurrently():
+    class SlowRetrieval(RecordingRetrieval):
+        async def search(self, task, policy):
+            self.calls.append((task, policy))
+            await asyncio.sleep(0.04)
+            return RetrievalResult(evidence=[_evidence(task.query)], mode="hybrid")
+
+    retrieval = SlowRetrieval(lambda *_: None)
+    llm = ScriptedLLM(
+        tasks=[{"query": f"q{i}", "source": "mail"} for i in range(3)],
+        sufficient=True,
+        texts=["답 [S1]"],
+    )
+    started = perf_counter()
+    asyncio.run(
+        FastRAGWorkflow(retrieval, llm).invoke(
+            ChatRequest(user_id="kim", message="질문"),
+            PolicyContext.from_user_id("kim"),
+            None,
+        )
+    )
+    assert perf_counter() - started < 0.1
+
+
+def test_fast_rag_deadline_returns_safe_limited_response():
+    class HangingLLM(ScriptedLLM):
+        async def complete_model(self, system, user, schema):
+            await asyncio.sleep(0.05)
+            return await super().complete_model(system, user, schema)
+
+    result = asyncio.run(
+        FastRAGWorkflow(
+            RecordingRetrieval(lambda *_: RetrievalResult()),
+            HangingLLM(tasks=[{"query": "q", "source": "mail"}]),
+            deadline_seconds=0.01,
+        ).invoke(
+            ChatRequest(user_id="kim", message="질문"),
+            PolicyContext.from_user_id("kim"),
+            None,
+        )
+    )
+    assert result.quality.limited_answer is True
+    assert result.evidence == []
+    assert "시간" in result.answer
+
+
+def test_valid_citation_cannot_publish_arbitrary_unsupported_claim():
+    class SupportLLM(ScriptedLLM):
+        async def complete_model(self, system, user, schema):
+            if schema.__name__ == "ClaimSupportDecision":
+                return schema.model_validate(
+                    {"supported": False, "unsupported_claims": ["임의 주장"]}
+                )
+            return await super().complete_model(system, user, schema)
+
+    result = asyncio.run(
+        FastRAGWorkflow(
+            RecordingRetrieval(lambda *_: RetrievalResult(evidence=[_evidence("doc")])),
+            SupportLLM(
+                tasks=[{"query": "q", "source": "mail"}],
+                sufficient=True,
+                texts=["임의 주장은 사실입니다 [S1]"],
+            ),
+        ).invoke(
+            ChatRequest(user_id="kim", message="질문"),
+            PolicyContext.from_user_id("kim"),
+            None,
+        )
+    )
+    assert "임의 주장은 사실" not in result.answer
+    assert result.quality.limited_answer is True
 
 
 def test_fast_rag_enforces_two_rewrites_and_one_revision():

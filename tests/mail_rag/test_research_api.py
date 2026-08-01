@@ -117,6 +117,40 @@ async def test_claim_reclaims_expired_lease_and_stale_worker_cannot_complete():
 
 
 @async_test
+async def test_reclaimed_job_keeps_safe_research_checkpoint_for_resume():
+    store = InMemoryResearchJobStore()
+    owner = PolicyContext.from_user_id("kim")
+    job = await store.create(owner, "trace", "question", "plan")
+    claimed = await store.claim(lease_seconds=60)
+    await store.checkpoint(
+        job.job_id,
+        owner,
+        claimed.lease_token,
+        {
+            "stage": "research_complete",
+            "progress": 42,
+            "completed_sub_questions": ["A 원인"],
+            "rounds_completed": 1,
+            "compressed_evidence": [],
+            "checkpoint": {
+                "pending_queries": [],
+                "branch_results": [],
+                "searches": 1,
+                "rounds": 1,
+            },
+        },
+    )
+    store.jobs[job.job_id] = store.jobs[job.job_id].model_copy(
+        update={"lease_until": datetime.now(UTC) - timedelta(seconds=1)}
+    )
+    reclaimed = await store.claim()
+    assert reclaimed.stage == "research_complete"
+    assert reclaimed.progress == 42
+    assert reclaimed.completed_sub_questions == ["A 원인"]
+    assert reclaimed.checkpoint["searches"] == 1
+
+
+@async_test
 async def test_expired_unreclaimed_lease_cannot_complete_or_fail():
     store = InMemoryResearchJobStore()
     owner = PolicyContext.from_user_id("kim")
@@ -496,7 +530,7 @@ class Workflow:
         self.error = error
         self.calls = []
 
-    async def invoke(self, question, policy, filters):
+    async def invoke(self, question, policy, filters, **kwargs):
         self.calls.append((question, policy, filters))
         if self.error:
             raise self.error

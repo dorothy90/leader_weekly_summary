@@ -131,6 +131,23 @@ def test_chat_uses_body_owner_and_returns_trace_without_trusting_headers():
     assert fast.calls[0][1].user_id == "kim"
 
 
+def test_mongo_failure_degrades_to_single_turn_with_context_disclosure():
+    class BrokenConversations:
+        async def load(self, *_args):
+            raise ConnectionError("mongo down")
+
+        async def save(self, *_args):
+            raise ConnectionError("mongo down")
+
+    response = client(conversations=BrokenConversations()).post(
+        "/v1/chat", json={"user_id": "kim", "message": "질문", "conversation_id": "c1"}
+    )
+    assert response.status_code == 200
+    assert response.json()["disclosures"] == [
+        "대화 저장소를 사용할 수 없어 이번 요청은 단일 턴으로 처리했습니다."
+    ]
+
+
 def test_foreign_and_missing_supplied_conversation_ids_are_indistinguishable():
     conversations = InMemoryConversationStore()
     owner_client = client(conversations=conversations)

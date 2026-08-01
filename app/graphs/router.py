@@ -45,6 +45,36 @@ def _deterministic_fallback(request: ChatRequest) -> RouteDecision:
     )
 
 
+def _apply_deterministic_policy(
+    request: ChatRequest, decision: RouteDecision
+) -> RouteDecision:
+    deterministic = _deterministic_fallback(request)
+    if deterministic.route == "deep":
+        return deterministic
+    text = request.message.casefold().strip()
+    non_mail = text in {
+        "안녕",
+        "안녕하세요",
+        "hello",
+        "hi",
+        "도움말",
+        "사용법",
+    }
+    if non_mail:
+        return decision.model_copy(
+            update={"route": "general", "reason_code": "deterministic_general"}
+        )
+    if decision.route == "general":
+        return decision.model_copy(
+            update={
+                "route": "fast",
+                "reason_code": "deterministic_mail",
+                "estimated_searches": max(1, decision.estimated_searches),
+            }
+        )
+    return decision
+
+
 async def route_request(request: ChatRequest, llm) -> RouteDecision:
     if request.response_mode in {"fast", "deep"}:
         return RouteDecision(
@@ -60,6 +90,8 @@ async def route_request(request: ChatRequest, llm) -> RouteDecision:
             sanitize_text(request.message),
             RouteDecision,
         )
-        return RouteDecision.model_validate(decision)
+        return _apply_deterministic_policy(
+            request, RouteDecision.model_validate(decision)
+        )
     except Exception:
         return _deterministic_fallback(request)

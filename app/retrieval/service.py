@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 
 from app.domain.chat import BM25_FALLBACK_DISCLOSURE
 from app.domain.evidence import Evidence, RetrievalFilters, SearchTask
+from app.domain.errors import AppError, ErrorCode
 from app.domain.policy import PolicyContext
 from app.retrieval.embedding import EmbeddingGateway
 from app.retrieval.filters import build_owner_filters
@@ -72,7 +73,13 @@ class RetrievalService:
                     error_class=type(error).__name__,
                 ),
             )
-            raise
+            if isinstance(error, AppError):
+                raise
+            raise AppError(
+                ErrorCode.INDEX_UNAVAILABLE,
+                "검색 인덱스를 사용할 수 없습니다.",
+                retryable=True,
+            ) from None
         emit_trace(
             self.trace_sink,
             TraceEvent(

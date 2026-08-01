@@ -5,6 +5,7 @@ import pytest
 
 from app.domain.chat import BM25_FALLBACK_DISCLOSURE
 from app.domain.evidence import RetrievalFilters, SearchTask
+from app.domain.errors import AppError, ErrorCode
 from app.domain.policy import PolicyContext
 from app.retrieval.service import RetrievalService
 
@@ -39,7 +40,11 @@ class FakeSearch:
             return {"aggregations": self.aggregations}
         filters = body["query"]["bool"]["filter"]
         if any("terms" in item and "mail_id" in item["terms"] for item in filters):
-            hits = self.initial_hits if self.expansion_hits is None else self.expansion_hits
+            hits = (
+                self.initial_hits
+                if self.expansion_hits is None
+                else self.expansion_hits
+            )
         else:
             hits = self.initial_hits
         return {"hits": {"hits": deepcopy(hits)}}
@@ -67,6 +72,21 @@ class BrokenEmbedding:
         raise TimeoutError("embedding timeout with secret-token")
 
 
+class BrokenSearch:
+    async def search(self, index, body):
+        raise ConnectionError("index down")
+
+
+def test_opensearch_failure_is_retryable_index_unavailable():
+    service = RetrievalService(BrokenSearch(), FakeEmbedding(), child_index="mail")
+    with pytest.raises(AppError) as error:
+        asyncio.run(
+            service.search(SearchTask(query="q"), PolicyContext.from_user_id("kim"))
+        )
+    assert error.value.code == ErrorCode.INDEX_UNAVAILABLE
+    assert error.value.retryable is True
+
+
 def test_hybrid_vector_bm25_and_expansion_queries_are_owner_scoped():
     backend = FakeSearch()
     service = RetrievalService(backend, FakeEmbedding(), child_index="weekly_mail")
@@ -83,7 +103,9 @@ def test_hybrid_vector_bm25_and_expansion_queries_are_owner_scoped():
 
     assert result.mode == "hybrid"
     assert len(backend.calls) == 3
-    assert all(_owner_filter(body) == {"term": {"user_id": "kim"}} for _, body in backend.calls)
+    assert all(
+        _owner_filter(body) == {"term": {"user_id": "kim"}} for _, body in backend.calls
+    )
     assert all(
         {"terms": {"team": ["YIELD팀"]}} in body["query"]["bool"]["filter"]
         for _, body in backend.calls
@@ -107,7 +129,9 @@ def test_embedding_failure_runs_bm25_only_and_propagates_exact_disclosure():
     assert result.disclosures == [BM25_FALLBACK_DISCLOSURE]
     assert "secret-token" not in result.model_dump_json()
     assert len(backend.calls) == 2
-    assert all(_owner_filter(body) == {"term": {"user_id": "kim"}} for _, body in backend.calls)
+    assert all(
+        _owner_filter(body) == {"term": {"user_id": "kim"}} for _, body in backend.calls
+    )
     assert not any("knn" in str(body) for _, body in backend.calls)
 
 
@@ -175,9 +199,9 @@ def test_legacy_expansion_materializes_only_adjacent_parts_around_late_match():
     assert result.evidence[0].excerpt == "문맥 7\n\n문맥 8\n\n문맥 9"
     expansion_body = backend.calls[-1][1]
     assert expansion_body["size"] == 3
-    neighborhood_filters = expansion_body["query"]["bool"]["must"][0][
-        "bool"
-    ]["should"][0]["bool"]["filter"]
+    neighborhood_filters = expansion_body["query"]["bool"]["must"][0]["bool"]["should"][
+        0
+    ]["bool"]["filter"]
     assert {"terms": {"part_index": [7, 8, 9]}} in neighborhood_filters
 
 
@@ -370,11 +394,11 @@ def test_non_mail_lookups_are_exact_owner_scoped(task, expected_index):
         wiki_index="wiki-v2",
     )
 
-    result = asyncio.run(
-        service.search(task, PolicyContext.from_user_id("kim"))
-    )
+    result = asyncio.run(service.search(task, PolicyContext.from_user_id("kim")))
 
     assert backend.calls
     assert all(index == expected_index for index, _ in backend.calls)
-    assert all(_owner_filter(body) == {"term": {"user_id": "kim"}} for _, body in backend.calls)
+    assert all(
+        _owner_filter(body) == {"term": {"user_id": "kim"}} for _, body in backend.calls
+    )
     assert all(item.user_id == "kim" for item in result.evidence)
