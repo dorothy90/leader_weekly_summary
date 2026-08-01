@@ -79,6 +79,8 @@ PY
 
 Terminate both processes gracefully during deployment. Running jobs are recovered after their lease expires; a stale worker cannot complete a job claimed under a newer lease token.
 
+Set `FAST_DEADLINE_SECONDS` to the synchronous end-to-end Fast RAG deadline. The deadline covers planning, all bounded retrieval rounds, generation, citation validation, and structured claim-support validation; timeout returns a limited response.
+
 ## Health and recovery
 
 Process liveness:
@@ -105,7 +107,7 @@ python scripts/backfill_user_id.py --index weekly_mail_v1 --user-id kim \
   --expected-count 1240 --checkpoint var/migrations/kim-owner.json --apply
 ```
 
-Run a separate approved command per owner partition. A team-to-owner guess is not an owner manifest. Stop on any unexpected count; documents not explicitly backfilled remain invisible.
+Dry-run writes a `planned` checkpoint containing the immutable identity plus partition, eligible, and already-owned counts. Apply refuses a missing, changed, or non-planned checkpoint, aborts on conflicts, and verifies that eligible documents reach zero and the owned count increases by exactly the update count before marking the checkpoint `applied`. Repeating apply with that same applied identity is a no-op. Only the CLI's approved immutable keyword partition fields are accepted. Run a separate approved command per owner partition. A team-to-owner guess is not an owner manifest. Stop on any unexpected count; documents not explicitly backfilled remain invisible.
 
 ## Parent/child migration and shadow comparison
 
@@ -128,7 +130,7 @@ python scripts/backfill_parent_child.py \
   --apply
 ```
 
-The checkpoint identity binds source/target indices, owner-manifest digest, parser/chunker versions, and batch size. A completed checkpoint cannot be reused with different inputs.
+The checkpoint identity binds source/target indices, owner-manifest digest, parser/chunker versions, and batch size. A completed checkpoint cannot be reused with different inputs. Compatible legacy chunks are grouped only when owner, mail/section identity, facets, embedding model/version metadata, and safe content locator agree. Unicode splitting preserves every character exactly; parents and children remain within their byte budgets, and a legacy embedding is retained only for a byte-identical child.
 
 Prepare a UTF-8 file with one synthetic or approved query per line, then compare v1/v2 rankings. Output contains a query hash, owner-filtered document IDs, overlap, and timings—never query text or mail evidence:
 

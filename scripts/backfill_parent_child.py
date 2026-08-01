@@ -53,44 +53,54 @@ def build_parent_child(
     parser_version: str = PARSER_VERSION,
     chunker_version: str = CHUNKER_VERSION,
 ) -> tuple[list[dict], list[dict]]:
-    user_id = str(source.get("user_id") or "").strip()
-    mail_id = str(source.get("mail_id") or "").strip()
-    text = str(source.get("text") or "")
-    if not user_id or not mail_id or not text.strip():
-        return [], []
-    ordinal = int(source.get("part_index", 0))
-    content_hash = sha256(text.encode()).hexdigest()
-    parent_id = stable_id(user_id, mail_id, parser_version, str(ordinal))
-    parent = {
-        "parent_id": parent_id,
-        "mail_id": mail_id,
-        "user_id": user_id,
-        "text": text,
-        "team": source.get("team") or "",
-        "week": source.get("week") or "",
-        "mail_type": source.get("mail_type") or "other",
-        "section_ordinal": ordinal,
-        "content_hash": content_hash,
-        "parser_version": parser_version,
-        "chunker_version": chunker_version,
-        "embedding_model": source.get("embedding_model") or "legacy",
-        "indexed_at": source.get("indexed_at") or "1970-01-01T00:00:00Z",
-    }
-    expected_content_id = mail_content_id(user_id, mail_id)
-    if source.get("content_id") == expected_content_id and source.get(
-        "document_locator"
-    ) == mail_content_locator(expected_content_id):
-        parent["content_id"] = expected_content_id
-        parent["document_locator"] = mail_content_locator(expected_content_id)
-    child_id = stable_id(parent_id, chunker_version, "0")
-    child = {
-        **parent,
-        "child_id": child_id,
-        "embedding": source.get("embedding"),
-        "part_index": 0,
-        "total_parts": 1,
-    }
-    return [parent], [child]
+    return build_grouped_parent_children([source], parser_version, chunker_version)
+
+
+def _split_utf8_exact(text: str, byte_limit: int) -> list[str]:
+    """Split only between Unicode code points and preserve text exactly."""
+    if not text:
+        return []
+    chunks: list[str] = []
+    current: list[str] = []
+    size = 0
+    for character in text:
+        character_size = len(character.encode("utf-8"))
+        if current and size + character_size > byte_limit:
+            chunks.append("".join(current))
+            current, size = [], 0
+        current.append(character)
+        size += character_size
+    if current:
+        chunks.append("".join(current))
+    return chunks
+
+
+def _safe_content_fields(source: dict, user_id: str, mail_id: str) -> tuple[str, str]:
+    expected = mail_content_id(user_id, mail_id)
+    locator = mail_content_locator(expected)
+    if (
+        source.get("content_id") == expected
+        and source.get("document_locator") == locator
+    ):
+        return expected, locator
+    return "", ""
+
+
+def _compatibility_values(source: dict, user_id: str, mail_id: str) -> tuple[str, ...]:
+    content_id, locator = _safe_content_fields(source, user_id, mail_id)
+    return (
+        user_id,
+        mail_id,
+        str(source.get("section") or source.get("source_type") or "body"),
+        str(source.get("team") or ""),
+        str(source.get("week") or ""),
+        str(source.get("mail_type") or "other"),
+        str(source.get("embedding_model") or "legacy"),
+        str(source.get("parser_version") or "legacy"),
+        str(source.get("chunker_version") or "legacy"),
+        content_id,
+        locator,
+    )
 
 
 def build_grouped_parent_children(
@@ -107,59 +117,74 @@ def build_grouped_parent_children(
     mail_id = str(first.get("mail_id") or "").strip()
     if not user_id or not mail_id:
         return [], []
+    texts = [str(source.get("text") or "") for source in ordered]
+    if any(text == "" for text in texts):
+        return [], []
+    combined = "\n\n".join(texts)
+    source_spans = []
+    cursor = 0
+    for index, (source, text) in enumerate(zip(ordered, texts)):
+        if index:
+            cursor += 2
+        source_spans.append((cursor, cursor + len(text), source))
+        cursor += len(text)
+    parent_texts = _split_utf8_exact(combined, MAX_PARENT_BYTES)
     parents: list[dict] = []
     children: list[dict] = []
-    batches: list[list[dict]] = []
-    current: list[dict] = []
-    current_bytes = 0
-    for source in ordered:
-        text = str(source.get("text") or "").strip()
-        if not text:
-            continue
-        size = len(text.encode("utf-8")) + (2 if current else 0)
-        if current and current_bytes + size > MAX_PARENT_BYTES:
-            batches.append(current)
-            current, current_bytes = [], 0
-        current.append(source)
-        current_bytes += size
-    if current:
-        batches.append(current)
-
-    for batch_ordinal, batch in enumerate(batches):
-        parent_text = "\n\n".join(str(item["text"]).strip() for item in batch)
-        section = str(first.get("section") or first.get("source_type") or "body")
+    compatibility = _compatibility_values(first, user_id, mail_id)
+    compatibility_digest = stable_id(*compatibility)
+    absolute_start = 0
+    for batch_ordinal, parent_text in enumerate(parent_texts):
+        absolute_end = absolute_start + len(parent_text)
+        section = compatibility[2]
         parent_id = stable_id(
-            user_id, mail_id, section, parser_version, str(batch_ordinal)
+            user_id,
+            mail_id,
+            section,
+            compatibility_digest,
+            parser_version,
+            str(batch_ordinal),
         )
         parent = {
             "parent_id": parent_id,
             "mail_id": mail_id,
             "user_id": user_id,
             "text": parent_text,
-            "team": first.get("team") or "",
-            "week": first.get("week") or "",
-            "mail_type": first.get("mail_type") or "other",
+            "team": compatibility[3],
+            "week": compatibility[4],
+            "mail_type": compatibility[5],
             "section_ordinal": batch_ordinal,
             "content_hash": sha256(parent_text.encode()).hexdigest(),
             "parser_version": parser_version,
             "chunker_version": chunker_version,
-            "embedding_model": first.get("embedding_model") or "legacy",
+            "embedding_model": compatibility[6],
             "indexed_at": first.get("indexed_at") or "1970-01-01T00:00:00Z",
         }
+        if compatibility[9] and compatibility[10]:
+            parent["content_id"] = compatibility[9]
+            parent["document_locator"] = compatibility[10]
         parents.append(parent)
+        boundaries = {absolute_start, absolute_end}
+        for span_start, span_end, _source in source_spans:
+            if absolute_start < span_start < absolute_end:
+                boundaries.add(span_start)
+            if absolute_start < span_end < absolute_end:
+                boundaries.add(span_end)
+        points = sorted(boundaries)
         child_texts: list[tuple[str, object | None]] = []
-        for source in batch:
-            legacy_text = str(source.get("text") or "").strip()
-            encoded = legacy_text.encode("utf-8")
-            if len(encoded) <= MAX_CHILD_BYTES:
-                child_texts.append((legacy_text, source.get("embedding")))
-                continue
-            for offset in range(0, len(encoded), MAX_CHILD_BYTES):
-                text = encoded[offset : offset + MAX_CHILD_BYTES].decode(
-                    "utf-8", errors="ignore"
-                )
-                if text:
-                    child_texts.append((text, None))
+        for start, end in zip(points, points[1:]):
+            interval = combined[start:end]
+            for child_text in _split_utf8_exact(interval, MAX_CHILD_BYTES):
+                embedding = None
+                for span_start, span_end, source in source_spans:
+                    if (
+                        start == span_start
+                        and end == span_end
+                        and child_text == str(source.get("text") or "")
+                    ):
+                        embedding = source.get("embedding")
+                        break
+                child_texts.append((child_text, embedding))
         total = len(child_texts)
         for child_ordinal, (text, embedding) in enumerate(child_texts):
             child_id = stable_id(parent_id, chunker_version, str(child_ordinal))
@@ -174,6 +199,7 @@ def build_grouped_parent_children(
             if embedding is not None:
                 child["embedding"] = embedding
             children.append(child)
+        absolute_start = absolute_end
     return parents, children
 
 
@@ -210,8 +236,7 @@ def plan_migration(
     seen = seen_parent_hashes if seen_parent_hashes is not None else {}
     parents: dict[str, dict] = {}
     children: dict[str, dict] = {}
-    grouped: dict[tuple[str, str, str], list[dict]] = {}
-    source_ids: dict[tuple[str, str, str], list[str]] = {}
+    grouped: dict[tuple[str, ...], list[dict]] = {}
     for record in records:
         report.scanned += 1
         source_id = str(record.get("_id") or "<unknown>")
@@ -223,19 +248,12 @@ def plan_migration(
         if owner not in allowed:
             report.unknown_owner_ids.append(source_id)
             continue
-        if (
-            not str(source.get("mail_id") or "").strip()
-            or not str(source.get("text") or "").strip()
-        ):
+        mail_id = str(source.get("mail_id") or "").strip()
+        if not mail_id or str(source.get("text") or "") == "":
             report.invalid_source_ids.append(source_id)
             continue
-        key = (
-            owner,
-            str(source.get("mail_id")).strip(),
-            str(source.get("section") or source.get("source_type") or "body"),
-        )
+        key = _compatibility_values(source, owner, mail_id)
         grouped.setdefault(key, []).append(source)
-        source_ids.setdefault(key, []).append(source_id)
 
     for key, sources in grouped.items():
         unique_sources = {}

@@ -28,6 +28,8 @@ Request body:
 
 `response_mode` is `auto`, `fast`, or `deep`. `mail_type` is `weekly_report`, `daily_report`, `other`, or null. Fast RAG returns HTTP 200:
 
+Fast mode is bounded by `FAST_DEADLINE_SECONDS` end-to-end, including planning, retrieval, generation, citation validation, and claim-support validation. Deadline exhaustion returns a deterministic limited response rather than publishing an ungrounded answer.
+
 ```json
 {
   "conversation_id": "9fd...",

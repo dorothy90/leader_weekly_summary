@@ -12,11 +12,15 @@ from typing import Sequence
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+APPROVED_IMMUTABLE_PARTITION_FIELDS = frozenset(
+    {"corpus_id", "ingestion_batch_id", "migration_partition"}
+)
+
 
 def _term(field: str, value: str) -> dict:
     name, selected = str(field).strip(), str(value).strip()
-    if not name or not selected or name == "user_id":
-        raise ValueError("an immutable non-owner partition predicate is required")
+    if name not in APPROVED_IMMUTABLE_PARTITION_FIELDS or not selected:
+        raise ValueError("an approved immutable partition field is required")
     return {"term": {name: selected}}
 
 
@@ -76,29 +80,79 @@ def run_backfill(
         partition_value.strip(),
         expected_count,
     )
-    if checkpoint_path.exists():
-        prior = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-        if prior.get("identity") != identity:
-            raise ValueError("checkpoint does not match this backfill identity")
     partition = _term(partition_field, partition_value)
+    owned_query = {
+        "bool": {"filter": [partition, {"term": {"user_id": user_id.strip()}}]}
+    }
+
+    existing_checkpoint = None
+    if checkpoint_path.exists():
+        existing_checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+        if existing_checkpoint.get("identity") != identity:
+            raise ValueError("checkpoint does not match this backfill identity")
+
+    if apply:
+        if existing_checkpoint is None:
+            raise ValueError("apply requires a matching planned checkpoint")
+        if existing_checkpoint.get("status") == "applied":
+            return {**existing_checkpoint["report"], "idempotent": True}
+        if existing_checkpoint.get("status") != "planned":
+            raise ValueError("apply requires an unconsumed planned checkpoint")
+        planned = existing_checkpoint["report"]
+    else:
+        if existing_checkpoint and existing_checkpoint.get("status") == "applied":
+            return {**existing_checkpoint["report"], "idempotent": True}
+        before_partition = client.count(
+            index=index, body={"query": {"bool": {"filter": [partition]}}}
+        ).get("count", 0)
+        eligible_before = client.count(index=index, body={"query": body["query"]}).get(
+            "count", 0
+        )
+        owned_before = client.count(index=index, body={"query": owned_query}).get(
+            "count", 0
+        )
+        if eligible_before != expected_count:
+            raise ValueError("eligible count does not match approved expected count")
+        report = {
+            "status": "planned",
+            "before_partition": before_partition,
+            "eligible_before": eligible_before,
+            "owned_before": owned_before,
+            "updated": 0,
+            "conflicts": 0,
+            "eligible_after": eligible_before,
+            "owned_after": owned_before,
+        }
+        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        checkpoint_path.write_text(
+            json.dumps(
+                {"identity": identity, "status": "planned", "report": report},
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+        return report
+
     before_partition = client.count(
         index=index, body={"query": {"bool": {"filter": [partition]}}}
     ).get("count", 0)
     eligible_before = client.count(index=index, body={"query": body["query"]}).get(
         "count", 0
     )
-    if eligible_before != expected_count:
-        raise ValueError("eligible count does not match approved expected count")
-    report = {
-        "before_partition": before_partition,
-        "eligible_before": eligible_before,
-        "updated": 0,
-        "conflicts": 0,
-        "eligible_after": eligible_before,
-        "owned_after": 0,
-    }
-    if not apply:
-        return report
+    owned_before = client.count(index=index, body={"query": owned_query}).get(
+        "count", 0
+    )
+    if (
+        eligible_before != planned["eligible_before"]
+        or eligible_before != expected_count
+    ):
+        raise ValueError("eligible count does not match planned expected count")
+    if (
+        before_partition != planned["before_partition"]
+        or owned_before != planned["owned_before"]
+    ):
+        raise ValueError("partition counts changed after the planned checkpoint")
+    report = dict(planned)
     response = client.update_by_query(
         index=index, body=body, conflicts="abort", refresh=True
     )
@@ -109,20 +163,25 @@ def run_backfill(
     report["eligible_after"] = client.count(
         index=index, body={"query": body["query"]}
     ).get("count", 0)
-    owned_query = {
-        "bool": {"filter": [partition, {"term": {"user_id": user_id.strip()}}]}
-    }
     report["owned_after"] = client.count(index=index, body={"query": owned_query}).get(
         "count", 0
     )
     after_partition = client.count(
         index=index, body={"query": {"bool": {"filter": [partition]}}}
     ).get("count", 0)
-    if report["eligible_after"] != 0 or after_partition != before_partition:
+    if (
+        report["eligible_after"] != 0
+        or after_partition != before_partition
+        or report["owned_after"] != owned_before + report["updated"]
+    ):
         raise RuntimeError("backfill reconciliation failed")
+    report["status"] = "applied"
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     checkpoint_path.write_text(
-        json.dumps({"identity": identity, "report": report}, sort_keys=True),
+        json.dumps(
+            {"identity": identity, "status": "applied", "report": report},
+            sort_keys=True,
+        ),
         encoding="utf-8",
     )
     return report
@@ -134,7 +193,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--index", required=True)
     parser.add_argument("--user-id", required=True)
-    parser.add_argument("--partition-field", required=True)
+    parser.add_argument(
+        "--partition-field",
+        required=True,
+        choices=sorted(APPROVED_IMMUTABLE_PARTITION_FIELDS),
+    )
     parser.add_argument("--partition-value", required=True)
     parser.add_argument("--expected-count", required=True, type=int)
     parser.add_argument(

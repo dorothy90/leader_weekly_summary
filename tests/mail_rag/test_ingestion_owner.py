@@ -250,6 +250,7 @@ def test_backfill_is_dry_run_by_default_and_rejects_blank_owner():
 def test_backfill_mixed_corpus_changes_only_approved_partition(tmp_path):
     class Client:
         def __init__(self):
+            self.updates = 0
             self.docs = [
                 {"corpus_id": "approved"},
                 {"corpus_id": "approved"},
@@ -272,12 +273,25 @@ def test_backfill_mixed_corpus_changes_only_approved_partition(tmp_path):
             return {"count": len(docs)}
 
         def update_by_query(self, index, body, **kwargs):
+            self.updates += 1
             for doc in self.docs:
                 if doc.get("corpus_id") == "approved" and "user_id" not in doc:
                     doc["user_id"] = body["script"]["params"]["user_id"]
             return {"updated": 2, "version_conflicts": 0}
 
     client = Client()
+    checkpoint = tmp_path / "checkpoint.json"
+    planned = run_backfill(
+        client,
+        index="mail",
+        user_id="kim",
+        partition_field="corpus_id",
+        partition_value="approved",
+        expected_count=2,
+        checkpoint_path=checkpoint,
+        apply=False,
+    )
+    assert planned["status"] == "planned"
     report = run_backfill(
         client,
         index="mail",
@@ -285,7 +299,7 @@ def test_backfill_mixed_corpus_changes_only_approved_partition(tmp_path):
         partition_field="corpus_id",
         partition_value="approved",
         expected_count=2,
-        checkpoint_path=tmp_path / "checkpoint.json",
+        checkpoint_path=checkpoint,
         apply=True,
     )
     assert (
@@ -295,6 +309,79 @@ def test_backfill_mixed_corpus_changes_only_approved_partition(tmp_path):
     )
     assert client.docs[2] == {"corpus_id": "other"}
     assert client.docs[3]["user_id"] == "lee"
+    repeated = run_backfill(
+        client,
+        index="mail",
+        user_id="kim",
+        partition_field="corpus_id",
+        partition_value="approved",
+        expected_count=2,
+        checkpoint_path=checkpoint,
+        apply=True,
+    )
+    assert repeated["idempotent"] is True
+    assert client.updates == 1
+
+
+def test_backfill_apply_requires_matching_unconsumed_dry_run_checkpoint(tmp_path):
+    class Client:
+        def count(self, **_kwargs):
+            return {"count": 0}
+
+    with pytest.raises(ValueError, match="planned checkpoint"):
+        run_backfill(
+            Client(),
+            index="mail",
+            user_id="kim",
+            partition_field="corpus_id",
+            partition_value="approved",
+            expected_count=0,
+            checkpoint_path=tmp_path / "missing.json",
+            apply=True,
+        )
+
+
+def test_backfill_fails_when_owned_after_does_not_reconcile(tmp_path):
+    class Client:
+        def __init__(self):
+            self.calls = 0
+
+        def count(self, index, body):
+            self.calls += 1
+            values = [2, 1, 0, 2, 1, 0, 0, 0, 2]
+            return {"count": values[self.calls - 1]}
+
+        def update_by_query(self, **_kwargs):
+            return {"updated": 1, "version_conflicts": 0}
+
+    client = Client()
+    checkpoint = tmp_path / "checkpoint.json"
+    run_backfill(
+        client,
+        index="mail",
+        user_id="kim",
+        partition_field="corpus_id",
+        partition_value="approved",
+        expected_count=1,
+        checkpoint_path=checkpoint,
+        apply=False,
+    )
+    with pytest.raises(RuntimeError, match="reconciliation"):
+        run_backfill(
+            client,
+            index="mail",
+            user_id="kim",
+            partition_field="corpus_id",
+            partition_value="approved",
+            expected_count=1,
+            checkpoint_path=checkpoint,
+            apply=True,
+        )
+
+
+def test_backfill_rejects_unapproved_partition_field():
+    with pytest.raises(ValueError, match="approved immutable"):
+        build_update_query("kim", "team", "YIELD")
 
 
 def test_parent_child_is_deterministic_and_reuses_existing_embedding():
@@ -343,8 +430,101 @@ def test_parent_child_groups_compatible_legacy_chunks_and_only_reuses_exact_embe
     children = sorted(
         plan.child_actions, key=lambda item: item["_source"]["part_index"]
     )
-    assert [item["_source"]["text"] for item in children] == ["first", "second"]
-    assert [item["_source"].get("embedding") for item in children] == [[0.1], [0.2]]
+    assert [item["_source"]["text"] for item in children] == ["first", "\n\n", "second"]
+    assert [item["_source"].get("embedding") for item in children] == [
+        [0.1],
+        None,
+        [0.2],
+    ]
+    assert "".join(item["_source"]["text"] for item in children) == "first\n\nsecond"
+
+
+def test_parent_child_multibyte_splitting_is_lossless_and_bounded():
+    text = "가나다🙂\n" * 2000
+    plan = plan_migration(
+        [
+            {
+                "_id": "large",
+                "_source": {
+                    "user_id": "kim",
+                    "mail_id": "m1",
+                    "part_index": 0,
+                    "text": text,
+                    "embedding": [0.1],
+                },
+            }
+        ],
+        allowed_owners={"kim"},
+    )
+    parents = sorted(
+        plan.parent_actions, key=lambda item: item["_source"]["section_ordinal"]
+    )
+    children = sorted(
+        plan.child_actions,
+        key=lambda item: (
+            item["_source"]["section_ordinal"],
+            item["_source"]["part_index"],
+        ),
+    )
+    assert "".join(item["_source"]["text"] for item in parents) == text
+    assert all(len(item["_source"]["text"].encode()) <= 12_000 for item in parents)
+    assert all(len(item["_source"]["text"].encode()) <= 4_000 for item in children)
+    assert all("embedding" not in item["_source"] for item in children)
+    for parent in parents:
+        own_children = [
+            item for item in children if item["_source"]["parent_id"] == parent["_id"]
+        ]
+        assert (
+            "".join(item["_source"]["text"] for item in own_children)
+            == parent["_source"]["text"]
+        )
+
+
+def test_parent_child_conflicting_facets_never_merge_or_inherit():
+    records = [
+        {
+            "_id": "a",
+            "_source": {
+                "user_id": "kim",
+                "mail_id": "m1",
+                "part_index": 0,
+                "text": "A",
+                "team": "A",
+                "week": "2026-01",
+                "mail_type": "weekly_report",
+                "embedding_model": "e1",
+            },
+        },
+        {
+            "_id": "b",
+            "_source": {
+                "user_id": "kim",
+                "mail_id": "m1",
+                "part_index": 1,
+                "text": "B",
+                "team": "B",
+                "week": "2026-02",
+                "mail_type": "other",
+                "embedding_model": "e2",
+            },
+        },
+    ]
+    plan = plan_migration(records, allowed_owners={"kim"})
+    assert len(plan.parent_actions) == 2
+    metadata = {
+        (
+            item["_source"]["text"],
+            item["_source"]["team"],
+            item["_source"]["week"],
+            item["_source"]["mail_type"],
+            item["_source"]["embedding_model"],
+        )
+        for item in plan.parent_actions
+    }
+    assert metadata == {
+        ("A", "A", "2026-01", "weekly_report", "e1"),
+        ("B", "B", "2026-02", "other", "e2"),
+    }
 
 
 def test_parent_child_migration_is_dry_run_by_default():

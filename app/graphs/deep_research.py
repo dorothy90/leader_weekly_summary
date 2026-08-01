@@ -152,13 +152,19 @@ class DeepResearchWorkflow:
         question = sanitize_text(state["question"]) or "메일 조사"
         checkpoint = state.get("checkpoint") or {}
         if checkpoint:
+            branches = [
+                BranchResult.model_validate(item)
+                for item in checkpoint.get("branch_results", [])
+            ]
+            completed = {item.question for item in branches if not item.failed}
             return {
                 "question": question,
-                "queries": checkpoint.get("pending_queries", []),
-                "branch_results": [
-                    BranchResult.model_validate(item)
-                    for item in checkpoint.get("branch_results", [])
+                "queries": [
+                    item
+                    for item in checkpoint.get("pending_queries", [])
+                    if item not in completed
                 ],
+                "branch_results": branches,
                 "searches": int(checkpoint.get("searches", 0)),
                 "rounds": int(checkpoint.get("rounds", 0)),
             }
@@ -226,59 +232,83 @@ class DeepResearchWorkflow:
         semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
         if not queries:
             return {}
-        fresh = await asyncio.gather(
-            *(
-                self._research_one(
-                    item,
-                    state["policy"],
-                    state["filters"],
-                    semaphore,
-                )
-                for item in queries
+
+        async def run_one(item):
+            return item, await self._research_one(
+                item, state["policy"], state["filters"], semaphore
             )
-        )
+
+        tasks = [asyncio.create_task(run_one(item)) for item in queries]
+        fresh = []
+        successful = [item for item in state["branch_results"] if not item.failed]
+        fresh_successes = 0
+        pending = list(queries)
+        callback = state.get("progress_callback")
+        try:
+            for future in asyncio.as_completed(tasks):
+                question, branch = await future
+                fresh.append(branch)
+                if not branch.failed:
+                    successful.append(branch)
+                    fresh_successes += 1
+                    pending.remove(question)
+                if callback is not None:
+                    checkpoint_state = {
+                        **state,
+                        "branch_results": successful,
+                    }
+                    compressed = self._safe_evidence(checkpoint_state)
+                    safe_branches = [
+                        item.model_copy(
+                            update={
+                                "evidence": [
+                                    sanitize_evidence_for_memory(
+                                        evidence, state["policy"]
+                                    )
+                                    for evidence in item.evidence
+                                    if evidence.user_id == state["policy"].user_id
+                                ][:MAX_EVIDENCE]
+                            }
+                        )
+                        for item in successful
+                    ]
+                    await callback(
+                        {
+                            "stage": (
+                                "research_in_progress"
+                                if pending
+                                else "research_complete"
+                            ),
+                            "progress": min(90, 10 + len(successful) * 8),
+                            "completed_sub_questions": [
+                                item.question for item in successful
+                            ],
+                            "rounds_completed": min(MAX_ROUNDS, state["rounds"] + 1),
+                            "compressed_evidence": compressed,
+                            "checkpoint": {
+                                "pending_queries": pending,
+                                "branch_results": [
+                                    item.model_dump(mode="json")
+                                    for item in safe_branches
+                                ],
+                                # Failed branches stay pending and do not consume the
+                                # persisted retry budget.
+                                "searches": state["searches"] + fresh_successes,
+                                "rounds": min(MAX_ROUNDS, state["rounds"] + 1),
+                            },
+                        }
+                    )
+        except BaseException:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
         updated = {
             "branch_results": [*state["branch_results"], *fresh],
             "searches": state["searches"] + len(queries),
             "rounds": state["rounds"] + 1,
         }
-        callback = state.get("progress_callback")
-        if callback is not None:
-            checkpoint_state = {**state, **updated}
-            compressed = self._safe_evidence(checkpoint_state)
-            safe_branches = []
-            for branch in updated["branch_results"]:
-                safe_branches.append(
-                    branch.model_copy(
-                        update={
-                            "evidence": [
-                                sanitize_evidence_for_memory(item, state["policy"])
-                                for item in branch.evidence
-                                if item.user_id == state["policy"].user_id
-                            ][:MAX_EVIDENCE]
-                        }
-                    )
-                )
-            completed = [
-                item.question for item in updated["branch_results"] if not item.failed
-            ]
-            await callback(
-                {
-                    "stage": "research_complete",
-                    "progress": min(90, 10 + len(completed) * 8),
-                    "completed_sub_questions": completed,
-                    "rounds_completed": updated["rounds"],
-                    "compressed_evidence": compressed,
-                    "checkpoint": {
-                        "pending_queries": [],
-                        "branch_results": [
-                            item.model_dump(mode="json") for item in safe_branches
-                        ],
-                        "searches": updated["searches"],
-                        "rounds": updated["rounds"],
-                    },
-                }
-            )
         return updated
 
     async def _gap(self, state: DeepState) -> dict:
@@ -296,10 +326,13 @@ class DeepResearchWorkflow:
             )
         except Exception:
             return {"complete": True, "queries": []}
+        completed = {
+            item.question for item in state["branch_results"] if not item.failed
+        }
         queries = []
         for item in decision.follow_up_questions:
             safe = _truncate_utf8(sanitize_text(str(item)), 1000)
-            if safe and safe not in queries:
+            if safe and safe not in completed and safe not in queries:
                 queries.append(safe)
             if len(queries) == MAX_FOLLOW_UP_QUESTIONS:
                 break

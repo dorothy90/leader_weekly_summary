@@ -34,3 +34,15 @@ All Critical/Important findings were technically valid. Two plan sketches were i
 - Lock: `uv lock` resolved 152 packages and updated Motor 3.3.2 -> 3.7.1 and PyMongo 4.16.0 -> 4.15.5.
 
 Live OpenSearch, MongoDB, embedding, and LLM quality/latency gates remain environment-dependent and are not claimed by this local verification.
+
+## Follow-up integration review
+
+Commit base: `5090f46510f635129b939c902f5eeb67baacfa53`
+
+- Owner backfill dry-run now persists an identity-bound `planned` checkpoint with partition, eligible, and owned-before counts. Apply rejects missing/mismatched/consumed plans, verifies the planned counts again, aborts on conflicts, requires `eligible_after == 0` and `owned_after == owned_before + updated`, and marks the checkpoint `applied`; repeated matching apply is a no-op. Partition fields are restricted to an explicit immutable keyword allowlist.
+- Parent/child splitting now preserves Unicode text exactly without trimming or lossy decode. Oversized legacy chunks split at code-point boundaries into parents no larger than 12,000 UTF-8 bytes and children no larger than 4,000 bytes, with exact parent/child reconstruction. Legacy embeddings survive only on byte-identical children.
+- Migration compatibility grouping now includes team, week, mail type, embedding model, source parser/chunker versions, section/source type, and validated safe content locator identity, preventing conflicting metadata from being merged or inherited.
+- Deep research now checkpoints after every completed branch through the existing owner/lease CAS. Checkpoints contain successful branches plus failed/unstarted pending queries. Resume excludes completed questions, retries total-outage originals, filters completed questions from gap follow-ups, and preserves the concurrency cap.
+- API and operations documentation now state the configured Fast end-to-end deadline coverage and the stronger migration/checkpoint contracts.
+
+Follow-up verification: focused migration/Deep tests `53 passed`; mail-RAG suite `220 passed`; full repository `327 passed, 9 warnings`; compile, Black check, and diff check exited cleanly.
