@@ -1,0 +1,607 @@
+import asyncio
+
+import langchain
+import pytest
+
+from app.domain.chat import BM25_FALLBACK_DISCLOSURE, ChatRequest
+from app.domain.evidence import Evidence
+from app.domain.policy import PolicyContext
+from app.graphs.fast_rag import (
+    INCOMPLETE_ANSWER_PREFIX,
+    MAX_EVIDENCE_TOKENS,
+    FastRAGWorkflow,
+)
+from app.retrieval.service import RetrievalResult
+from app.security.citations import CitationValidator
+
+
+def _evidence(
+    document_id: str,
+    *,
+    owner: str = "kim",
+    excerpt: str = "수율은 개선되었습니다.",
+    title: str = "주간 보고",
+    source_locator: str | None = "mail:opaque-id",
+) -> Evidence:
+    return Evidence(
+        evidence_id="S1",
+        source_type="mail",
+        document_id=document_id,
+        title=title,
+        excerpt=excerpt,
+        score=1,
+        user_id=owner,
+        acl_decision_id="decision",
+        content_hash=f"hash-{document_id}",
+        source_locator=source_locator,
+    )
+
+
+class RecordingRetrieval:
+    def __init__(self, result_factory):
+        self.result_factory = result_factory
+        self.calls = []
+
+    async def search(self, task, policy):
+        self.calls.append((task, policy))
+        return self.result_factory(task, policy)
+
+
+class ScriptedLLM:
+    def __init__(
+        self,
+        *,
+        tasks,
+        sufficient=False,
+        missing_information=None,
+        texts=None,
+    ):
+        self.tasks = tasks
+        self.sufficient = sufficient
+        self.missing_information = (
+            list(missing_information)
+            if missing_information is not None
+            else ([] if sufficient else ["추가 근거"])
+        )
+        self.texts = list(texts or [])
+        self.model_calls = []
+        self.text_calls = []
+
+    async def complete_model(self, system, user, schema):
+        self.model_calls.append((system, user, schema.__name__))
+        if schema.__name__ == "RetrievalPlan":
+            return schema.model_validate({"tasks": self.tasks})
+        return schema.model_validate(
+            {
+                "sufficient": self.sufficient,
+                "missing_information": self.missing_information,
+            }
+        )
+
+    async def complete_text(self, system, user):
+        self.text_calls.append((system, user))
+        if self.texts:
+            return self.texts.pop(0)
+        return "재작성 검색어"
+
+
+def test_fast_workflow_does_not_override_existing_process_debug_setting():
+    original = getattr(langchain, "debug", None)
+    langchain.debug = True
+    try:
+        FastRAGWorkflow(
+            RecordingRetrieval(
+                lambda task, policy: RetrievalResult(evidence=[], mode="hybrid")
+            ),
+            ScriptedLLM(tasks=[{"query": "수율", "source": "mail"}]),
+        )
+        assert langchain.debug is True
+    finally:
+        langchain.debug = original if original is not None else False
+
+
+def test_fast_workflow_restores_absent_process_debug_attribute_after_invoke():
+    had_debug = hasattr(langchain, "debug")
+    original = getattr(langchain, "debug", None)
+    if had_debug:
+        delattr(langchain, "debug")
+    try:
+        workflow = FastRAGWorkflow(
+            RecordingRetrieval(
+                lambda task, policy: RetrievalResult(evidence=[], mode="hybrid")
+            ),
+            ScriptedLLM(tasks=[{"query": "수율", "source": "mail"}]),
+        )
+        assert not hasattr(langchain, "debug")
+
+        asyncio.run(
+            workflow.invoke(
+                ChatRequest(user_id="kim", message="질문"),
+                PolicyContext.from_user_id("kim"),
+                None,
+            )
+        )
+
+        assert not hasattr(langchain, "debug")
+    finally:
+        if had_debug:
+            langchain.debug = original
+
+
+def test_fast_rag_rejects_request_policy_owner_mismatch_before_retrieval():
+    retrieval = RecordingRetrieval(
+        lambda task, policy: RetrievalResult(evidence=[], mode="hybrid")
+    )
+    llm = ScriptedLLM(tasks=[{"query": "수율", "source": "mail"}])
+
+    with pytest.raises(ValueError, match="owner"):
+        asyncio.run(
+            FastRAGWorkflow(retrieval, llm).invoke(
+                ChatRequest(user_id="kim", message="수율"),
+                PolicyContext.from_user_id("lee"),
+                None,
+            )
+        )
+
+    assert retrieval.calls == []
+
+
+def test_fast_rag_propagates_exact_embedding_fallback_disclosure():
+    retrieval = RecordingRetrieval(
+        lambda task, policy: RetrievalResult(
+            mode="bm25",
+            embedding_error="EMBEDDING_UNAVAILABLE",
+            disclosures=[BM25_FALLBACK_DISCLOSURE],
+        )
+    )
+    llm = ScriptedLLM(tasks=[{"query": "수율", "source": "mail"}])
+
+    result = asyncio.run(
+        FastRAGWorkflow(retrieval, llm).invoke(
+            ChatRequest(user_id="kim", message="수율"),
+            PolicyContext.from_user_id("kim"),
+            None,
+        )
+    )
+
+    assert result.answer.endswith(BM25_FALLBACK_DISCLOSURE)
+    assert result.disclosures == [BM25_FALLBACK_DISCLOSURE]
+    assert result.quality.retrieval_mode == "bm25"
+
+
+def test_fast_rag_does_not_report_embedding_outage_for_normal_bm25_statistics():
+    retrieval = RecordingRetrieval(
+        lambda task, policy: RetrievalResult(
+            mode="bm25",
+            evidence=[_evidence("statistics")],
+        )
+    )
+    llm = ScriptedLLM(
+        tasks=[{"query": "메일 수", "source": "statistics"}],
+        sufficient=True,
+        texts=["메일 통계입니다 [S1]"],
+    )
+
+    result = asyncio.run(
+        FastRAGWorkflow(retrieval, llm).invoke(
+            ChatRequest(user_id="kim", message="메일 수"),
+            PolicyContext.from_user_id("kim"),
+            None,
+        )
+    )
+
+    assert result.quality.retrieval_mode == "bm25"
+    assert result.disclosures == []
+    assert BM25_FALLBACK_DISCLOSURE not in result.answer
+
+
+def test_fast_rag_enforces_six_search_budget_and_request_policy_identity():
+    retrieval = RecordingRetrieval(
+        lambda task, policy: RetrievalResult(
+            evidence=[_evidence(task.query)],
+            mode="hybrid",
+        )
+    )
+    llm = ScriptedLLM(
+        tasks=[{"query": f"q{i}", "source": "mail"} for i in range(6)],
+        sufficient=False,
+        texts=["지원되는 답변 [S1]"],
+    )
+    policy = PolicyContext.from_user_id("kim")
+
+    request = ChatRequest(
+        user_id="kim",
+        message="질문",
+        filters={"teams": ["YIELD팀"], "weeks": ["2026-08"]},
+    )
+
+    asyncio.run(FastRAGWorkflow(retrieval, llm).invoke(request, policy, None))
+
+    assert len(retrieval.calls) == 6
+    assert all(call_policy is policy for _, call_policy in retrieval.calls)
+    assert all(task.filters == request.filters for task, _ in retrieval.calls)
+
+
+def test_fast_rag_enforces_two_rewrites_and_one_revision():
+    retrieval = RecordingRetrieval(
+        lambda task, policy: RetrievalResult(
+            evidence=[_evidence(f"doc-{len(retrieval.calls)}")],
+            mode="hybrid",
+        )
+    )
+    llm = ScriptedLLM(
+        tasks=[{"query": "initial", "source": "mail"}],
+        sufficient=False,
+        texts=[
+            "rewrite-one",
+            "rewrite-two",
+            "지원되지 않은 초안 [S99]",
+            "근거로 지원되는 답변 [S1]",
+        ],
+    )
+
+    result = asyncio.run(
+        FastRAGWorkflow(retrieval, llm).invoke(
+            ChatRequest(user_id="kim", message="질문"),
+            PolicyContext.from_user_id("kim"),
+            None,
+        )
+    )
+
+    rewrite_calls = [
+        call for call in llm.text_calls if "search query" in call[0].lower()
+    ]
+    revision_calls = [call for call in llm.text_calls if "revise" in call[0].lower()]
+    assert len(rewrite_calls) == 2
+    assert len(revision_calls) == 1
+    assert len(retrieval.calls) == 3
+    assert result.answer.startswith(INCOMPLETE_ANSWER_PREFIX)
+    assert result.answer.endswith("근거로 지원되는 답변 [S1]")
+
+
+def test_rewrite_results_can_replace_stale_evidence_within_eight_item_cap():
+    def results_for_round(task, policy):
+        if len(retrieval.calls) == 1:
+            evidence = [_evidence(f"stale-{index}") for index in range(8)]
+        else:
+            evidence = [_evidence("rewrite-new")]
+        return RetrievalResult(evidence=evidence, mode="hybrid")
+
+    retrieval = RecordingRetrieval(results_for_round)
+    llm = ScriptedLLM(
+        tasks=[{"query": "initial", "source": "mail"}],
+        sufficient=False,
+        texts=[
+            "rewrite-one",
+            "rewrite-two",
+            "새 근거로 제한된 답변 [S1]",
+        ],
+    )
+
+    result = asyncio.run(
+        FastRAGWorkflow(retrieval, llm).invoke(
+            ChatRequest(user_id="kim", message="질문"),
+            PolicyContext.from_user_id("kim"),
+            None,
+        )
+    )
+
+    assert "rewrite-new" in {item.document_id for item in result.evidence}
+
+
+def test_incomplete_evidence_is_explicit_in_grounded_generation_contract():
+    retrieval = RecordingRetrieval(
+        lambda task, policy: RetrievalResult(
+            evidence=[_evidence(f"doc-{len(retrieval.calls)}")], mode="hybrid"
+        )
+    )
+    llm = ScriptedLLM(
+        tasks=[{"query": "initial", "source": "mail"}],
+        sufficient=False,
+        texts=["rewrite-one", "rewrite-two", "모든 범위 완전 확인 [S1]"],
+    )
+
+    result = asyncio.run(
+        FastRAGWorkflow(retrieval, llm).invoke(
+            ChatRequest(user_id="kim", message="질문"),
+            PolicyContext.from_user_id("kim"),
+            None,
+        )
+    )
+
+    generation_system, generation_user = next(
+        (system, user)
+        for system, user in llm.text_calls
+        if "grounded answer" in system.lower()
+    )
+    assert "incomplete" in generation_system.lower()
+    assert "Evidence status: incomplete" in generation_user
+    assert "추가 근거" in generation_user
+    assert result.quality.limited_answer is True
+    assert result.answer.startswith(INCOMPLETE_ANSWER_PREFIX)
+    assert "미확인 정보: 추가 근거" in result.answer
+
+
+def test_missing_information_cannot_inject_unknown_citation_into_final_answer():
+    retrieval = RecordingRetrieval(
+        lambda task, policy: RetrievalResult(
+            evidence=[_evidence(f"doc-{len(retrieval.calls)}")], mode="hybrid"
+        )
+    )
+    llm = ScriptedLLM(
+        tasks=[{"query": "initial", "source": "mail"}],
+        sufficient=False,
+        missing_information=["not found [S99]"],
+        texts=["rewrite-one", "rewrite-two", "확인 범위 답변 [S1]"],
+    )
+
+    policy = PolicyContext.from_user_id("kim")
+    result = asyncio.run(
+        FastRAGWorkflow(retrieval, llm).invoke(
+            ChatRequest(user_id="kim", message="질문"),
+            policy,
+            None,
+        )
+    )
+
+    assert result.quality.citation_valid is True
+    assert "[S99]" not in result.answer
+    assert result.answer.startswith(INCOMPLETE_ANSWER_PREFIX)
+    assert result.answer.endswith("확인 범위 답변 [S1]")
+    assert CitationValidator().validate(result.answer, result.evidence, policy).valid
+
+
+def test_incomplete_evidence_limitation_is_preserved_during_revision():
+    retrieval = RecordingRetrieval(
+        lambda task, policy: RetrievalResult(
+            evidence=[_evidence(f"doc-{len(retrieval.calls)}")], mode="hybrid"
+        )
+    )
+    llm = ScriptedLLM(
+        tasks=[{"query": "initial", "source": "mail"}],
+        sufficient=False,
+        texts=[
+            "rewrite-one",
+            "rewrite-two",
+            "잘못된 초안 [S99]",
+            "확인 범위만 답변 [S1]",
+        ],
+    )
+
+    asyncio.run(
+        FastRAGWorkflow(retrieval, llm).invoke(
+            ChatRequest(user_id="kim", message="질문"),
+            PolicyContext.from_user_id("kim"),
+            None,
+        )
+    )
+
+    revision_system, revision_user = next(
+        (system, user) for system, user in llm.text_calls if "revise" in system.lower()
+    )
+    assert "incomplete" in revision_system.lower()
+    assert "Evidence status: incomplete" in revision_user
+    assert "추가 근거" in revision_user
+
+
+def test_fast_rag_filters_cross_owner_evidence_and_caps_evidence_and_context():
+    long_excerpt = "가" * 5000
+    evidence = [
+        _evidence(
+            "/tmp",
+            excerpt=(
+                "password=hunter2 client_secret=oauth-secret "
+                "api key: excerpt-space-secret ../secret.txt 수율 근거"
+            ),
+            title="password=title-secret api key: title-space-secret /tmp",
+            source_locator=r"C:\secret",
+        ),
+        *[_evidence(f"owned-{index}", excerpt=long_excerpt) for index in range(9)],
+    ] + [_evidence("foreign-secret", owner="lee", excerpt="CROSS_OWNER_SECRET")]
+    retrieval = RecordingRetrieval(
+        lambda task, policy: RetrievalResult(evidence=evidence, mode="hybrid")
+    )
+    llm = ScriptedLLM(
+        tasks=[{"query": "수율", "source": "mail"}],
+        sufficient=True,
+        texts=["지원되는 답변 [S1]"],
+    )
+
+    result = asyncio.run(
+        FastRAGWorkflow(retrieval, llm).invoke(
+            ChatRequest(user_id="kim", message="질문"),
+            PolicyContext.from_user_id("kim"),
+            None,
+        )
+    )
+
+    generation_user = next(
+        user for system, user in llm.text_calls if "grounded answer" in system.lower()
+    )
+    evidence_context = generation_user.partition("Evidence:\n")[2]
+    assert len(result.evidence) == 8
+    assert all(item.user_id == "kim" for item in result.evidence)
+    assert "CROSS_OWNER_SECRET" not in generation_user
+    assert "mail:opaque-id" not in generation_user
+    assert "hunter2" not in generation_user
+    assert "oauth-secret" not in generation_user
+    assert "excerpt-space-secret" not in generation_user
+    assert "../secret.txt" not in generation_user
+    assert "title-secret" not in generation_user
+    assert "title-space-secret" not in generation_user
+    assert "/tmp" not in generation_user
+    assert r"C:\secret" not in generation_user
+    assert "hunter2" not in result.model_dump_json()
+    assert "oauth-secret" not in result.model_dump_json()
+    assert "excerpt-space-secret" not in result.model_dump_json()
+    assert "title-secret" not in result.model_dump_json()
+    assert "title-space-secret" not in result.model_dump_json()
+    assert "/tmp" not in result.model_dump_json()
+    assert "secret.txt" not in result.model_dump_json()
+    assert "C:\\\\secret" not in result.model_dump_json()
+    assert len(evidence_context.encode("utf-8")) <= MAX_EVIDENCE_TOKENS
+
+
+def test_invalid_revision_returns_limited_answer_without_unsafe_content():
+    retrieval = RecordingRetrieval(
+        lambda task, policy: RetrievalResult(
+            evidence=[_evidence("owned")], mode="hybrid"
+        )
+    )
+    llm = ScriptedLLM(
+        tasks=[{"query": "수율", "source": "mail"}],
+        sufficient=True,
+        texts=[
+            "secret token=abc /srv/private/mail [S99]",
+            "chain-of-thought: hidden reasoning [S98]",
+        ],
+    )
+
+    result = asyncio.run(
+        FastRAGWorkflow(retrieval, llm).invoke(
+            ChatRequest(user_id="kim", message="질문"),
+            PolicyContext.from_user_id("kim"),
+            None,
+        )
+    )
+
+    assert result.quality.citation_valid is False
+    assert result.quality.limited_answer is True
+    assert "abc" not in result.answer
+    assert "/srv/" not in result.answer
+    assert "chain-of-thought" not in result.answer.lower()
+    assert "S98" not in result.answer
+
+
+def test_grounded_answer_redacts_url_credentials_and_bearer_tokens():
+    retrieval = RecordingRetrieval(
+        lambda task, policy: RetrievalResult(
+            evidence=[_evidence("owned")], mode="hybrid"
+        )
+    )
+    llm = ScriptedLLM(
+        tasks=[{"query": "수율", "source": "mail"}],
+        sufficient=True,
+        texts=[
+            "접속 https://kim:pw@example.test Authorization: Bearer bearer-secret "
+            "client_secret=answer-secret OPENAI_API_KEY=sk-secret "
+            "AWS_SECRET_ACCESS_KEY=aws-secret file:/srv/private/answer.txt "
+            "api key: spaced-secret /tmp C:\\secret ../secret.txt "
+            "안전 링크 https://example.com/mail/123 공정/품질 공정 / 품질 "
+            "/help </div> /foo/bar /credentials.json /secret.txt /app.env "
+            "/secrets /run /mnt /dev /Volumes //etc/passwd ///var/log [S1]"
+        ],
+    )
+
+    result = asyncio.run(
+        FastRAGWorkflow(retrieval, llm).invoke(
+            ChatRequest(user_id="kim", message="질문"),
+            PolicyContext.from_user_id("kim"),
+            None,
+        )
+    )
+
+    assert result.quality.citation_valid is True
+    assert "pw" not in result.answer
+    assert "bearer-secret" not in result.answer
+    assert "answer-secret" not in result.answer
+    assert "sk-secret" not in result.answer
+    assert "aws-secret" not in result.answer
+    assert "spaced-secret" not in result.answer
+    assert "file:/srv" not in result.answer
+    assert "/tmp" not in result.answer
+    assert r"C:\secret" not in result.answer
+    assert "../secret.txt" not in result.answer
+    assert "https://example.com/mail/123" in result.answer
+    assert "공정/품질" in result.answer
+    assert "공정 / 품질" in result.answer
+    assert "/help" in result.answer
+    assert "</div>" in result.answer
+    assert "/foo/bar" not in result.answer
+    assert "/credentials.json" not in result.answer
+    assert "/secret.txt" not in result.answer
+    assert "/app.env" not in result.answer
+    assert "/secrets" not in result.answer
+    assert "/run" not in result.answer
+    assert "/mnt" not in result.answer
+    assert "/dev" not in result.answer
+    assert "/Volumes" not in result.answer
+    assert "//etc/passwd" not in result.answer
+    assert "///var/log" not in result.answer
+    assert result.answer.endswith("[S1]")
+
+
+def test_sensitive_request_and_history_are_redacted_from_all_model_prompts():
+    retrieval = RecordingRetrieval(
+        lambda task, policy: RetrievalResult(
+            evidence=[_evidence("owned")], mode="hybrid"
+        )
+    )
+    llm = ScriptedLLM(
+        tasks=[{"query": "수율", "source": "mail"}],
+        sufficient=True,
+        texts=["독립 질문", "근거 답변 [S1]"],
+    )
+    conversation = type(
+        "Memory",
+        (),
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": ("api key: history-secret C:\\secret " "공정/품질 이력"),
+                }
+            ]
+        },
+    )()
+
+    asyncio.run(
+        FastRAGWorkflow(retrieval, llm).invoke(
+            ChatRequest(
+                user_id="kim",
+                message="api key: request-secret ../secret.txt 질문",
+            ),
+            PolicyContext.from_user_id("kim"),
+            conversation,
+        )
+    )
+
+    prompts = [user for _, user in llm.text_calls] + [
+        user for _, user, _ in llm.model_calls
+    ]
+    serialized = "\n".join(prompts)
+    assert "history-secret" not in serialized
+    assert "request-secret" not in serialized
+    assert r"C:\secret" not in serialized
+    assert "../secret.txt" not in serialized
+    assert "공정/품질" in serialized
+
+
+def test_unsafe_document_identifiers_remain_distinct_after_redaction():
+    retrieval = RecordingRetrieval(
+        lambda task, policy: RetrievalResult(
+            evidence=[
+                _evidence("/tmp"),
+                _evidence("../secret.txt"),
+            ],
+            mode="hybrid",
+        )
+    )
+    llm = ScriptedLLM(
+        tasks=[{"query": "수율", "source": "mail"}],
+        sufficient=True,
+        texts=["두 근거 [S1] [S2]"],
+    )
+
+    result = asyncio.run(
+        FastRAGWorkflow(retrieval, llm).invoke(
+            ChatRequest(user_id="kim", message="질문"),
+            PolicyContext.from_user_id("kim"),
+            None,
+        )
+    )
+
+    assert len(result.evidence) == 2
+    assert len({item.document_id for item in result.evidence}) == 2
+    assert "/tmp" not in result.model_dump_json()
+    assert "../secret.txt" not in result.model_dump_json()
