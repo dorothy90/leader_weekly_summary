@@ -6,7 +6,7 @@ import { FolderSelectionStep } from './components/FolderSelectionStep'
 import { ProductNav } from './components/ProductNav'
 import { StepIndicator } from './components/StepIndicator'
 import { ConnectionStatus } from './rag/ConnectionStatus'
-import { RequestPanel } from './rag/RequestPanel'
+import { RagLabApp } from './rag/RagLabApp'
 import { DummyMailSourceService } from './services/mailSourceService'
 import { RagApiService, type RagApiClient } from './services/ragApiService'
 import type { MailFolder, SavedMailSource } from './types'
@@ -125,13 +125,7 @@ export default function App({ service: serviceProp, ragService: ragServiceProp }
       </div>
 
       {path === '/rag' ? (
-        <section className="rag-workspace-preview" aria-labelledby="rag-console-title">
-          <RequestPanel disabled={false} onSubmit={() => undefined} />
-          <div className="rag-preview-placeholder">
-            <strong>응답과 진단 정보</strong>
-            <p>질문을 실행하면 실제 API 결과가 여기에 표시됩니다.</p>
-          </div>
-        </section>
+        <RagLabApp service={ragService} />
       ) : (
         <FolderSetupApp service={folderService} />
       )}

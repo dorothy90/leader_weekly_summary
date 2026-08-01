@@ -1,0 +1,115 @@
+import type { ChatResponse, ResearchJobResponse } from './types'
+
+interface ConversationPanelProps {
+  question?: string
+  chat?: ChatResponse
+  job?: ResearchJobResponse
+  onCancel: () => void
+  onRetry: () => void
+}
+
+const terminalRetry = new Set(['failed', 'cancelled'])
+const cancellable = new Set(['queued', 'running', 'cancelling'])
+
+export function ConversationPanel({
+  question,
+  chat,
+  job,
+  onCancel,
+  onRetry,
+}: ConversationPanelProps) {
+  const references = job?.references ?? chat?.references ?? []
+  const disclosures = job?.disclosures ?? chat?.disclosures ?? []
+  const result = job?.result_markdown ?? chat?.answer
+
+  return (
+    <section className="conversation-panel" aria-label="대화 및 결과">
+      <header className="conversation-header">
+        <div>
+          <span className="eyebrow">Result stream</span>
+          <h2>{job ? 'Deep Research' : 'Fast answer'}</h2>
+        </div>
+        {job ? (
+          <div className={`job-state is-${job.status}`}>
+            <span>{job.status}</span>
+            <strong>{job.progress}%</strong>
+          </div>
+        ) : null}
+      </header>
+
+      <div className="conversation-scroll">
+        {question ? <div className="message is-user">{question}</div> : null}
+        {!question ? (
+          <div className="empty-result">
+            <strong>실제 API 결과가 여기에 표시됩니다.</strong>
+            <p>왼쪽에서 소유자, 필터, 실행 시스템과 질문을 입력하세요.</p>
+          </div>
+        ) : null}
+        {job && !result ? (
+          <div className="message is-system">
+            <strong>{job.plan_summary || '조사 계획을 준비하고 있습니다.'}</strong>
+            <div className="progress-track" aria-label={`조사 진행률 ${job.progress}%`}>
+              <span style={{ width: `${job.progress}%` }} />
+            </div>
+          </div>
+        ) : null}
+        {result ? (
+          <div className="message is-assistant">
+            <p className="answer-text">{result}</p>
+            {chat?.quality ? (
+              <div className="quality-row" aria-label="답변 품질">
+                <span className={chat.quality.citation_valid ? 'is-good' : 'is-bad'}>
+                  {chat.quality.citation_valid ? '인용 유효' : '인용 실패'}
+                </span>
+                <span>{chat.quality.retrieval_mode}</span>
+                {chat.quality.limited_answer ? <span>제한 답변</span> : null}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        {disclosures.map((item) => (
+          <div className="disclosure" key={item} role="status">{item}</div>
+        ))}
+
+        {references.length ? (
+          <section className="reference-list" aria-labelledby="reference-title">
+            <div className="section-heading-row">
+              <h3 id="reference-title">검증된 인용 근거</h3>
+              <span>{references.length}</span>
+            </div>
+            {references.map((reference) => (
+              <article className="reference-card" key={reference.evidence_id}>
+                <div className="reference-id">{reference.evidence_id}</div>
+                <div>
+                  <strong>{reference.title || reference.source_type}</strong>
+                  <p>{reference.excerpt}</p>
+                  <small>
+                    {[reference.source_type, reference.team, reference.week]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  </small>
+                </div>
+              </article>
+            ))}
+          </section>
+        ) : null}
+      </div>
+
+      {job ? (
+        <footer className="job-actions">
+          {cancellable.has(job.status) ? (
+            <button className="button button-secondary" type="button" onClick={onCancel}>
+              조사 취소
+            </button>
+          ) : null}
+          {terminalRetry.has(job.status) ? (
+            <button className="button button-primary" type="button" onClick={onRetry}>
+              조사 재시도
+            </button>
+          ) : null}
+        </footer>
+      ) : null}
+    </section>
+  )
+}
