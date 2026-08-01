@@ -1,0 +1,29 @@
+{
+  "settings": {
+    "index": {"knn": true},
+    "analysis": {
+      "tokenizer": {"nori_tokenizer": {"type": "nori_tokenizer", "decompound_mode": "mixed"}},
+      "analyzer": {"korean": {"type": "custom", "tokenizer": "nori_tokenizer", "filter": ["nori_readingform", "lowercase"]}}
+    }
+  },
+  "mappings": {
+    "dynamic": "strict",
+    "properties": {
+      "wiki_id": {"type": "keyword"},
+      "user_id": {"type": "keyword"},
+      "summary_type": {"type": "keyword"},
+      "team": {"type": "keyword"},
+      "week": {"type": "keyword"},
+      "topic": {"type": "keyword"},
+      "source_doc_ids": {"type": "keyword"},
+      "content_hash": {"type": "keyword"},
+      "title": {"type": "text", "analyzer": "korean", "search_analyzer": "korean"},
+      "text": {"type": "text", "analyzer": "korean", "search_analyzer": "korean"},
+      "embedding": {"type": "knn_vector", "dimension": 4096, "method": {"name": "hnsw", "space_type": "cosinesimil", "engine": "faiss", "parameters": {"ef_construction": 128, "m": 16}}},
+      "entities": {"type": "nested", "properties": {"name": {"type": "keyword"}, "kind": {"type": "keyword"}, "mention_excerpt": {"type": "text", "analyzer": "korean"}}},
+      "topic_keys": {"type": "keyword"},
+      "created_at": {"type": "date"},
+      "updated_at": {"type": "date"}
+    }
+  }
+}

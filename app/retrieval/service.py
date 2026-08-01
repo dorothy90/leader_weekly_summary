@@ -386,6 +386,8 @@ class RetrievalService:
     @staticmethod
     def _safe_locator(value: object) -> str | None:
         locator = str(value or "").strip()
+        if re.fullmatch(r"/v1/mail-content/[0-9a-f]{64}", locator):
+            return locator
         if locator.startswith(("mail:", "wiki:")):
             if re.fullmatch(
                 r"(?:mail|wiki):[A-Za-z0-9_.@+-]+(?:#[A-Za-z0-9_.@+-]+)?",

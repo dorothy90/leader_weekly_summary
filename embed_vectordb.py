@@ -8,6 +8,7 @@
 import os
 import re
 import json
+import hashlib
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
@@ -16,6 +17,12 @@ from openai import OpenAI
 
 from dotenv import load_dotenv
 
+from app.content.mail import (
+    mail_content_id,
+    mail_content_locator,
+    safe_mail_log_context,
+)
+
 load_dotenv()
 
 # ========== 설정 ==========
@@ -23,7 +30,7 @@ load_dotenv()
 OPENSEARCH_HOST = os.getenv("OPENSEARCH_HOST", "localhost")
 OPENSEARCH_PORT = int(os.getenv("OPENSEARCH_PORT", "9200"))
 OPENSEARCH_USER = os.getenv("OPENSEARCH_USER", "admin")
-OPENSEARCH_PASSWORD = os.getenv("OPENSEARCH_PASSWORD", "rlaeorka1!K")
+OPENSEARCH_PASSWORD = os.getenv("OPENSEARCH_PASSWORD", "")
 OPENSEARCH_USE_SSL = os.getenv("OPENSEARCH_USE_SSL", "false").lower() == "true"
 
 # 임베딩 설정
@@ -232,7 +239,9 @@ def create_index(client: OpenSearch, index_name: str = INDEX_NAME):
                 "team": {"type": "keyword"},
                 "week": {"type": "keyword"},
                 "mail_id": {"type": "keyword"},
-                "html_path": {"type": "keyword"},
+                "user_id": {"type": "keyword"},
+                "content_id": {"type": "keyword"},
+                "document_locator": {"type": "keyword"},
                 "part_index": {"type": "integer"},  # 청크 파트 인덱스
                 "total_parts": {"type": "integer"},  # 총 파트 수
                 # 추가 필드 (통계/분류용)
@@ -286,12 +295,14 @@ def index_original_mail(
     if meta_path.exists():
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
 
+    user_id = require_document_user_id(meta)
     team = meta.get("team", "unknown")
     week = meta.get("week", "unknown")
     subject = meta.get("subject", "")
     mail_type = meta.get("mail_type", "other")  # weekly_report / other
-    mail_id = mail_dir.name
-    html_path = str(mail_dir / "body.html")
+    mail_id = str(meta.get("mail_id") or mail_dir.name)
+    content_id = mail_content_id(user_id, mail_id)
+    locator = mail_content_locator(content_id)
 
     # 5000자 오버랩 청킹
     chunks = split_text_with_overlap(combined_text)
@@ -305,7 +316,7 @@ def index_original_mail(
     # 벌크 저장을 위한 문서 준비
     actions = []
     for idx, (chunk_text, embedding) in enumerate(zip(chunks, embeddings)):
-        doc_id = f"{team}_{week}_{mail_id}_part_{idx}"
+        doc_id = owner_scoped_chunk_id(user_id, mail_id, idx)
 
         doc = {
             "_index": index_name,
@@ -317,7 +328,9 @@ def index_original_mail(
                 "team": team,
                 "week": week,
                 "mail_id": mail_id,
-                "html_path": html_path,
+                "user_id": user_id,
+                "content_id": content_id,
+                "document_locator": locator,
                 "part_index": idx,
                 "total_parts": len(chunks),
                 "subject": subject,
@@ -331,12 +344,31 @@ def index_original_mail(
         helpers.bulk(client, actions)
 
     return {
-        "doc_id": f"{team}_{week}_{mail_id}",
+        "doc_id": hashlib.sha256(
+            f"legacy-mail-v2\x1f{user_id}\x1f{mail_id}".encode()
+        ).hexdigest(),
+        "user_id": user_id,
         "team": team,
         "week": week,
         "text_length": len(combined_text),
         "parts_count": len(chunks),
     }
+
+
+def require_document_user_id(meta: Dict[str, Any]) -> str:
+    """Require source metadata ownership; never infer it from folders or teams."""
+    user_id = str(meta.get("user_id") or "").strip()
+    if not user_id:
+        raise ValueError("meta.json must contain user_id before indexing")
+    return user_id
+
+
+def owner_scoped_chunk_id(user_id: str, mail_id: str, part_index: int) -> str:
+    owner = str(user_id or "").strip()
+    if not owner:
+        raise ValueError("user_id is required for document IDs")
+    payload = f"legacy-chunk-v2\x1f{owner}\x1f{mail_id}\x1f{part_index}"
+    return hashlib.sha256(payload.encode()).hexdigest()
 
 
 # [DEPRECATED] LLM 청크 임베딩은 더 이상 사용하지 않음
@@ -360,7 +392,7 @@ def process_mail_folder(
 ) -> Dict:
     """단일 메일 폴더의 원본 5000자 오버랩 청킹 임베딩"""
 
-    print(f"\n📂 처리 중: {mail_dir}")
+    print(f"\n📂 처리 중: {safe_mail_log_context(mail_dir)}")
 
     result = {
         "original": None,
@@ -397,7 +429,7 @@ def process_all(recreate_index: bool = False, week=None):
             f"✅ OpenSearch 연결 성공: {info['version']['distribution']} {info['version']['number']}"
         )
     except Exception as e:
-        print(f"❌ OpenSearch 연결 실패: {e}")
+        print(f"❌ OpenSearch 연결 실패: {type(e).__name__}")
         return
 
     # 인덱스 생성/재생성
@@ -407,12 +439,20 @@ def process_all(recreate_index: bool = False, week=None):
 
     # 데이터 폴더 확인
     if not DATA_DIR.exists():
-        print(f"❌ data 폴더가 없습니다: {DATA_DIR}")
+        print("❌ configured data directory is missing")
         return
 
-    # mail_* 폴더 찾기 (week 지정 시 해당 주차만)
-    search_root = DATA_DIR / week if week else DATA_DIR
-    mail_folders = list(search_root.glob("**/mail_*"))
+    # owner-scoped and legacy mail folders are both discovered; metadata remains
+    # the sole ownership source and ownerless legacy folders fail closed.
+    mail_folders = list(DATA_DIR.glob("**/mail_*"))
+    if week:
+        mail_folders = [
+            folder
+            for folder in mail_folders
+            if (folder / "meta.json").exists()
+            and json.loads((folder / "meta.json").read_text(encoding="utf-8")).get("week")
+            == week
+        ]
     print(f"\n📁 발견된 메일 폴더: {len(mail_folders)}개")
 
     stats = {
@@ -421,6 +461,7 @@ def process_all(recreate_index: bool = False, week=None):
         "parts": 0,
         "failed": 0,
     }
+    owner_weeks: Dict[str, set[str]] = {}
 
     for mail_dir in mail_folders:
         if not mail_dir.is_dir():
@@ -433,9 +474,14 @@ def process_all(recreate_index: bool = False, week=None):
             if result["original"]:
                 stats["mails"] += 1
                 stats["parts"] += result["original"]["parts_count"]
+                owner = result["original"]["user_id"]
+                owner_weeks.setdefault(owner, set()).add(result["original"]["week"])
 
         except Exception as e:
-            print(f"   ❌ 처리 실패: {e}")
+            print(
+                f"   ❌ 처리 실패: {safe_mail_log_context(mail_dir)} "
+                f"error={type(e).__name__}"
+            )
             stats["failed"] += 1
 
     # 인덱스 새로고침
@@ -453,22 +499,19 @@ def process_all(recreate_index: bool = False, week=None):
     # Wiki 요약 자동 생성 (임베딩된 주차 대상)
     if stats["mails"] > 0:
         try:
-            # 처리된 메일 폴더에서 주차 추출
-            processed_weeks = set()
-            for mail_dir in mail_folders:
-                if mail_dir.is_dir():
-                    # data/{week}/{team}/mail_* 구조에서 week 추출
-                    parts = mail_dir.parts
-                    data_idx = list(parts).index("data") if "data" in parts else -1
-                    if data_idx >= 0 and data_idx + 1 < len(parts):
-                        processed_weeks.add(parts[data_idx + 1])
+            processed_weeks = {
+                processed_week
+                for weeks_for_owner in owner_weeks.values()
+                for processed_week in weeks_for_owner
+            }
 
             if processed_weeks:
-                print(f"\n📖 Wiki 요약 자동 생성 시작: {', '.join(sorted(processed_weeks))}")
+                print(f"\n📖 Wiki 요약 자동 생성 시작: {len(processed_weeks)}개 주차")
                 from wiki_builder import backfill_all
-                backfill_all(weeks=sorted(processed_weeks))
+                for owner, weeks_for_owner in sorted(owner_weeks.items()):
+                    backfill_all(user_id=owner, weeks=sorted(weeks_for_owner))
         except Exception as e:
-            print(f"⚠️ Wiki 요약 생성 실패 (무시): {e}")
+            print(f"⚠️ Wiki 요약 생성 실패 (무시): {type(e).__name__}")
 
 
 # ========== 검색 함수 ==========
@@ -526,7 +569,7 @@ def search_vector(
                 "team": hit["_source"]["team"],
                 "week": hit["_source"]["week"],
                 "mail_id": hit["_source"].get("mail_id", ""),
-                "html_path": hit["_source"].get("html_path", ""),
+                "document_locator": hit["_source"].get("document_locator", ""),
                 "part_index": hit["_source"].get("part_index"),
                 "total_parts": hit["_source"].get("total_parts"),
             }
@@ -585,7 +628,7 @@ def search_keyword(
                 "team": hit["_source"]["team"],
                 "week": hit["_source"]["week"],
                 "mail_id": hit["_source"].get("mail_id", ""),
-                "html_path": hit["_source"].get("html_path", ""),
+                "document_locator": hit["_source"].get("document_locator", ""),
                 "part_index": hit["_source"].get("part_index"),
                 "total_parts": hit["_source"].get("total_parts"),
             }
@@ -733,4 +776,3 @@ if __name__ == "__main__":
         )
     else:
         process_all(recreate_index=RECREATE_INDEX)
-

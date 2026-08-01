@@ -7,6 +7,7 @@
 import io
 import os
 import base64
+import json
 import random
 import time
 from pathlib import Path
@@ -26,10 +27,30 @@ from openai import (
     InternalServerError,
 )
 
+from app.content.mail import safe_mail_log_context
+
 # ========== 설정 ==========
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "your_api_key")
 VISION_MODEL = "gpt-oss-120b"
 DATA_DIR = Path("data")
+
+
+def discover_owned_mail_folders(data_dir: Path, week=None) -> list[Path]:
+    folders = []
+    for folder in data_dir.glob("**/mail_*"):
+        meta_path = folder / "meta.json"
+        if not folder.is_dir() or not meta_path.exists():
+            continue
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not str(meta.get("user_id") or "").strip():
+            continue
+        if week and meta.get("week") != week:
+            continue
+        folders.append(folder)
+    return sorted(folders)
 
 # 이미지 전처리 설정
 MAX_IMAGE_SIDE = 1800  # 긴 변 최대 px
@@ -174,16 +195,16 @@ def extract_text_from_image(image_path):
 
         except Exception as exc:
             err = classify_error(exc)
-            print(f"      ⚠️ 시도 {attempt} 실패 ({err}): {exc}")
+            print(f"      ⚠️ 시도 {attempt} 실패 ({err})")
 
             # 입력/인증 문제는 즉시 종료
             if isinstance(exc, (BadRequestError, UnprocessableEntityError, AuthenticationError, PermissionDeniedError)):
-                return f"[Vision 추출 실패: {err} - {exc}]"
+                return f"[Vision 추출 실패: {err}]"
 
             # 재시도 불가하거나 마지막 시도면 종료
             if not should_retry(exc) or attempt == MAX_RETRIES:
-                print(f"   ❌ Vision 최종 실패 ({image_path.name}): {MAX_RETRIES}회 시도 후 실패")
-                return f"[Vision 추출 실패: {err} - {exc}]"
+                print(f"   ❌ Vision 최종 실패: error={type(exc).__name__}")
+                return f"[Vision 추출 실패: {err}]"
 
             # 2회 실패 시 해상도 다운그레이드
             if attempt == 2:
@@ -203,7 +224,7 @@ def extract_text_from_image(image_path):
 
 def process_mail_folder(mail_dir):
     """단일 메일 폴더 처리"""
-    print(f"\n📂 처리 중: {mail_dir}")
+    print(f"\n📂 처리 중: {safe_mail_log_context(mail_dir)}")
 
     # 1. body.txt 읽기
     body_path = mail_dir / "body.txt"
@@ -214,9 +235,9 @@ def process_mail_folder(mail_dir):
 
     # 2. 인라인 이미지 찾기 & Vision 처리
     vision_results = []
-    for file in mail_dir.iterdir():
+    for image_index, file in enumerate(mail_dir.iterdir(), 1):
         if file.name.startswith("inline_") and is_image_file(file.name):
-            print(f"   🖼️  Vision 처리: {file.name}")
+            print(f"   🖼️  Vision 처리: item={image_index}")
 
             # Vision LLM 호출
             extracted_text = extract_text_from_image(file)
@@ -231,7 +252,7 @@ def process_mail_folder(mail_dir):
                     "text": extracted_text,
                 }
             )
-            print(f"   ✅ 저장: {txt_path.name}")
+            print(f"   ✅ Vision 저장: item={image_index}")
 
     # 3. combined.txt 생성 (body + vision)
     combined_parts = []
@@ -266,12 +287,10 @@ def process_all(week=None):
     print("=" * 50)
 
     if not DATA_DIR.exists():
-        print(f"❌ data 폴더가 없습니다: {DATA_DIR}")
+        print("❌ configured data directory is missing")
         return
 
-    # mail_* 폴더 찾기 (week 지정 시 해당 주차만)
-    search_root = DATA_DIR / week if week else DATA_DIR
-    mail_folders = list(search_root.glob("**/mail_*"))
+    mail_folders = discover_owned_mail_folders(DATA_DIR, week)
     print(f"📁 발견된 메일 폴더: {len(mail_folders)}개")
 
     stats = {
@@ -291,7 +310,10 @@ def process_all(week=None):
             stats["total_images"] += result["images_processed"]
             stats["success"] += 1
         except Exception as e:
-            print(f"   ❌ 폴더 처리 실패: {e}")
+            print(
+                f"   ❌ 폴더 처리 실패: {safe_mail_log_context(mail_dir)} "
+                f"error={type(e).__name__}"
+            )
             stats["failed"] += 1
 
     # 결과 요약

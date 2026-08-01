@@ -8,23 +8,26 @@ import os
 import re
 import json
 import base64
-import shutil
 import hashlib
 from pathlib import Path
 from datetime import datetime
 from urllib.parse import quote
 from imap_tools import MailBox, AND
 
+from app.content.mail import (
+    mail_content_id,
+    mail_content_locator,
+    owner_storage_key,
+)
+
 
 # ========== 설정 ==========
 IMAP_SERVER = "imap.gmail.com"
-EMAIL = "kdhboy90@gmail.com"
-# 구글 계정 2단계 인증 설정 후 생성한 16자리 '앱 비밀번호'를 입력하세요.
-# (기존 구글 계정 비밀번호는 보안상 작동하지 않습니다)
-PASSWORD = "etqs osgt ofbm skfm" 
+EMAIL = os.getenv("MAIL_EMAIL", "")
+PASSWORD = os.getenv("MAIL_PASSWORD", "")
 
 DATA_DIR = Path("data")  # 저장 폴더
-MAIL_DIR = Path("mail")  # body.html 모아두는 폴더 (RAG API 서빙용)
+MAIL_DIR = Path("mail")  # Deprecated static-serving directory; no new writes.
 
 
 # %%
@@ -36,13 +39,15 @@ def generate_gmail_url(thread_id):
 
 def connect_imap():
     """Gmail IMAP 연결"""
+    if not EMAIL or not PASSWORD:
+        raise RuntimeError("MAIL_EMAIL and MAIL_PASSWORD are required")
     print(f"🔄 IMAP 서버({IMAP_SERVER}) 연결 중...")
     try:
         mailbox = MailBox(IMAP_SERVER).login(EMAIL, PASSWORD)
         print(f"✅ IMAP 연결 성공: {EMAIL}")
         return mailbox
     except Exception as e:
-        print(f"❌ 로그인 실패! 구글 '앱 비밀번호'를 설정했는지 확인하세요.\n에러: {e}")
+        print(f"❌ 로그인 실패: {type(e).__name__}")
         raise
 
 
@@ -153,7 +158,15 @@ def get_unique_mail_id(mail_data: dict) -> str:
     return f"mail_{time_part}_{short_hash}"
 
 
-def save_mail(mail_data, week, team, mail_id: str):
+def require_mail_user_id() -> str:
+    """Return the explicitly configured document owner or fail closed."""
+    user_id = os.getenv("MAIL_USER_ID", "").strip()
+    if not user_id:
+        raise RuntimeError("MAIL_USER_ID is required before collecting mail")
+    return user_id
+
+
+def save_mail(mail_data, week, team, mail_id: str, user_id: str):
     """메일 데이터를 로컬에 저장
 
     Args:
@@ -161,9 +174,14 @@ def save_mail(mail_data, week, team, mail_id: str):
         week: 주차 (예: 2025-48)
         team: 팀명 (예: FA팀)
         mail_id: 고유 메일 ID (예: mail_0125_143022_a1b2c3d4)
+        user_id: 요청/수집 설정에서 명시된 소유자
     """
+    owner = str(user_id or "").strip()
+    if not owner:
+        raise ValueError("user_id is required when saving mail")
     # 폴더 생성: data/YYYY-WW/TEAM/mail_0125_143022_a1b2c3d4/
-    mail_dir = DATA_DIR / week / team / mail_id
+    owner_key = owner_storage_key(owner)
+    mail_dir = DATA_DIR / owner_key / week / team / mail_id
     mail_dir.mkdir(parents=True, exist_ok=True)
 
     # 1. 텍스트 본문 저장
@@ -206,7 +224,12 @@ def save_mail(mail_data, week, team, mail_id: str):
 
     # 3. 메타데이터 저장 (URL 참조용 필드 포함)
     mail_type = classify_mail_type(mail_data.get("subject", ""))
+    content_id = mail_content_id(owner, mail_id)
     meta = {
+        "user_id": owner,
+        "mail_id": mail_id,
+        "content_id": content_id,
+        "document_locator": mail_content_locator(content_id),
         "subject": mail_data["subject"],
         "sender": mail_data["sender"],
         "received": (
@@ -222,7 +245,6 @@ def save_mail(mail_data, week, team, mail_id: str):
         "message_id": mail_data.get("message_id"),
         "conversation_id": mail_data.get("conversation_id"),
         "owa_url": mail_data.get("owa_url"),
-        "local_path": str(mail_dir),  # fallback용 로컬 경로
     }
 
     # 3. 인라인 이미지 저장
@@ -247,17 +269,14 @@ def save_mail(mail_data, week, team, mail_id: str):
         json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
-    # 6. mail 폴더에 body.html 복사 (RAG API 서빙용)
-    copy_body_html_to_mail_dir(html_path, week, team, mail_id)
-
-    print(f"   💾 저장: {mail_dir}")
+    print(f"   💾 저장 완료: owner={owner_key}, mail={mail_id}")
     return mail_dir
 
 
 def copy_body_html_to_mail_dir(
-    source_html_path: Path, week: str, team: str, mail_id: str
+    source_html_path: Path, week: str, team: str, mail_id: str, user_id: str
 ):
-    """body.html을 mail 폴더에 복사 (RAG API 서빙용)
+    """Deprecated: static copies bypass the owner-validated content boundary.
 
     Args:
         source_html_path: 원본 body.html 경로
@@ -268,15 +287,9 @@ def copy_body_html_to_mail_dir(
     파일명 형식: {week}_{team}_{mail_id}.html
     예: 2025-48_FA팀_mail_001.html
     """
-    MAIL_DIR.mkdir(exist_ok=True)
-
-    # 파일명: {week}_{team}_{mail_id}.html
-    dest_filename = f"{week}_{team}_{mail_id}.html"
-    dest_path = MAIL_DIR / dest_filename
-
-    if source_html_path.exists():
-        shutil.copy2(source_html_path, dest_path)
-        print(f"   📄 복사: {dest_path}")
+    raise RuntimeError(
+        "static mail copies are disabled; use /v1/mail-content/{content_id}"
+    )
 
 
 def fetch_mails(mailbox, days_back=1):
@@ -346,6 +359,8 @@ def main():
     print("Gmail IMAP 메일 수집 & 로컬 저장")
     print("=" * 50)
 
+    mail_user_id = require_mail_user_id()
+
     # 연결
     mailbox = connect_imap()
 
@@ -367,12 +382,12 @@ def main():
         # 고유한 mail_id 생성 (날짜시간 + 해시)
         mail_id = get_unique_mail_id(mail_data)
 
-        save_mail(mail_data, week, team, mail_id)
+        save_mail(mail_data, week, team, mail_id, mail_user_id)
         saved_mails.append((week, team, mail_id))
 
     print("\n" + "=" * 50)
     print(f"✅ 총 {len(mails)}개 메일 저장 완료")
-    print(f"📁 저장 위치: {DATA_DIR.absolute()}")
+    print("📁 저장 위치: configured data directory")
     print("=" * 50)
 
     # 요약 출력 (주차/팀별 카운트)
@@ -384,46 +399,11 @@ def main():
         print(f"   {week} / {team}: {count}개")
 
 
-def sync_existing_body_html():
-    """기존 data 폴더의 body.html을 mail 폴더로 복사
-
-    이미 수집된 메일들을 mail 폴더로 동기화할 때 사용
-    """
-    print("=" * 50)
-    print("📂 기존 body.html 파일을 mail 폴더로 동기화")
-    print("=" * 50)
-
-    MAIL_DIR.mkdir(exist_ok=True)
-    copied_count = 0
-
-    # data/{week}/{team}/mail_xxx/body.html 순회
-    for week_dir in DATA_DIR.iterdir():
-        if not week_dir.is_dir():
-            continue
-        week = week_dir.name
-
-        for team_dir in week_dir.iterdir():
-            if not team_dir.is_dir():
-                continue
-            team = team_dir.name
-
-            for mail_dir in team_dir.iterdir():
-                if not mail_dir.is_dir():
-                    continue
-                mail_id = mail_dir.name
-
-                body_html = mail_dir / "body.html"
-                if body_html.exists():
-                    dest_filename = f"{week}_{team}_{mail_id}.html"
-                    dest_path = MAIL_DIR / dest_filename
-                    shutil.copy2(body_html, dest_path)
-                    copied_count += 1
-                    print(f"   ✅ {dest_filename}")
-
-    print("=" * 50)
-    print(f"✅ 총 {copied_count}개 파일 복사 완료")
-    print(f"📁 저장 위치: {MAIL_DIR.absolute()}")
-    print("=" * 50)
+def sync_existing_body_html(user_id: str):
+    """Deprecated: static synchronization is intentionally disabled."""
+    raise RuntimeError(
+        "static mail synchronization is disabled; use the content API"
+    )
 
 
 if __name__ == "__main__":
@@ -431,7 +411,7 @@ if __name__ == "__main__":
 
     if len(sys.argv) > 1 and sys.argv[1] == "--sync":
         # 기존 파일 동기화 모드
-        sync_existing_body_html()
+        sync_existing_body_html(require_mail_user_id())
     else:
         # 기본 메일 수집 모드
         main()

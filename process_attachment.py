@@ -10,12 +10,32 @@ import base64
 import json
 from pathlib import Path
 
+from app.content.mail import safe_mail_log_context
+
 from openai import OpenAI
 
 # ========== 설정 ==========
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "your_api_key")
 VISION_MODEL = "gpt-oss-120b"
 DATA_DIR = Path("data")
+
+
+def discover_owned_mail_folders(data_dir: Path, week=None) -> list[Path]:
+    folders = []
+    for folder in data_dir.glob("**/mail_*"):
+        meta_path = folder / "meta.json"
+        if not folder.is_dir() or not meta_path.exists():
+            continue
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not str(meta.get("user_id") or "").strip():
+            continue
+        if week and meta.get("week") != week:
+            continue
+        folders.append(folder)
+    return sorted(folders)
 
 # OpenRouter 클라이언트 (이미지용)
 client = OpenAI(
@@ -46,7 +66,7 @@ def extract_from_excel(file_path: Path) -> str:
     except ImportError:
         return "[Excel 추출 실패: pandas 미설치]"
     except Exception as e:
-        return f"[Excel 추출 실패: {e}]"
+        return f"[Excel 추출 실패: {type(e).__name__}]"
 
 
 def extract_from_pdf(file_path: Path) -> str:
@@ -68,7 +88,7 @@ def extract_from_pdf(file_path: Path) -> str:
     except ImportError:
         return "[PDF 추출 실패: pypdf 미설치]"
     except Exception as e:
-        return f"[PDF 추출 실패: {e}]"
+        return f"[PDF 추출 실패: {type(e).__name__}]"
 
 
 def extract_from_word(file_path: Path) -> str:
@@ -94,7 +114,7 @@ def extract_from_word(file_path: Path) -> str:
     except ImportError:
         return "[Word 추출 실패: python-docx 미설치]"
     except Exception as e:
-        return f"[Word 추출 실패: {e}]"
+        return f"[Word 추출 실패: {type(e).__name__}]"
 
 
 def extract_from_image(file_path: Path) -> str:
@@ -138,7 +158,7 @@ def extract_from_image(file_path: Path) -> str:
         return response.choices[0].message.content
 
     except Exception as e:
-        return f"[이미지 추출 실패: {e}]"
+        return f"[이미지 추출 실패: {type(e).__name__}]"
 
 
 def get_file_type(filename: str) -> str:
@@ -178,7 +198,7 @@ def extract_text(file_path: Path) -> tuple[str, str]:
 
 def process_mail_folder(mail_dir: Path) -> dict:
     """단일 메일 폴더의 첨부파일 처리"""
-    print(f"\n📂 처리 중: {mail_dir}")
+    print(f"\n📂 처리 중: {safe_mail_log_context(mail_dir)}")
 
     # attach_* 파일 찾기
     attachments = []
@@ -203,8 +223,8 @@ def process_mail_folder(mail_dir: Path) -> dict:
 
     # 각 첨부파일 처리
     results = []
-    for attach_file in attachments:
-        print(f"   📄 추출 중: {attach_file.name}")
+    for attachment_index, attach_file in enumerate(attachments, 1):
+        print(f"   📄 첨부 처리: item={attachment_index}")
 
         text, file_type = extract_text(attach_file)
 
@@ -221,7 +241,7 @@ def process_mail_folder(mail_dir: Path) -> dict:
         # 개별 txt 파일로도 저장
         txt_path = attach_file.with_suffix(".txt")
         txt_path.write_text(text, encoding="utf-8")
-        print(f"   ✅ 저장: {txt_path.name} ({len(text)} chars)")
+        print(f"   ✅ 첨부 저장: item={attachment_index} ({len(text)} chars)")
 
     # attachments.json 저장
     if results:
@@ -229,7 +249,7 @@ def process_mail_folder(mail_dir: Path) -> dict:
         json_path.write_text(
             json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8"
         )
-        print(f"   💾 저장: attachments.json")
+        print("   💾 첨부 메타데이터 저장")
 
     return {"count": len(results)}
 
@@ -241,12 +261,10 @@ def process_all(week=None):
     print("=" * 50)
 
     if not DATA_DIR.exists():
-        print(f"❌ data 폴더가 없습니다: {DATA_DIR}")
+        print("❌ configured data directory is missing")
         return
 
-    # mail_* 폴더 찾기 (week 지정 시 해당 주차만)
-    search_root = DATA_DIR / week if week else DATA_DIR
-    mail_folders = list(search_root.glob("**/mail_*"))
+    mail_folders = discover_owned_mail_folders(DATA_DIR, week)
     print(f"📁 발견된 메일 폴더: {len(mail_folders)}개")
 
     stats = {
@@ -274,9 +292,6 @@ def process_all(week=None):
 
 if __name__ == "__main__":
     process_all()
-
-
-
 
 
 

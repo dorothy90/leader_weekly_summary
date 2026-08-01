@@ -10,6 +10,7 @@ import json
 import re
 import argparse
 import time
+from hashlib import sha256
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple, Literal, Set
 from datetime import datetime, date, timedelta
@@ -75,7 +76,7 @@ class WeeklyCrossExtraction(BaseModel):
 OPENSEARCH_HOST = os.getenv("OPENSEARCH_HOST", "localhost")
 OPENSEARCH_PORT = int(os.getenv("OPENSEARCH_PORT", "9200"))
 OPENSEARCH_USER = os.getenv("OPENSEARCH_USER", "admin")
-OPENSEARCH_PASSWORD = os.getenv("OPENSEARCH_PASSWORD", "rlaeorka1!K")
+OPENSEARCH_PASSWORD = os.getenv("OPENSEARCH_PASSWORD", "")
 OPENSEARCH_USE_SSL = os.getenv("OPENSEARCH_USE_SSL", "false").lower() == "true"
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
@@ -86,7 +87,7 @@ LLM_MODEL = "z-ai/glm-4.7"
 # LLM_MODEL = os.getenv("LLM_MODEL", "gpt-oss-120b")
 
 SOURCE_INDEX = os.getenv("OPENSEARCH_INDEX", "weekly_mail")
-WIKI_INDEX = "wiki_summaries"
+WIKI_INDEX = os.getenv("WIKI_INDEX", "wiki_summaries_v2")
 
 DATA_DIR = Path("data")
 
@@ -115,6 +116,24 @@ def get_embedding(client: OpenAI, text: str) -> List[float]:
     text = text[:8000] if len(text) > 8000 else text
     response = client.embeddings.create(model=EMBEDDING_MODEL, input=text)
     return response.data[0].embedding
+
+
+def owner_filter(user_id: str) -> Dict:
+    """Build the mandatory exact-owner filter used by every Wiki lookup."""
+    owner = str(user_id or "").strip()
+    if not owner:
+        raise ValueError("user_id is required for Wiki generation")
+    return {"term": {"user_id": owner}}
+
+
+def owner_scoped_doc_id(user_id: str, document_key: str) -> str:
+    """Namespace stable Wiki keys by owner without exposing the owner in the ID."""
+    owner = str(user_id or "").strip()
+    key = str(document_key or "").strip()
+    if not owner or not key:
+        raise ValueError("user_id and document key are required")
+    prefix = f"{sha256(owner.encode()).hexdigest()[:16]}_"
+    return key if key.startswith(prefix) else f"{prefix}{key}"
 
 
 # ========== 인덱스 생성 ==========
@@ -148,6 +167,7 @@ def create_wiki_index(client: OpenSearch):
             },
         },
         "mappings": {
+            "dynamic": "strict",
             "properties": {
                 "embedding": {
                     "type": "knn_vector",
@@ -170,6 +190,9 @@ def create_wiki_index(client: OpenSearch):
                     "fields": {"keyword": {"type": "keyword"}},
                 },
                 # 메타데이터
+                "wiki_id": {"type": "keyword"},
+                "user_id": {"type": "keyword"},
+                "content_hash": {"type": "keyword"},
                 "summary_type": {
                     "type": "keyword"
                 },  # team-week / topic / overview / query_synthesis
@@ -233,10 +256,11 @@ def delete_wiki_index(client: OpenSearch):
 
 
 # ========== 소스 데이터 조회 ==========
-def get_available_weeks(client: OpenSearch) -> List[str]:
+def get_available_weeks(client: OpenSearch, user_id: str) -> List[str]:
     """weekly_mail 인덱스에서 사용 가능한 주차 목록 조회"""
     body = {
         "size": 0,
+        "query": owner_filter(user_id),
         "aggs": {
             "weeks": {"terms": {"field": "week", "size": 100, "order": {"_key": "asc"}}}
         },
@@ -245,11 +269,11 @@ def get_available_weeks(client: OpenSearch) -> List[str]:
     return [b["key"] for b in resp["aggregations"]["weeks"]["buckets"]]
 
 
-def get_teams_for_week(client: OpenSearch, week: str) -> List[str]:
+def get_teams_for_week(client: OpenSearch, week: str, user_id: str) -> List[str]:
     """특정 주차에 데이터가 있는 팀 목록"""
     body = {
         "size": 0,
-        "query": {"term": {"week": week}},
+        "query": {"bool": {"filter": [owner_filter(user_id), {"term": {"week": week}}]}},
         "aggs": {"teams": {"terms": {"field": "team", "size": 20}}},
     }
     resp = client.search(index=SOURCE_INDEX, body=body)
@@ -257,7 +281,7 @@ def get_teams_for_week(client: OpenSearch, week: str) -> List[str]:
 
 
 def fetch_chunks_for_team_week(
-    client: OpenSearch, team: str, week: str, limit: int = 100
+    client: OpenSearch, team: str, week: str, user_id: str, limit: int = 100
 ) -> List[Dict]:
     """특정 팀-주차의 raw chunk 조회"""
     body = {
@@ -265,6 +289,7 @@ def fetch_chunks_for_team_week(
         "query": {
             "bool": {
                 "filter": [
+                    owner_filter(user_id),
                     {"term": {"team": team}},
                     {"term": {"week": week}},
                 ]
@@ -276,6 +301,8 @@ def fetch_chunks_for_team_week(
     results = []
     for hit in resp["hits"]["hits"]:
         src = hit["_source"]
+        if src.get("user_id") != user_id:
+            continue
         results.append(
             {
                 "id": hit["_id"],
@@ -290,18 +317,20 @@ def fetch_chunks_for_team_week(
 
 
 def fetch_all_chunks_for_week(
-    client: OpenSearch, week: str, limit: int = 500
+    client: OpenSearch, week: str, user_id: str, limit: int = 500
 ) -> List[Dict]:
     """특정 주차의 전체 chunk 조회 (모든 팀)"""
     body = {
         "size": limit,
-        "query": {"term": {"week": week}},
+        "query": {"bool": {"filter": [owner_filter(user_id), {"term": {"week": week}}]}},
         "sort": [{"team": {"order": "asc"}}, {"part_index": {"order": "asc"}}],
     }
     resp = client.search(index=SOURCE_INDEX, body=body)
     results = []
     for hit in resp["hits"]["hits"]:
         src = hit["_source"]
+        if src.get("user_id") != user_id:
+            continue
         results.append(
             {
                 "id": hit["_id"],
@@ -388,7 +417,7 @@ def _call_team_week_llm(team: str, week: str, text: str) -> str:
             max_tokens=4000,
         )
     except Exception as exc:
-        print(f"   [LLM error] team={team} chars={len(text)}: {type(exc).__name__}: {exc}")
+        print(f"   [LLM error] team={team} chars={len(text)}: {type(exc).__name__}")
         return ""
 
     content = response.choices[0].message.content or ""
@@ -514,7 +543,7 @@ def generate_weekly_overview(week: str, team_summaries: Dict[str, str]) -> str:
     except Exception as exc:
         print(
             f"   [overview LLM error] week={week} chars={len(summaries_text)}: "
-            f"{type(exc).__name__}: {exc}"
+            f"{type(exc).__name__}"
         )
         return ""
 
@@ -552,19 +581,20 @@ ENTITY_EXTRACTION_SYSTEM_PROMPT = """당신은 반도체 주간 보고서에서 
 5. 핵심 엔티티가 없으면 빈 배열을 반환."""
 
 
-def fetch_entity_catalog(client: OpenSearch, size: int = 200) -> List[str]:
+def fetch_entity_catalog(client: OpenSearch, user_id: str, size: int = 200) -> List[str]:
     """기존 wiki_summaries 에서 등장 빈도 높은 엔티티명 목록 (LLM 정규화 컨텍스트용)."""
     if not client.indices.exists(index=WIKI_INDEX):
         return []
     try:
         body = {
             "size": 0,
+            "query": owner_filter(user_id),
             "aggs": {"top": {"terms": {"field": "topic_keys", "size": size}}},
         }
         resp = client.search(index=WIKI_INDEX, body=body)
         return [b["key"] for b in resp["aggregations"]["top"]["buckets"]]
     except Exception as exc:
-        print(f"   [entity catalog fetch error] {type(exc).__name__}: {exc}")
+        print(f"   [entity catalog fetch error] {type(exc).__name__}")
         return []
 
 
@@ -608,7 +638,7 @@ def extract_team_week_entities(
     except Exception as exc:
         print(
             f"   [entity extract validate error] team={team} week={week}: "
-            f"{type(exc).__name__}: {exc}"
+            f"{type(exc).__name__}"
         )
         return []
 
@@ -754,14 +784,15 @@ def _parse_cross_team_issues(overview_md: str, section_num: int = 3) -> List[Dic
 
 
 def _fetch_past_overview_texts(
-    os_client: OpenSearch, weeks: List[str]
+    os_client: OpenSearch, weeks: List[str], user_id: str
 ) -> Dict[str, str]:
     """각 주차의 overview 문서를 조회. 없는 주차는 조용히 스킵."""
     out: Dict[str, str] = {}
     for w in weeks:
         try:
-            doc = os_client.get(index=WIKI_INDEX, id=f"overview_{w}")
-            text = doc.get("_source", {}).get("text", "")
+            doc = os_client.get(index=WIKI_INDEX, id=owner_scoped_doc_id(user_id, f"overview_{w}"))
+            source = doc.get("_source", {})
+            text = source.get("text", "") if source.get("user_id") == user_id else ""
             if text:
                 out[w] = text
         except Exception:
@@ -837,7 +868,7 @@ def _call_structured_tool(
             max_tokens=max_tokens,
         )
     except Exception as exc:
-        print(f"   [{schema_name} api error] {type(exc).__name__}: {exc}")
+        print(f"   [{schema_name} api error] {type(exc).__name__}")
         return None
 
     choice = resp.choices[0]
@@ -849,7 +880,7 @@ def _call_structured_tool(
     try:
         return json.loads(args)
     except json.JSONDecodeError as exc:
-        print(f"   [{schema_name} json parse error] {exc}: {args[:200]}")
+        print(f"   [{schema_name} json parse error] {type(exc).__name__}")
         return None
 
 
@@ -963,6 +994,7 @@ def annotate_cross_team_status(
     week: str,
     os_client: OpenSearch,
     embed_client: OpenAI,
+    user_id: str,
 ) -> str:
     """section 3 크로스팀 이슈 블록에 `- 상태: 신규 | 계속 (...)` bullet 을 삽입."""
     current_issues = _parse_cross_team_issues(overview_md)
@@ -970,7 +1002,7 @@ def annotate_cross_team_status(
         return overview_md
 
     prev_weeks = prev_iso_weeks(week, LOOKBACK_WEEKS)
-    past_texts = _fetch_past_overview_texts(os_client, prev_weeks)
+    past_texts = _fetch_past_overview_texts(os_client, prev_weeks, user_id)
     if not past_texts:
         # 과거 주차 없음 → 모두 신규
         result = overview_md
@@ -992,7 +1024,7 @@ def annotate_cross_team_status(
         try:
             cur_emb = _get_issue_embedding(embed_client, issue)
         except Exception as exc:
-            print(f"   [annotate embed error] {issue['title']}: {exc}")
+            print(f"   [annotate embed error] {issue['title']}: {type(exc).__name__}")
             statuses.append({"kind": "신규"})
             continue
 
@@ -1044,6 +1076,7 @@ def save_wiki_doc(
     text: str,
     title: str,
     summary_type: str,
+    user_id: str,
     team: Optional[str] = None,
     week: Optional[str] = None,
     topic: Optional[str] = None,
@@ -1052,6 +1085,9 @@ def save_wiki_doc(
     entities: Optional[List[WikiEntity]] = None,
 ):
     """wiki 문서를 OpenSearch에 저장"""
+    owner = str(user_id or "").strip()
+    if not owner:
+        raise ValueError("user_id is required for Wiki generation")
     if not text.strip():
         return
 
@@ -1066,6 +1102,9 @@ def save_wiki_doc(
     topic_keys = [e["name"] for e in entity_dicts]
 
     doc = {
+        "wiki_id": owner_scoped_doc_id(owner, doc_id or sha256(text.encode()).hexdigest()),
+        "user_id": owner,
+        "content_hash": sha256(text.encode()).hexdigest(),
         "embedding": embedding,
         "text": text,
         "title": title,
@@ -1082,13 +1121,16 @@ def save_wiki_doc(
 
     # doc_id 지정 시 upsert (같은 팀-주차 요약은 덮어쓰기)
     if doc_id:
+        scoped_id = owner_scoped_doc_id(owner, doc_id)
         # 기존 문서가 있으면 created_at 유지
         try:
-            existing = os_client.get(index=WIKI_INDEX, id=doc_id)
-            doc["created_at"] = existing["_source"].get("created_at", now)
+            existing = os_client.get(index=WIKI_INDEX, id=scoped_id)
+            source = existing.get("_source", {})
+            if source.get("user_id") == owner:
+                doc["created_at"] = source.get("created_at", now)
         except Exception:
             pass
-        os_client.index(index=WIKI_INDEX, id=doc_id, body=doc)
+        os_client.index(index=WIKI_INDEX, id=scoped_id, body=doc)
     else:
         os_client.index(index=WIKI_INDEX, body=doc)
 
@@ -1101,12 +1143,13 @@ def backfill_team_week(
     embed_client: OpenAI,
     team: str,
     week: str,
+    user_id: str,
     entity_catalog: Optional[List[str]] = None,
 ):
     """특정 팀-주차의 wiki 요약 생성 및 저장 (엔티티 추출 포함)"""
     print(f"\n📝 [{team}] {week} 요약 생성 중...")
 
-    chunks = fetch_chunks_for_team_week(os_client, team, week)
+    chunks = fetch_chunks_for_team_week(os_client, team, week, user_id)
     if not chunks:
         print(f"  ⚠️ 데이터 없음: {team} {week}")
         return None
@@ -1120,7 +1163,7 @@ def backfill_team_week(
     title = f"{week} {team} 주간 요약"
     source_ids = [c["id"] for c in chunks]
 
-    catalog = entity_catalog if entity_catalog is not None else fetch_entity_catalog(os_client)
+    catalog = entity_catalog if entity_catalog is not None else fetch_entity_catalog(os_client, user_id)
     original_excerpt = "\n".join(c["text"] for c in chunks[:6])
     entities = extract_team_week_entities(team, week, summary, original_excerpt, catalog)
     if entities:
@@ -1132,6 +1175,7 @@ def backfill_team_week(
         text=summary,
         title=title,
         summary_type="team-week",
+        user_id=user_id,
         team=team,
         week=week,
         source_doc_ids=source_ids,
@@ -1147,6 +1191,7 @@ def backfill_weekly_overview(
     embed_client: OpenAI,
     week: str,
     team_summaries: Dict[str, str],
+    user_id: str,
 ):
     """주차별 전체 팀 크로스 요약 생성 및 저장"""
     print(f"\n📋 {week} 전체 요약 생성 중...")
@@ -1157,9 +1202,9 @@ def backfill_weekly_overview(
         return
 
     try:
-        overview = annotate_cross_team_status(overview, week, os_client, embed_client)
+        overview = annotate_cross_team_status(overview, week, os_client, embed_client, user_id)
     except Exception as exc:
-        print(f"  ⚠️ 상태 어노테이션 실패(원본 저장): {week} - {type(exc).__name__}: {exc}")
+        print(f"  ⚠️ 상태 어노테이션 실패(원본 저장): {week} - {type(exc).__name__}")
 
     doc_id = f"overview_{week}"
     title = f"{week} 전체 팀 종합 요약"
@@ -1170,6 +1215,7 @@ def backfill_weekly_overview(
         text=overview,
         title=title,
         summary_type="overview",
+        user_id=user_id,
         week=week,
         doc_id=doc_id,
     )
@@ -1222,7 +1268,7 @@ def month_to_weeks(month: str) -> List[str]:
 
 
 def fetch_team_week_summaries_for_month(
-    os_client: OpenSearch, month: str
+    os_client: OpenSearch, month: str, user_id: str
 ) -> Dict[str, str]:
     """OpenSearch wiki_summaries 에서 해당 월의 모든 team-week 요약 조회.
 
@@ -1237,17 +1283,20 @@ def fetch_team_week_summaries_for_month(
         "query": {
             "bool": {
                 "filter": [
+                    owner_filter(user_id),
                     {"term": {"summary_type": "team-week"}},
                     {"terms": {"week": weeks}},
                 ]
             }
         },
-        "_source": ["team", "week", "text"],
+        "_source": ["user_id", "team", "week", "text"],
     }
     resp = os_client.search(index=WIKI_INDEX, body=body)
     out: Dict[str, str] = {}
     for hit in resp["hits"]["hits"]:
         src = hit["_source"]
+        if src.get("user_id") != user_id:
+            continue
         team = src.get("team") or ""
         week = src.get("week") or ""
         text = src.get("text") or ""
@@ -1304,7 +1353,7 @@ def _call_team_month_compress_llm(team: str, month: str, weeks_text: str) -> str
             max_tokens=2000,
         )
     except Exception as exc:
-        print(f"   [stage1 LLM error] team={team} month={month} chars={len(weeks_text)}: {type(exc).__name__}: {exc}")
+        print(f"   [stage1 LLM error] team={team} month={month} chars={len(weeks_text)}: {type(exc).__name__}")
         return ""
     content = response.choices[0].message.content or ""
     if not content.strip():
@@ -1367,7 +1416,7 @@ def _call_weekly_cross_extract_llm(week: str, team_summaries: Dict[str, str]) ->
     try:
         return WeeklyCrossExtraction.model_validate(parsed)
     except Exception as exc:
-        print(f"   [stage1a validation error] {week}: {type(exc).__name__}: {exc}")
+        print(f"   [stage1a validation error] {week}: {type(exc).__name__}")
         return None
 
 
@@ -1380,6 +1429,7 @@ def extract_weekly_cross_team_issues(
     team_summaries: Dict[str, str],
     os_client: OpenSearch,
     embed_client: OpenAI,
+    user_id: str,
     *,
     use_cache: bool = True,
 ) -> WeeklyCrossExtraction:
@@ -1387,8 +1437,9 @@ def extract_weekly_cross_team_issues(
     doc_id = _weekly_cross_doc_id(week)
     if use_cache:
         try:
-            doc = os_client.get(index=WIKI_INDEX, id=doc_id)
-            cached_text = doc.get("_source", {}).get("text", "")
+            doc = os_client.get(index=WIKI_INDEX, id=owner_scoped_doc_id(user_id, doc_id))
+            source = doc.get("_source", {})
+            cached_text = source.get("text", "") if source.get("user_id") == user_id else ""
             if cached_text.strip():
                 return WeeklyCrossExtraction.model_validate_json(cached_text)
         except Exception:
@@ -1406,11 +1457,12 @@ def extract_weekly_cross_team_issues(
             text=payload,
             title=f"{week} 주차 cross-team 이슈 추출 (Stage 1A)",
             summary_type="weekly-cross-issues",
+            user_id=user_id,
             week=week,
             doc_id=doc_id,
         )
     except Exception as exc:
-        print(f"   [stage1a cache write error] {week}: {type(exc).__name__}: {exc}")
+        print(f"   [stage1a cache write error] {week}: {type(exc).__name__}")
     return extraction
 
 
@@ -1494,6 +1546,7 @@ def compute_monthly_issue_chains(
     team_week_summaries: Dict[str, str],
     os_client: OpenSearch,
     embed_client: OpenAI,
+    user_id: str,
     *,
     use_cache: bool = True,
     weekly_issues_by_week: Optional[Dict[str, List[Dict]]] = None,
@@ -1513,7 +1566,9 @@ def compute_monthly_issue_chains(
                 print(f"   [stage1a] {w}: team-week 데이터 없음 — 건너뜀")
                 weekly_issues_by_week[w] = []
                 continue
-            extraction = extract_weekly_cross_team_issues(w, ts, os_client, embed_client, use_cache=use_cache)
+            extraction = extract_weekly_cross_team_issues(
+                w, ts, os_client, embed_client, user_id, use_cache=use_cache
+            )
             weekly_issues_by_week[w] = [iss.model_dump() for iss in extraction.issues]
             print(f"   [stage1a] {w}: cross-team 이슈 {len(extraction.issues)}건")
     return _assemble_monthly_issue_chain(month, weekly_issues_by_week, embed_client)
@@ -1884,13 +1939,14 @@ def annotate_monthly_chain_status(
     team_week_summaries: Dict[str, str],
     os_client: OpenSearch,
     embed_client: OpenAI,
+    user_id: str,
     *,
     use_cache: bool = True,
     weekly_issues_by_week: Optional[Dict[str, List[Dict]]] = None,
 ) -> str:
     """편의 래퍼: chain 계산 + injection 한 번에. weekly_issues_by_week 가 있으면 1A 재사용."""
     chains = compute_monthly_issue_chains(
-        month, team_week_summaries, os_client, embed_client,
+        month, team_week_summaries, os_client, embed_client, user_id,
         use_cache=use_cache, weekly_issues_by_week=weekly_issues_by_week,
     )
     if not chains:
@@ -2089,7 +2145,7 @@ def generate_monthly_overview(
             max_tokens=16000,
         )
     except Exception as exc:
-        print(f"   [stage2 LLM error] month={month}: {type(exc).__name__}: {exc}")
+        print(f"   [stage2 LLM error] month={month}: {type(exc).__name__}")
         return ""
 
     choice = response.choices[0]
@@ -2111,7 +2167,7 @@ def generate_monthly_overview(
                 f"(1A 후보 {candidate_total}건 대비)"
             )
         except Exception as exc:
-            print(f"   [stage2 섹션6 파싱 실패] {type(exc).__name__}: {exc}")
+            print(f"   [stage2 섹션6 파싱 실패] {type(exc).__name__}")
         content = _strip_oversized_cross_blocks(content, max_teams=MAX_CROSS_TEAM_COUNT)
         content = _dedup_cross_blocks(content, max_blocks=MAX_CROSS_BLOCKS)
     return content
@@ -2122,6 +2178,7 @@ def backfill_monthly_overview(
     embed_client: OpenAI,
     month: str,
     team_week_summaries: Dict[str, str],
+    user_id: str,
     teams_by_group: Optional[Dict[str, List[str]]] = None,
     force: bool = False,
 ):
@@ -2135,11 +2192,11 @@ def backfill_monthly_overview(
     doc_id = f"monthly_{month}"
     if not force:
         try:
-            if os_client.exists(index=WIKI_INDEX, id=doc_id):
+            if os_client.exists(index=WIKI_INDEX, id=owner_scoped_doc_id(user_id, doc_id)):
                 print(f"⏭️ skip monthly (resume): {month} (--force 로 재생성)")
                 return
         except Exception as e:
-            print(f"  ⚠️ monthly 존재 확인 실패, 진행: {month} - {e}")
+            print(f"  ⚠️ monthly 존재 확인 실패, 진행: {month} - {type(e).__name__}")
     print(f"\n📋 {month} 월간 요약 생성 중...")
 
     # Stage 1A 를 먼저 1회 실행 → (a) Stage 2 후보 주입, (b) chain 어노테이션 양쪽에 재사용
@@ -2152,7 +2209,7 @@ def backfill_monthly_overview(
             weekly_issues_by_week[w] = []
             continue
         extraction = extract_weekly_cross_team_issues(
-            w, ts, os_client, embed_client, use_cache=True
+            w, ts, os_client, embed_client, user_id, use_cache=True
         )
         weekly_issues_by_week[w] = [iss.model_dump() for iss in extraction.issues]
         print(f"   [stage1a] {w}: cross-team 이슈 {len(extraction.issues)}건")
@@ -2160,7 +2217,7 @@ def backfill_monthly_overview(
     # Stage 1B chain 사전 빌드 — Stage 2 입력과 Stage 4 timeline 주입에 공통 재사용
     total_1a = sum(len(v) for v in weekly_issues_by_week.values())
     chains = compute_monthly_issue_chains(
-        month, team_week_summaries, os_client, embed_client,
+        month, team_week_summaries, os_client, embed_client, user_id,
         use_cache=True, weekly_issues_by_week=weekly_issues_by_week,
     )
     if chains:
@@ -2188,7 +2245,7 @@ def backfill_monthly_overview(
         try:
             overview = inject_monthly_chain_timeline(overview, chains, section_num=6)
         except Exception as exc:
-            print(f"  ⚠️ timeline 주입 실패(원본 저장): {month} - {type(exc).__name__}: {exc}")
+            print(f"  ⚠️ timeline 주입 실패(원본 저장): {month} - {type(exc).__name__}")
 
     title = f"{month} 전체 팀 월간 종합 요약"
 
@@ -2198,6 +2255,7 @@ def backfill_monthly_overview(
         text=overview,
         title=title,
         summary_type="monthly",
+        user_id=user_id,
         week=month,
         doc_id=doc_id,
     )
@@ -2216,10 +2274,11 @@ def backfill_monthly_overview(
         "---\n\n"
     )
     out_path.write_text(frontmatter + overview, encoding="utf-8")
-    print(f"  💾 사이드카 작성: {out_path}")
+    print(f"  💾 월간 사이드카 작성 완료: month={month}")
 
 
 def backfill_all(
+    user_id: str,
     weeks: Optional[List[str]] = None,
     teams: Optional[List[str]] = None,
     skip_overview: bool = False,
@@ -2236,7 +2295,7 @@ def backfill_all(
     ensure_entity_mapping(os_client)
 
     # 대상 주차
-    available_weeks = get_available_weeks(os_client)
+    available_weeks = get_available_weeks(os_client, user_id)
     target_weeks = weeks if weeks else available_weeks
     target_teams = teams if teams else TEAMS
 
@@ -2247,23 +2306,29 @@ def backfill_all(
     # resume: 이미 완료된 doc_id 사전 조회 (mget 1회)
     existing_doc_ids: Set[str] = set()
     if not force:
-        expected_ids = [f"team-week_{w}_{t}" for w in target_weeks for t in target_teams]
+        expected_ids = [
+            owner_scoped_doc_id(user_id, f"team-week_{w}_{t}")
+            for w in target_weeks for t in target_teams
+        ]
         if not skip_overview:
-            expected_ids += [f"overview_{w}" for w in target_weeks]
+            expected_ids += [owner_scoped_doc_id(user_id, f"overview_{w}") for w in target_weeks]
         if expected_ids:
             try:
                 resp = os_client.mget(index=WIKI_INDEX, body={"ids": expected_ids})
-                existing_doc_ids = {d["_id"] for d in resp.get("docs", []) if d.get("found")}
+                existing_doc_ids = {
+                    d["_id"] for d in resp.get("docs", [])
+                    if d.get("found") and d.get("_source", {}).get("user_id") == user_id
+                }
             except Exception as e:
-                print(f"   ⚠️ 기존 doc 조회 실패 (전체 재생성): {e}")
+                print(f"   ⚠️ 기존 doc 조회 실패 (전체 재생성): {type(e).__name__}")
                 existing_doc_ids = set()
-        tw_done = sum(1 for i in existing_doc_ids if i.startswith("team-week_"))
-        ov_done = sum(1 for i in existing_doc_ids if i.startswith("overview_"))
+        tw_done = sum(1 for w in target_weeks for t in target_teams if owner_scoped_doc_id(user_id, f"team-week_{w}_{t}") in existing_doc_ids)
+        ov_done = sum(1 for w in target_weeks if owner_scoped_doc_id(user_id, f"overview_{w}") in existing_doc_ids)
         if tw_done or ov_done:
             print(f"   ⏭️ resume: 이미 완료 team-week {tw_done}개 / overview {ov_done}개 → 건너뜀 (--force 로 재생성)")
 
     total = 0
-    entity_catalog = fetch_entity_catalog(os_client)
+    entity_catalog = fetch_entity_catalog(os_client, user_id)
     if entity_catalog:
         print(f"   기존 엔티티 카탈로그: {len(entity_catalog)}개 로드")
 
@@ -2273,19 +2338,23 @@ def backfill_all(
 
         for team in target_teams:
             doc_id = f"team-week_{week}_{team}"
-            if doc_id in existing_doc_ids:
+            scoped_doc_id = owner_scoped_doc_id(user_id, doc_id)
+            if scoped_doc_id in existing_doc_ids:
                 try:
-                    existing = os_client.get(index=WIKI_INDEX, id=doc_id)
-                    week_summaries[team] = existing["_source"]["text"]
+                    existing = os_client.get(index=WIKI_INDEX, id=scoped_doc_id)
+                    source = existing.get("_source", {})
+                    if source.get("user_id") != user_id:
+                        continue
+                    week_summaries[team] = source["text"]
                     print(f"  ⏭️ skip (resume): {team} {week}")
                     continue
                 except Exception as e:
-                    print(f"  ⚠️ skip 후 재조회 실패, 재생성: {team} {week} - {e}")
+                    print(f"  ⚠️ skip 후 재조회 실패, 재생성: {team} {week} - {type(e).__name__}")
                     # fall through → 재생성
 
             try:
                 summary = backfill_team_week(
-                    os_client, embed_client, team, week, entity_catalog=entity_catalog
+                    os_client, embed_client, team, week, user_id, entity_catalog=entity_catalog
                 )
                 if summary:
                     week_summaries[team] = summary
@@ -2294,20 +2363,20 @@ def backfill_all(
                 # API rate limit 방지
                 time.sleep(1)
             except Exception as e:
-                print(f"  ❌ 실패: {team} {week} - {e}")
+                print(f"  ❌ 실패: {team} {week} - {type(e).__name__}")
 
         # 주차별 전체 요약: 신규 team-week 가 하나라도 있거나 overview 자체가 없으면 (재)생성
         if not skip_overview and week_summaries:
             overview_id = f"overview_{week}"
-            if overview_id in existing_doc_ids and new_in_week == 0:
+            if owner_scoped_doc_id(user_id, overview_id) in existing_doc_ids and new_in_week == 0:
                 print(f"  ⏭️ skip overview (resume): {week}")
             else:
                 try:
-                    backfill_weekly_overview(os_client, embed_client, week, week_summaries)
+                    backfill_weekly_overview(os_client, embed_client, week, week_summaries, user_id)
                     total += 1
                     time.sleep(1)
                 except Exception as e:
-                    print(f"  ❌ 전체 요약 실패: {week} - {e}")
+                    print(f"  ❌ 전체 요약 실패: {week} - {type(e).__name__}")
 
     print(f"\n✅ 백필 완료: {total}개 wiki 문서 생성")
 
@@ -2352,7 +2421,7 @@ APPROVE 또는 REJECT 한 단어만 출력하세요.""",
         print(f"  {'✅' if approved else '❌'} [Wiki 검증] {result}")
         return approved
     except Exception as e:
-        print(f"  ⚠️ [Wiki 검증] LLM 호출 실패, 저장 건너뜀: {e}")
+        print(f"  ⚠️ [Wiki 검증] LLM 호출 실패, 저장 건너뜀: {type(e).__name__}")
         return False
 
 
@@ -2361,6 +2430,7 @@ def accumulate_query_result(
     embed_client: OpenAI,
     question: str,
     answer: str,
+    user_id: str,
     source_teams: Optional[List[str]] = None,
     source_weeks: Optional[List[str]] = None,
     source_chunks: Optional[str] = None,
@@ -2379,6 +2449,7 @@ def accumulate_query_result(
         "size": 1,
         "query": {
             "bool": {
+                "filter": [owner_filter(user_id)],
                 "must": [
                     {"term": {"summary_type": "query_synthesis"}},
                     {
@@ -2396,11 +2467,15 @@ def accumulate_query_result(
 
     try:
         resp = os_client.search(index=WIKI_INDEX, body=search_body)
-        if resp["hits"]["hits"]:
-            top_score = resp["hits"]["hits"][0]["_score"]
+        owned_hits = [
+            hit for hit in resp["hits"]["hits"]
+            if hit.get("_source", {}).get("user_id") == user_id
+        ]
+        if owned_hits:
+            top_score = owned_hits[0]["_score"]
             # cosine similarity > 0.92 이면 기존 문서 업데이트
             if top_score > 9.2:  # OpenSearch kNN score는 10 * cosine
-                existing_id = resp["hits"]["hits"][0]["_id"]
+                existing_id = owned_hits[0]["_id"]
                 print(
                     f"  🔄 기존 문서 업데이트: {existing_id} (score: {top_score:.2f})"
                 )
@@ -2410,6 +2485,7 @@ def accumulate_query_result(
                     text=text,
                     title=title,
                     summary_type="query_synthesis",
+                    user_id=user_id,
                     team=source_teams[0] if source_teams else None,
                     week=source_weeks[0] if source_weeks else None,
                     doc_id=existing_id,
@@ -2425,6 +2501,7 @@ def accumulate_query_result(
         text=text,
         title=title,
         summary_type="query_synthesis",
+        user_id=user_id,
         team=source_teams[0] if source_teams else None,
         week=source_weeks[0] if source_weeks else None,
     )
@@ -2462,14 +2539,14 @@ def _slugify_topic(name: str) -> str:
 
 
 def fetch_topic_frequencies(
-    client: OpenSearch, min_weeks: int = 2, size: int = 500
+    client: OpenSearch, user_id: str, min_weeks: int = 2, size: int = 500
 ) -> List[Tuple[str, int]]:
     """topic_keys 별 등장 *주차 수* 집계. (name, distinct_week_count) 목록 반환."""
     if not client.indices.exists(index=WIKI_INDEX):
         return []
     body = {
         "size": 0,
-        "query": {"term": {"summary_type": "team-week"}},
+        "query": {"bool": {"filter": [owner_filter(user_id), {"term": {"summary_type": "team-week"}}]}},
         "aggs": {
             "topics": {
                 "terms": {"field": "topic_keys", "size": size},
@@ -2487,13 +2564,14 @@ def fetch_topic_frequencies(
     return out
 
 
-def fetch_topic_mentions(client: OpenSearch, topic_key: str) -> List[Dict]:
+def fetch_topic_mentions(client: OpenSearch, topic_key: str, user_id: str) -> List[Dict]:
     """특정 topic_key 가 들어있는 team-week 문서들을 week 오름차순으로 반환."""
     body = {
         "size": 200,
         "query": {
             "bool": {
                 "filter": [
+                    owner_filter(user_id),
                     {"term": {"summary_type": "team-week"}},
                     {"term": {"topic_keys": topic_key}},
                 ]
@@ -2505,6 +2583,8 @@ def fetch_topic_mentions(client: OpenSearch, topic_key: str) -> List[Dict]:
     out: List[Dict] = []
     for hit in resp["hits"]["hits"]:
         src = hit["_source"]
+        if src.get("user_id") != user_id:
+            continue
         mention = ""
         for e in src.get("entities") or []:
             if e.get("name") == topic_key:
@@ -2557,7 +2637,7 @@ def generate_topic_timeline(topic_key: str, mentions: List[Dict]) -> str:
     except Exception as exc:
         print(
             f"   [topic LLM error] topic={topic_key} chars={len(context)}: "
-            f"{type(exc).__name__}: {exc}"
+            f"{type(exc).__name__}"
         )
         return ""
 
@@ -2569,11 +2649,11 @@ def generate_topic_timeline(topic_key: str, mentions: List[Dict]) -> str:
 
 
 def backfill_topic_timeline(
-    os_client: OpenSearch, embed_client: OpenAI, topic_key: str
+    os_client: OpenSearch, embed_client: OpenAI, topic_key: str, user_id: str
 ) -> bool:
     """단일 topic timeline 생성 → grounding 검증 → 저장. 성공 여부 반환."""
     print(f"\n🧵 토픽 timeline: {topic_key}")
-    mentions = fetch_topic_mentions(os_client, topic_key)
+    mentions = fetch_topic_mentions(os_client, topic_key, user_id)
     if len(mentions) < 2:
         print(f"  ⚠️ 출현 주차 부족({len(mentions)}). 스킵")
         return False
@@ -2603,6 +2683,7 @@ def backfill_topic_timeline(
         text=timeline,
         title=title,
         summary_type="topic",
+        user_id=user_id,
         topic=topic_key,
         week=weeks_seen[-1] if weeks_seen else None,
         source_doc_ids=[m["id"] for m in mentions],
@@ -2613,7 +2694,7 @@ def backfill_topic_timeline(
 
 
 def build_topic_timelines(
-    topic: Optional[str] = None, min_weeks: int = 2
+    user_id: str, topic: Optional[str] = None, min_weeks: int = 2
 ):
     """CLI 진입점: 단일 topic 또는 빈도 threshold 이상의 모든 topic timeline 생성."""
     os_client = get_client()
@@ -2628,7 +2709,7 @@ def build_topic_timelines(
     if topic:
         targets = [(topic, 0)]
     else:
-        targets = fetch_topic_frequencies(os_client, min_weeks=min_weeks)
+        targets = fetch_topic_frequencies(os_client, user_id, min_weeks=min_weeks)
         if not targets:
             print(f"⚠️ {min_weeks}주 이상 등장한 topic 없음")
             return
@@ -2637,7 +2718,7 @@ def build_topic_timelines(
     ok, fail = 0, 0
     for name, _ in targets:
         try:
-            success = backfill_topic_timeline(os_client, embed_client, name)
+            success = backfill_topic_timeline(os_client, embed_client, name, user_id)
             if success:
                 ok += 1
             else:
@@ -2645,12 +2726,12 @@ def build_topic_timelines(
             time.sleep(0.5)
         except Exception as exc:
             fail += 1
-            print(f"  ❌ {name} 실패: {type(exc).__name__}: {exc}")
+            print(f"  ❌ {name} 실패: {type(exc).__name__}")
 
     print(f"\n✅ topic timeline 완료: 성공 {ok}개, 실패/스킵 {fail}개")
 
 
-def reannotate_existing_overviews(weeks: Optional[List[str]] = None):
+def reannotate_existing_overviews(user_id: str, weeks: Optional[List[str]] = None):
     """기존 overview_{week} 문서에 상태 어노테이션을 소급 적용. LLM 재생성 없음."""
     os_client = get_client()
     embed_client = get_embedding_client()
@@ -2660,12 +2741,12 @@ def reannotate_existing_overviews(weeks: Optional[List[str]] = None):
     else:
         body = {
             "size": 500,
-            "query": {"term": {"summary_type": "overview"}},
-            "_source": ["week"],
+            "query": {"bool": {"filter": [owner_filter(user_id), {"term": {"summary_type": "overview"}}]}},
+            "_source": ["user_id", "week"],
             "sort": [{"week": {"order": "asc"}}],
         }
         resp = os_client.search(index=WIKI_INDEX, body=body)
-        target_weeks = sorted({h["_source"]["week"] for h in resp["hits"]["hits"] if h["_source"].get("week")})
+        target_weeks = sorted({h["_source"]["week"] for h in resp["hits"]["hits"] if h["_source"].get("user_id") == user_id and h["_source"].get("week")})
 
     if not target_weeks:
         print("⚠️ 어노테이션 대상 overview 없음")
@@ -2677,21 +2758,23 @@ def reannotate_existing_overviews(weeks: Optional[List[str]] = None):
     for week in target_weeks:
         doc_id = f"overview_{week}"
         try:
-            doc = os_client.get(index=WIKI_INDEX, id=doc_id)
+            doc = os_client.get(index=WIKI_INDEX, id=owner_scoped_doc_id(user_id, doc_id))
         except Exception as exc:
-            print(f"  ⚠️ {doc_id} 조회 실패: {exc}")
+            print(f"  ⚠️ {doc_id} 조회 실패: {type(exc).__name__}")
             continue
 
         src = doc.get("_source", {})
+        if src.get("user_id") != user_id:
+            continue
         original = src.get("text", "")
         if not original:
             print(f"  ⚠️ {doc_id} text 비어있음")
             continue
 
         try:
-            updated = annotate_cross_team_status(original, week, os_client, embed_client)
+            updated = annotate_cross_team_status(original, week, os_client, embed_client, user_id)
         except Exception as exc:
-            print(f"  ❌ {week} 어노테이션 실패: {type(exc).__name__}: {exc}")
+            print(f"  ❌ {week} 어노테이션 실패: {type(exc).__name__}")
             continue
 
         if updated == original:
@@ -2705,6 +2788,7 @@ def reannotate_existing_overviews(weeks: Optional[List[str]] = None):
             text=updated,
             title=title,
             summary_type="overview",
+            user_id=user_id,
             week=week,
             doc_id=doc_id,
         )
@@ -2717,6 +2801,9 @@ def reannotate_existing_overviews(weeks: Optional[List[str]] = None):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Wiki Builder - OpenSearch wiki 요약 생성"
+    )
+    parser.add_argument(
+        "--user-id", required=True, help="정확한 소유자 ID (팀은 권한 경계가 아님)"
     )
     parser.add_argument(
         "--week", type=str, nargs="*", help="대상 주차 (예: 2025-48 2025-49)"
@@ -2768,33 +2855,36 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
+    cli_user_id = str(args.user_id).strip()
+    owner_filter(cli_user_id)
 
     if args.list_weeks:
         client = get_client()
-        weeks = get_available_weeks(client)
+        weeks = get_available_weeks(client, cli_user_id)
         print(f"사용 가능한 주차 ({len(weeks)}개):")
         for w in weeks:
-            teams = get_teams_for_week(client, w)
+            teams = get_teams_for_week(client, w, cli_user_id)
             print(f"  {w}: {', '.join(teams)}")
     elif args.reannotate_status:
-        reannotate_existing_overviews(weeks=args.week)
+        reannotate_existing_overviews(cli_user_id, weeks=args.week)
     elif args.build_topics or args.topic:
-        build_topic_timelines(topic=args.topic, min_weeks=args.min_weeks)
+        build_topic_timelines(cli_user_id, topic=args.topic, min_weeks=args.min_weeks)
     elif args.monthly:
         os_client = get_client()
         embed_client = get_embedding_client()
         if not os_client.indices.exists(index=WIKI_INDEX):
             print(f"❌ 인덱스 '{WIKI_INDEX}' 없음 — 먼저 backfill 또는 더미 시드 실행 필요")
             raise SystemExit(1)
-        summaries = fetch_team_week_summaries_for_month(os_client, args.monthly)
+        summaries = fetch_team_week_summaries_for_month(os_client, args.monthly, cli_user_id)
         if not summaries:
             print(f"⚠️ team-week 데이터 없음: {args.monthly} (해당 월 ISO 주차에 색인된 문서 없음)")
             raise SystemExit(1)
         backfill_monthly_overview(
-            os_client, embed_client, args.monthly, summaries, force=args.force
+            os_client, embed_client, args.monthly, summaries, cli_user_id, force=args.force
         )
     else:
         backfill_all(
+            user_id=cli_user_id,
             weeks=args.week,
             teams=args.team,
             skip_overview=args.skip_overview,

@@ -9,6 +9,7 @@ class ServiceContainer:
     deep: Any
     conversations: Any
     jobs: Any
+    mail_content: Any = None
 
 
 def build_opensearch_client(settings=None):
@@ -36,6 +37,7 @@ def build_container(settings=None) -> ServiceContainer:
 
     from app.config.settings import get_settings
     from app.graphs.fast_rag import FastRAGWorkflow
+    from app.content.mail import MailContentStore
     from app.graphs.deep_research import DeepCoordinator
     from app.graphs.router import route_request
     from app.llm.gateway import OpenAILLMGateway
@@ -73,4 +75,5 @@ def build_container(settings=None) -> ServiceContainer:
         deep=DeepCoordinator(jobs),
         conversations=MongoConversationStore(database.conversations),
         jobs=jobs,
+        mail_content=MailContentStore(current.mail_content_root),
     )

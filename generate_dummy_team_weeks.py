@@ -3,13 +3,13 @@
 이 스크립트는 일회성입니다 — 검증 종료 후 실 운영 데이터로 교체된 시점에 삭제 가능.
 
 Usage:
-    python generate_dummy_team_weeks.py --month 2026-04             # 생성+인덱싱
-    python generate_dummy_team_weeks.py --month 2026-04 --no-index  # md 파일만
-    python generate_dummy_team_weeks.py --month 2026-04 --purge     # 더미 정리
+    python generate_dummy_team_weeks.py --user-id kim --month 2026-04
+    python generate_dummy_team_weeks.py --user-id kim --month 2026-04 --no-index
+    python generate_dummy_team_weeks.py --user-id kim --month 2026-04 --purge
 
 격리 정책:
-- OpenSearch doc_id 는 'dummy_team_week_{week}_{팀}' prefix 강제 → RAG/topic timeline에서 식별 가능.
-- --purge 는 prefix 매칭으로 OS 문서 + 파일 일괄 삭제.
+- OpenSearch doc_id 와 파일 경로는 명시적 owner namespace 아래에 격리.
+- --purge 는 같은 owner의 exact/prefix 매칭 문서와 파일만 삭제.
 """
 
 from __future__ import annotations
@@ -26,6 +26,8 @@ from wiki_builder import (
     get_client,
     get_embedding_client,
     month_to_weeks,
+    owner_filter,
+    owner_scoped_doc_id,
     save_wiki_doc,
 )
 
@@ -34,7 +36,12 @@ TEAM_WEEK_DIR = Path("wiki/team-week")
 
 DOMAIN_SEEDS: dict[str, dict[str, list[str]]] = {
     "수율": {
-        "topics": ["Edge Particle 개선", "Bridge defect Pareto", "D0 추세", "Wafer Edge 균일도"],
+        "topics": [
+            "Edge Particle 개선",
+            "Bridge defect Pareto",
+            "D0 추세",
+            "Wafer Edge 균일도",
+        ],
         "metrics": ["수율", "Defect Density"],
         "issues": ["Particle 영향 확대", "ECC fail 증가", "Etch 잔류물 검출"],
     },
@@ -140,7 +147,9 @@ def _generate_team_week_md(team: str, week: str) -> str:
     sections.append(f"**2. 주요 업무**")
     for t in topics:
         sections.append(f"- {t}: {week} 진행 상태 점검 및 차주 계획 수립")
-    sections.append(f"- {metric_label} 모니터링 — 목표 {round(yield_val + 1.0, 1)}% 대비 -{round(1.0 - (seed % 3) * 0.1, 1)}%p")
+    sections.append(
+        f"- {metric_label} 모니터링 — 목표 {round(yield_val + 1.0, 1)}% 대비 -{round(1.0 - (seed % 3) * 0.1, 1)}%p"
+    )
     sections.append("")
 
     sections.append(f"**3. 이슈 & 리스크**")
@@ -158,22 +167,28 @@ def _generate_team_week_md(team: str, week: str) -> str:
     return "\n".join(sections)
 
 
-def _doc_id(team: str, week: str) -> str:
-    return f"{DUMMY_DOC_ID_PREFIX}{week}_{team}"
+def _owner_key(user_id: str) -> str:
+    return hashlib.sha256(f"owner:{user_id.strip()}".encode()).hexdigest()[:24]
 
 
-def _file_path(team: str, week: str) -> Path:
-    return TEAM_WEEK_DIR / f"{week}_{team}_dummy.md"
+def _doc_id(user_id: str, team: str, week: str) -> str:
+    return owner_scoped_doc_id(user_id, f"{DUMMY_DOC_ID_PREFIX}{week}_{team}")
 
 
-def _write_md(team: str, week: str, body: str) -> Path:
-    TEAM_WEEK_DIR.mkdir(parents=True, exist_ok=True)
+def _file_path(user_id: str, team: str, week: str) -> Path:
+    return TEAM_WEEK_DIR / _owner_key(user_id) / f"{week}_{team}_dummy.md"
+
+
+def _write_md(user_id: str, team: str, week: str, body: str) -> Path:
+    owner_dir = TEAM_WEEK_DIR / _owner_key(user_id)
+    owner_dir.mkdir(parents=True, exist_ok=True)
     now = datetime.now(tz=timezone.utc).isoformat()
     title = f"{team} {week} 주차 요약 (DUMMY)"
     frontmatter = (
         "---\n"
-        f"title: \"{title}\"\n"
+        f'title: "{title}"\n'
         f"summary_type: team-week\n"
+        f"user_id: {user_id}\n"
         f"team: {team}\n"
         f"week: {week}\n"
         f"is_dummy: true\n"
@@ -181,12 +196,12 @@ def _write_md(team: str, week: str, body: str) -> Path:
         f"updated_at: {now}\n"
         "---\n\n"
     )
-    path = _file_path(team, week)
+    path = _file_path(user_id, team, week)
     path.write_text(frontmatter + body, encoding="utf-8")
     return path
 
 
-def _index_to_os(team: str, week: str, body: str) -> None:
+def _index_to_os(user_id: str, team: str, week: str, body: str) -> None:
     os_client = get_client()
     embed_client = get_embedding_client()
     save_wiki_doc(
@@ -195,13 +210,14 @@ def _index_to_os(team: str, week: str, body: str) -> None:
         text=body,
         title=f"{team} {week} 주차 요약 (DUMMY)",
         summary_type="team-week",
+        user_id=user_id,
         team=team,
         week=week,
-        doc_id=_doc_id(team, week),
+        doc_id=_doc_id(user_id, team, week),
     )
 
 
-def cmd_generate(month: str, no_index: bool) -> int:
+def cmd_generate(month: str, no_index: bool, user_id: str) -> int:
     weeks = month_to_weeks(month)
     if not weeks:
         print(f"❌ {month} 의 ISO 주차를 계산할 수 없습니다", file=sys.stderr)
@@ -217,20 +233,24 @@ def cmd_generate(month: str, no_index: bool) -> int:
     for team in teams:
         for week in weeks:
             body = _generate_team_week_md(team, week)
-            path = _write_md(team, week, body)
+            _write_md(user_id, team, week, body)
             written += 1
             if not no_index:
                 try:
-                    _index_to_os(team, week, body)
+                    _index_to_os(user_id, team, week, body)
                     indexed += 1
+                except TypeError:
+                    raise
                 except Exception as exc:
-                    print(f"   ⚠️ 인덱싱 실패: {team} {week} - {type(exc).__name__}: {exc}")
+                    print(f"   ⚠️ 인덱싱 실패: {team} {week} - {type(exc).__name__}")
     print(f"✅ 파일 작성 {written}/{total}, OpenSearch 인덱싱 {indexed}/{total}")
-    print(f"   격리 정책: doc_id prefix '{DUMMY_DOC_ID_PREFIX}' / 파일 suffix '_dummy.md'")
+    print(
+        f"   격리 정책: doc_id prefix '{DUMMY_DOC_ID_PREFIX}' / 파일 suffix '_dummy.md'"
+    )
     return 0
 
 
-def cmd_purge(month: str | None) -> int:
+def cmd_purge(month: str | None, user_id: str) -> int:
     try:
         os_client = get_client()
         if not os_client.indices.exists(index=WIKI_INDEX):
@@ -245,41 +265,61 @@ def cmd_purge(month: str | None) -> int:
             if weeks:
                 for week in weeks:
                     for team in teams:
-                        doc_ids.append(_doc_id(team, week))
+                        doc_ids.append(_doc_id(user_id, team, week))
             else:
                 # month 미지정 시: ids 매칭 불가 → 전수 스캔 후 prefix 매칭으로 ID 추출
                 scan_body = {
                     "size": 1000,
-                    "_source": False,
-                    "query": {"match_all": {}},
+                    "_source": ["user_id"],
+                    "query": {
+                        "bool": {
+                            "filter": [
+                                owner_filter(user_id),
+                                {
+                                    "prefix": {
+                                        "wiki_id": owner_scoped_doc_id(
+                                            user_id, DUMMY_DOC_ID_PREFIX
+                                        )
+                                    }
+                                },
+                            ]
+                        }
+                    },
                 }
                 resp = os_client.search(index=WIKI_INDEX, body=scan_body)
                 doc_ids = [
                     h["_id"]
                     for h in resp["hits"]["hits"]
-                    if h["_id"].startswith(DUMMY_DOC_ID_PREFIX)
+                    if h.get("_source", {}).get("user_id") == user_id
                 ]
             deleted = 0
             for doc_id in doc_ids:
                 try:
                     os_client.delete(index=WIKI_INDEX, id=doc_id, refresh=False)
                     deleted += 1
+                except TypeError:
+                    raise
                 except Exception:
                     pass
             os_client.indices.refresh(index=WIKI_INDEX)
-            print(f"🗑️ OpenSearch: {deleted}/{len(doc_ids)}건 삭제 (prefix='{DUMMY_DOC_ID_PREFIX}')")
+            print(
+                f"🗑️ OpenSearch: {deleted}/{len(doc_ids)}건 삭제 (prefix='{DUMMY_DOC_ID_PREFIX}')"
+            )
+    except TypeError:
+        raise
     except Exception as exc:
-        print(f"   ⚠️ OpenSearch 정리 생략 (연결 실패 또는 오류): {type(exc).__name__}: {exc}")
+        print(f"   ⚠️ OpenSearch 정리 생략: {type(exc).__name__}")
 
     removed = 0
-    if TEAM_WEEK_DIR.exists():
+    owner_dir = TEAM_WEEK_DIR / _owner_key(user_id)
+    if owner_dir.exists():
         if month:
             weeks = month_to_weeks(month)
             patterns = [f"{w}_*_dummy.md" for w in weeks]
         else:
             patterns = ["*_dummy.md"]
         for pat in patterns:
-            for p in TEAM_WEEK_DIR.glob(pat):
+            for p in owner_dir.glob(pat):
                 p.unlink()
                 removed += 1
     print(f"🗑️ 파일: {removed}개 삭제")
@@ -289,22 +329,32 @@ def cmd_purge(month: str | None) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
+        "--user-id",
+        required=True,
+        help="더미 문서/파일의 정확한 소유자",
+    )
+    ap.add_argument(
         "--month",
         type=str,
         default=datetime.now().strftime("%Y-%m"),
         help="대상 월 (YYYY-MM, 기본: 현재 월)",
     )
-    ap.add_argument("--no-index", action="store_true", help="OpenSearch 인덱싱 생략 (md 파일만)")
+    ap.add_argument(
+        "--no-index", action="store_true", help="OpenSearch 인덱싱 생략 (md 파일만)"
+    )
     ap.add_argument(
         "--purge",
         action="store_true",
         help=f"더미 정리 (OS doc_id prefix '{DUMMY_DOC_ID_PREFIX}' + '*_dummy.md' 파일)",
     )
     args = ap.parse_args()
+    user_id = args.user_id.strip()
+    if not user_id:
+        ap.error("--user-id must not be blank")
 
     if args.purge:
-        return cmd_purge(args.month)
-    return cmd_generate(args.month, args.no_index)
+        return cmd_purge(args.month, user_id)
+    return cmd_generate(args.month, args.no_index, user_id)
 
 
 if __name__ == "__main__":

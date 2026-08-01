@@ -1,4 +1,5 @@
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -23,6 +24,7 @@ class Settings(BaseSettings):
     mongo_uri: str = "mongodb://localhost:27017"
     mongo_db: str = "weekly_mail_agent"
     fast_deadline_seconds: int = Field(default=20, ge=1, le=120)
+    mail_content_root: Path = Path("data")
 
     @classmethod
     def from_env(cls) -> "Settings":

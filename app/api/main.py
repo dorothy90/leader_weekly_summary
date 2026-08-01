@@ -1,10 +1,13 @@
 import uuid
 
 from fastapi import FastAPI, Request
+from fastapi.exception_handlers import http_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.routes.chat import router as chat_router
+from app.api.routes.content import router as content_router
 from app.api.routes.health import router as health_router
 from app.api.routes.research import router as research_router
 from app.domain.errors import AppError, ErrorCode
@@ -89,6 +92,17 @@ def create_app(container) -> FastAPI:
             "요청을 확인할 수 없습니다.",
         )
 
+    @app.exception_handler(StarletteHTTPException)
+    async def http_error_handler(request: Request, error: StarletteHTTPException):
+        if error.status_code == 404:
+            return _error_response(
+                request,
+                404,
+                ErrorCode.UNAUTHORIZED_RESOURCE.value,
+                _SAFE_MESSAGES[ErrorCode.UNAUTHORIZED_RESOURCE],
+            )
+        return await http_exception_handler(request, error)
+
     @app.exception_handler(Exception)
     async def unexpected_error_handler(request: Request, _error):
         return _error_response(
@@ -100,6 +114,7 @@ def create_app(container) -> FastAPI:
         )
 
     app.include_router(chat_router)
+    app.include_router(content_router)
     app.include_router(research_router)
     app.include_router(health_router)
     return app
