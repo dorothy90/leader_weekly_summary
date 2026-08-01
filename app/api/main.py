@@ -6,6 +6,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.routes.chat import router as chat_router
 from app.api.routes.health import router as health_router
+from app.api.routes.research import router as research_router
 from app.domain.errors import AppError, ErrorCode
 
 _SAFE_MESSAGES = {
@@ -99,5 +100,6 @@ def create_app(container) -> FastAPI:
         )
 
     app.include_router(chat_router)
+    app.include_router(research_router)
     app.include_router(health_router)
     return app

@@ -30,15 +30,17 @@ def build_opensearch_client(settings=None):
 
 
 def build_container(settings=None) -> ServiceContainer:
-    """Build Task-5 services; Task 6 supplies the separate Deep coordinator."""
+    """Build synchronous Fast and distinct persistent Deep services."""
     from motor.motor_asyncio import AsyncIOMotorClient
     from openai import AsyncOpenAI
 
     from app.config.settings import get_settings
     from app.graphs.fast_rag import FastRAGWorkflow
+    from app.graphs.deep_research import DeepCoordinator
     from app.graphs.router import route_request
     from app.llm.gateway import OpenAILLMGateway
     from app.persistence.conversations import MongoConversationStore
+    from app.persistence.research_jobs import MongoResearchJobStore
     from app.retrieval.embedding import OpenAIEmbeddingGateway
     from app.retrieval.opensearch import AsyncOpenSearchGateway
     from app.retrieval.service import RetrievalService
@@ -59,6 +61,7 @@ def build_container(settings=None) -> ServiceContainer:
         current.wiki_index,
     )
     database = AsyncIOMotorClient(current.mongo_uri)[current.mongo_db]
+    jobs = MongoResearchJobStore(database.research_jobs)
 
     class RouterService:
         async def route(self, request):
@@ -67,7 +70,7 @@ def build_container(settings=None) -> ServiceContainer:
     return ServiceContainer(
         router=RouterService(),
         fast=FastRAGWorkflow(retrieval, llm),
-        deep=None,
+        deep=DeepCoordinator(jobs),
         conversations=MongoConversationStore(database.conversations),
-        jobs=None,
+        jobs=jobs,
     )

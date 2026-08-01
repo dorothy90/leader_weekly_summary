@@ -11,6 +11,33 @@ BM25_FALLBACK_DISCLOSURE = (
 )
 
 
+def normalize_bm25_fallback(
+    text: str,
+    disclosures: list[str],
+    *,
+    max_bytes: int | None = None,
+) -> tuple[str, list[str]]:
+    """Return at most one exact fallback disclosure in text and metadata."""
+    fallback = BM25_FALLBACK_DISCLOSURE in text or any(
+        BM25_FALLBACK_DISCLOSURE in item for item in disclosures
+    )
+    base = text.replace(BM25_FALLBACK_DISCLOSURE, "").strip()
+    suffix = f"\n\n{BM25_FALLBACK_DISCLOSURE}" if fallback else ""
+    if max_bytes is not None:
+        remaining = max(0, max_bytes - len(suffix.encode("utf-8")))
+        base = base.encode("utf-8")[:remaining].decode("utf-8", errors="ignore").strip()
+    normalized_text = f"{base}{suffix}".strip()
+    others = []
+    for item in disclosures:
+        without_fallback = item.replace(BM25_FALLBACK_DISCLOSURE, "").strip()
+        if without_fallback and without_fallback not in others:
+            others.append(without_fallback)
+    normalized_disclosures = (
+        [BM25_FALLBACK_DISCLOSURE, *others][:4] if fallback else others[:4]
+    )
+    return normalized_text, normalized_disclosures
+
+
 class ChatRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
