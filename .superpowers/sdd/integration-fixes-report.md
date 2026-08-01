@@ -46,3 +46,11 @@ Commit base: `5090f46510f635129b939c902f5eeb67baacfa53`
 - API and operations documentation now state the configured Fast end-to-end deadline coverage and the stronger migration/checkpoint contracts.
 
 Follow-up verification: focused migration/Deep tests `53 passed`; mail-RAG suite `220 passed`; full repository `327 passed, 9 warnings`; compile, Black check, and diff check exited cleanly.
+
+## Final Deep checkpoint review
+
+- Deep checkpoints now retain a stable `round_id` while a round has pending queries. Completed-round accounting remains unchanged across branch crashes and increments exactly once when the final pending query succeeds; a restored completed round can still open the second gap round.
+- Each retrieval batch is durably reserved before its calls start, including failed attempts. Repeated total-outage reclaims therefore stop at the hard 12-search budget rather than resetting the counter, while the existing owner/lease checkpoint CAS and four-call concurrency ceiling remain unchanged.
+- Removed the obsolete operations text that incorrectly described `FAST_DEADLINE_SECONDS` as unenforced.
+
+Final verification: Deep/worker focused tests `39 passed`; mail-RAG suite `222 passed`; full repository `329 passed, 9 warnings`; compile, Black check, and diff check exited cleanly.

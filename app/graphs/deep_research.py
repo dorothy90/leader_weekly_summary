@@ -75,6 +75,8 @@ class DeepState(TypedDict, total=False):
     branch_results: list[BranchResult]
     searches: int
     rounds: int
+    round_id: str | None
+    outage_pending: bool
     complete: bool
     evidence: list[Evidence]
     report: str
@@ -157,16 +159,19 @@ class DeepResearchWorkflow:
                 for item in checkpoint.get("branch_results", [])
             ]
             completed = {item.question for item in branches if not item.failed}
+            pending_queries = [
+                item
+                for item in checkpoint.get("pending_queries", [])
+                if item not in completed
+            ]
             return {
                 "question": question,
-                "queries": [
-                    item
-                    for item in checkpoint.get("pending_queries", [])
-                    if item not in completed
-                ],
+                "queries": pending_queries,
                 "branch_results": branches,
                 "searches": int(checkpoint.get("searches", 0)),
                 "rounds": int(checkpoint.get("rounds", 0)),
+                "round_id": checkpoint.get("round_id") if pending_queries else None,
+                "outage_pending": bool(checkpoint.get("outage_pending", False)),
             }
         try:
             plan = await self.llm.complete_model(
@@ -190,6 +195,8 @@ class DeepResearchWorkflow:
             "branch_results": [],
             "searches": 0,
             "rounds": 0,
+            "round_id": None,
+            "outage_pending": False,
         }
 
     async def _research_one(
@@ -228,10 +235,59 @@ class DeepResearchWorkflow:
 
     async def _research(self, state: DeepState) -> dict:
         remaining = max(0, MAX_SEARCHES - state["searches"])
-        queries = state["queries"][:remaining]
+        all_pending = list(state["queries"])
+        queries = all_pending[:remaining]
         semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
         if not queries:
             return {}
+
+        round_id = state.get("round_id") or uuid.uuid4().hex
+        reserved_searches = state["searches"] + len(queries)
+        successful = [item for item in state["branch_results"] if not item.failed]
+        pending = list(all_pending)
+        callback = state.get("progress_callback")
+
+        async def checkpoint_progress(stage: str, rounds: int) -> None:
+            if callback is None:
+                return
+            checkpoint_state = {**state, "branch_results": successful}
+            compressed = self._safe_evidence(checkpoint_state)
+            safe_branches = [
+                item.model_copy(
+                    update={
+                        "evidence": [
+                            sanitize_evidence_for_memory(evidence, state["policy"])
+                            for evidence in item.evidence
+                            if evidence.user_id == state["policy"].user_id
+                        ][:MAX_EVIDENCE]
+                    }
+                )
+                for item in successful
+            ]
+            await callback(
+                {
+                    "stage": stage,
+                    "progress": min(90, 10 + len(successful) * 8),
+                    "completed_sub_questions": [item.question for item in successful],
+                    "rounds_completed": rounds,
+                    "compressed_evidence": compressed,
+                    "checkpoint": {
+                        "pending_queries": list(pending),
+                        "branch_results": [
+                            item.model_dump(mode="json") for item in safe_branches
+                        ],
+                        "searches": reserved_searches,
+                        "rounds": rounds,
+                        "round_id": round_id,
+                        "outage_pending": bool(pending and not successful),
+                    },
+                }
+            )
+
+        # Reserve the whole batch durably before starting it. A process crash can
+        # then over-count an unstarted call, but can never execute more retrievals
+        # than the hard budget across lease reclaims.
+        await checkpoint_progress("research_in_progress", state["rounds"])
 
         async def run_one(item):
             return item, await self._research_one(
@@ -240,64 +296,18 @@ class DeepResearchWorkflow:
 
         tasks = [asyncio.create_task(run_one(item)) for item in queries]
         fresh = []
-        successful = [item for item in state["branch_results"] if not item.failed]
-        fresh_successes = 0
-        pending = list(queries)
-        callback = state.get("progress_callback")
         try:
             for future in asyncio.as_completed(tasks):
                 question, branch = await future
                 fresh.append(branch)
                 if not branch.failed:
                     successful.append(branch)
-                    fresh_successes += 1
                     pending.remove(question)
-                if callback is not None:
-                    checkpoint_state = {
-                        **state,
-                        "branch_results": successful,
-                    }
-                    compressed = self._safe_evidence(checkpoint_state)
-                    safe_branches = [
-                        item.model_copy(
-                            update={
-                                "evidence": [
-                                    sanitize_evidence_for_memory(
-                                        evidence, state["policy"]
-                                    )
-                                    for evidence in item.evidence
-                                    if evidence.user_id == state["policy"].user_id
-                                ][:MAX_EVIDENCE]
-                            }
-                        )
-                        for item in successful
-                    ]
-                    await callback(
-                        {
-                            "stage": (
-                                "research_in_progress"
-                                if pending
-                                else "research_complete"
-                            ),
-                            "progress": min(90, 10 + len(successful) * 8),
-                            "completed_sub_questions": [
-                                item.question for item in successful
-                            ],
-                            "rounds_completed": min(MAX_ROUNDS, state["rounds"] + 1),
-                            "compressed_evidence": compressed,
-                            "checkpoint": {
-                                "pending_queries": pending,
-                                "branch_results": [
-                                    item.model_dump(mode="json")
-                                    for item in safe_branches
-                                ],
-                                # Failed branches stay pending and do not consume the
-                                # persisted retry budget.
-                                "searches": state["searches"] + fresh_successes,
-                                "rounds": min(MAX_ROUNDS, state["rounds"] + 1),
-                            },
-                        }
-                    )
+                completed_rounds = min(MAX_ROUNDS, state["rounds"] + (not pending))
+                await checkpoint_progress(
+                    "research_in_progress" if pending else "research_complete",
+                    completed_rounds,
+                )
         except BaseException:
             for task in tasks:
                 if not task.done():
@@ -306,12 +316,16 @@ class DeepResearchWorkflow:
             raise
         updated = {
             "branch_results": [*state["branch_results"], *fresh],
-            "searches": state["searches"] + len(queries),
-            "rounds": state["rounds"] + 1,
+            "searches": reserved_searches,
+            "rounds": min(MAX_ROUNDS, state["rounds"] + (not pending)),
+            "round_id": round_id if pending else None,
+            "outage_pending": bool(pending and not successful),
         }
         return updated
 
     async def _gap(self, state: DeepState) -> dict:
+        if state.get("round_id"):
+            return {"complete": True, "queries": []}
         if state["rounds"] >= MAX_ROUNDS or state["searches"] >= MAX_SEARCHES:
             return {"complete": True, "queries": []}
         summary = "\n".join(
@@ -371,7 +385,10 @@ class DeepResearchWorkflow:
 
     async def _synthesize(self, state: DeepState) -> dict:
         branches = state["branch_results"]
-        if branches and all(item.failed for item in branches):
+        if (branches and all(item.failed for item in branches)) or (
+            state.get("outage_pending")
+            and not any(not item.failed for item in branches)
+        ):
             raise AppError(
                 ErrorCode.INDEX_UNAVAILABLE,
                 "검색 인덱스를 사용할 수 없습니다.",

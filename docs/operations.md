@@ -4,8 +4,6 @@
 
 Fast RAG and Deep Research are separate systems that share owner-filtered retrieval and citation validation. Run the API and the research worker as separate processes. Fast RAG is synchronous and bounded to six searches, two rewrites, one answer revision, eight evidence objects, and a configured 16,000 context tokens budget that is enforced conservatively as 16,000 UTF-8 bytes.
 
-`FAST_DEADLINE_SECONDS` is validated in settings (20 seconds by default), but the current `FastRAGWorkflow` does not consume it. Until deadline enforcement is wired into the workflow, the upstream gateway must apply the request timeout and operators must not describe the setting as an in-process guarantee.
-
 Deep Research is persistent and bounded to eight initial sub-questions, four follow-up questions, 12 searches, two rounds, four concurrent searches, 32 evidence objects, 32,000 model-input bytes, one report revision, an 8,000-byte report, and 120 seconds elapsed time. The worker lease defaults to 180 seconds. These limits are safety ceilings, not production latency guarantees.
 
 Every OpenSearch query and MongoDB lookup is scoped by exact request-body `user_id`. `team` is only a facet. Missing owners remain invisible; never infer an owner from team, index, mail text, or path.

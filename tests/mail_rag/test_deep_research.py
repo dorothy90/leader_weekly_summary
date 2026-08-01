@@ -334,7 +334,8 @@ async def test_deep_crash_mid_batch_checkpoints_each_branch_and_does_not_repeat_
 
     async def crash_after_first(payload):
         checkpoints.append(payload)
-        raise RuntimeError("worker crash")
+        if payload["checkpoint"]["branch_results"]:
+            raise RuntimeError("worker crash")
 
     with pytest.raises(RuntimeError, match="worker crash"):
         await DeepResearchWorkflow(
@@ -344,15 +345,84 @@ async def test_deep_crash_mid_batch_checkpoints_each_branch_and_does_not_repeat_
             PolicyContext.from_user_id("kim"),
             progress_callback=crash_after_first,
         )
-    saved = checkpoints[0]["checkpoint"]
+    saved = checkpoints[-1]["checkpoint"]
     assert [item["question"] for item in saved["branch_results"]] == ["q1"]
     assert saved["pending_queries"] == ["q2"]
+    assert saved["rounds"] == 0
+    assert saved["round_id"]
 
     retrieval.calls.clear()
     await DeepResearchWorkflow(retrieval, DeepLLM(reports=["resumed [S1]"])).invoke(
         "질문", PolicyContext.from_user_id("kim"), checkpoint=saved
     )
     assert [task.query for task, _policy in retrieval.calls] == ["q2"]
+
+
+@async_test
+async def test_three_query_round_stays_in_progress_across_branch_crashes_then_allows_gap_round():
+    class OrderedRetrieval(DeepRetrieval):
+        async def search(self, task, policy):
+            self.calls.append((task, policy))
+            await asyncio.sleep(
+                {"q1": 0.001, "q2": 0.01, "q3": 0.02}.get(task.query, 0)
+            )
+            return RetrievalResult(
+                evidence=[evidence("kim", task.query, task.query)], mode="hybrid"
+            )
+
+    retrieval = OrderedRetrieval()
+    checkpoint = None
+    round_id = None
+    expected_pending = [["q2", "q3"], ["q3"], []]
+
+    for completed_count, pending in enumerate(expected_pending, start=1):
+        checkpoints = []
+        prior_completed = completed_count - 1
+
+        async def crash_after_next_branch(payload):
+            checkpoints.append(payload)
+            if len(payload["checkpoint"]["branch_results"]) > prior_completed:
+                raise RuntimeError("crash")
+
+        with pytest.raises(RuntimeError):
+            await DeepResearchWorkflow(
+                retrieval, DeepLLM(sub_questions=["q1", "q2", "q3"])
+            ).invoke(
+                "질문",
+                PolicyContext.from_user_id("kim"),
+                checkpoint=checkpoint,
+                progress_callback=crash_after_next_branch,
+            )
+        checkpoint = checkpoints[-1]["checkpoint"]
+        round_id = round_id or checkpoint["round_id"]
+        assert checkpoint["round_id"] == round_id
+        assert checkpoint["pending_queries"] == pending
+        assert checkpoint["rounds"] == (1 if not pending else 0)
+
+    retrieval.calls.clear()
+    resumed_checkpoints = []
+
+    async def save(payload):
+        resumed_checkpoints.append(payload)
+
+    llm = DeepLLM(
+        gaps=[
+            {"complete": False, "follow_up_questions": ["q4"]},
+            {"complete": True, "follow_up_questions": []},
+        ],
+        reports=["done [S1]"],
+    )
+    await DeepResearchWorkflow(retrieval, llm).invoke(
+        "질문",
+        PolicyContext.from_user_id("kim"),
+        checkpoint=checkpoint,
+        progress_callback=save,
+    )
+    gap_rounds = [item["checkpoint"] for item in resumed_checkpoints]
+    assert gap_rounds
+    assert all(item["round_id"] != round_id for item in gap_rounds)
+    assert gap_rounds[-1]["rounds"] == 2
+    assert [task.query for task, _policy in retrieval.calls] == ["q4"]
 
 
 @async_test
@@ -384,3 +454,36 @@ async def test_deep_total_outage_checkpoint_retries_all_original_queries():
             "질문", PolicyContext.from_user_id("kim"), checkpoint=saved
         )
     assert sorted(calls) == ["q1", "q2"]
+
+
+@async_test
+async def test_repeated_total_outage_reclaims_never_exceed_twelve_actual_calls():
+    retrieval = DeepRetrieval()
+    actual_calls = []
+
+    async def fail(task, policy):
+        actual_calls.append(task.query)
+        raise AppError(ErrorCode.INDEX_UNAVAILABLE, "down", retryable=True)
+
+    retrieval.search = fail
+    checkpoint = None
+    for _attempt in range(10):
+        saved = []
+
+        async def persist(payload):
+            saved.append(payload["checkpoint"])
+
+        with pytest.raises(AppError):
+            await DeepResearchWorkflow(
+                retrieval, DeepLLM(sub_questions=["q1", "q2", "q3"])
+            ).invoke(
+                "질문",
+                PolicyContext.from_user_id("kim"),
+                checkpoint=checkpoint,
+                progress_callback=persist,
+            )
+        if saved:
+            checkpoint = saved[-1]
+        assert len(actual_calls) <= MAX_SEARCHES
+    assert len(actual_calls) == MAX_SEARCHES
+    assert checkpoint["searches"] == MAX_SEARCHES
