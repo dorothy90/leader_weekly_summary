@@ -10,6 +10,7 @@ class ServiceContainer:
     conversations: Any
     jobs: Any
     mail_content: Any = None
+    traces: Any = None
 
 
 def build_opensearch_client(settings=None):
@@ -30,7 +31,7 @@ def build_opensearch_client(settings=None):
     )
 
 
-def build_container(settings=None) -> ServiceContainer:
+def build_container(settings=None, trace_sink=None) -> ServiceContainer:
     """Build synchronous Fast and distinct persistent Deep services."""
     from motor.motor_asyncio import AsyncIOMotorClient
     from openai import AsyncOpenAI
@@ -43,11 +44,13 @@ def build_container(settings=None) -> ServiceContainer:
     from app.llm.gateway import OpenAILLMGateway
     from app.persistence.conversations import MongoConversationStore
     from app.persistence.research_jobs import MongoResearchJobStore
+    from app.observability.tracing import NoOpTraceSink
     from app.retrieval.embedding import OpenAIEmbeddingGateway
     from app.retrieval.opensearch import AsyncOpenSearchGateway
     from app.retrieval.service import RetrievalService
 
     current = settings or get_settings()
+    traces = trace_sink if trace_sink is not None else NoOpTraceSink()
     ai = AsyncOpenAI(
         api_key=current.openrouter_api_key.get_secret_value(),
         base_url=current.openrouter_base_url or None,
@@ -61,6 +64,7 @@ def build_container(settings=None) -> ServiceContainer:
         current.mail_child_index,
         current.mail_parent_index,
         current.wiki_index,
+        trace_sink=traces,
     )
     database = AsyncIOMotorClient(current.mongo_uri)[current.mongo_db]
     jobs = MongoResearchJobStore(database.research_jobs)
@@ -71,9 +75,10 @@ def build_container(settings=None) -> ServiceContainer:
 
     return ServiceContainer(
         router=RouterService(),
-        fast=FastRAGWorkflow(retrieval, llm),
+        fast=FastRAGWorkflow(retrieval, llm, trace_sink=traces),
         deep=DeepCoordinator(jobs),
         conversations=MongoConversationStore(database.conversations),
         jobs=jobs,
         mail_content=MailContentStore(current.mail_content_root),
+        traces=traces,
     )

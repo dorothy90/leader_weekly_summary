@@ -1,5 +1,7 @@
 import asyncio
+from time import perf_counter
 from typing import Literal, TypedDict
+import uuid
 
 import langchain
 from langgraph.graph import END, START, StateGraph
@@ -15,6 +17,7 @@ from app.domain.errors import AppError, ErrorCode
 from app.domain.policy import PolicyContext
 from app.domain.research import MAX_RESEARCH_REPORT_BYTES, RESEARCH_ABSTENTION
 from app.persistence.conversations import sanitize_evidence_for_memory
+from app.observability.tracing import TraceEvent, emit_trace, hash_trace_value
 from app.security.citations import CitationValidator
 from app.security.redaction import sanitize_text
 
@@ -114,10 +117,11 @@ def _bounded_model_input(system: str, sections: list[str]) -> str:
 class DeepResearchWorkflow:
     """Finite Deep-only research graph using the shared retrieval service."""
 
-    def __init__(self, retrieval, llm):
+    def __init__(self, retrieval, llm, trace_sink=None):
         self.retrieval = retrieval
         self.llm = llm
         self.validator = CitationValidator()
+        self.trace_sink = trace_sink
         self.graph = self._build()
 
     def _build(self):
@@ -333,6 +337,61 @@ class DeepResearchWorkflow:
         }
 
     async def invoke(
+        self,
+        question: str,
+        policy: PolicyContext,
+        filters: RetrievalFilters | None = None,
+    ) -> DeepResearchResult:
+        started = perf_counter()
+        try:
+            result = await self._invoke(question, policy, filters)
+        except Exception as error:
+            emit_trace(
+                self.trace_sink,
+                TraceEvent(
+                    trace_id=uuid.uuid4().hex,
+                    node_name="deep_research.invoke",
+                    duration_ms=int((perf_counter() - started) * 1000),
+                    status="error",
+                    index_version_hash=hash_trace_value("shared-retrieval"),
+                    prompt_version_hash=hash_trace_value("deep-v1"),
+                    model_hash=hash_trace_value(
+                        str(getattr(self.llm, "model", "none"))
+                    ),
+                    owner_hash=hash_trace_value(policy.user_id),
+                    query_hash=hash_trace_value(question),
+                    route="deep",
+                    error_class=type(error).__name__,
+                ),
+            )
+            raise
+        emit_trace(
+            self.trace_sink,
+            TraceEvent(
+                trace_id=uuid.uuid4().hex,
+                node_name="deep_research.invoke",
+                duration_ms=int((perf_counter() - started) * 1000),
+                status="ok",
+                index_version_hash=hash_trace_value("shared-retrieval"),
+                prompt_version_hash=hash_trace_value("deep-v1"),
+                model_hash=hash_trace_value(str(getattr(self.llm, "model", "none"))),
+                owner_hash=hash_trace_value(policy.user_id),
+                query_hash=hash_trace_value(question),
+                document_hashes=[
+                    hash_trace_value(item.document_id) for item in result.evidence
+                ],
+                evidence_count=len(result.evidence),
+                retrieval_mode=(
+                    "bm25"
+                    if BM25_FALLBACK_DISCLOSURE in result.disclosures
+                    else "hybrid"
+                ),
+                route="deep",
+            ),
+        )
+        return result
+
+    async def _invoke(
         self,
         question: str,
         policy: PolicyContext,

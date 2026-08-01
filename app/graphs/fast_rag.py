@@ -1,5 +1,7 @@
 import re
+from time import perf_counter
 from typing import Literal, TypedDict
+import uuid
 
 import langchain
 from langgraph.graph import END, START, StateGraph
@@ -22,6 +24,7 @@ from app.llm.prompts import (
     REVISE_SYSTEM,
     REWRITE_SYSTEM,
 )
+from app.observability.tracing import TraceEvent, emit_trace, hash_trace_value
 from app.security.citations import CitationValidator
 from app.security.redaction import opaque_identifier, sanitize_text
 
@@ -133,10 +136,11 @@ def _with_limitation(answer: str, state: FastState) -> str:
 
 
 class FastRAGWorkflow:
-    def __init__(self, retrieval, llm):
+    def __init__(self, retrieval, llm, trace_sink=None):
         self.retrieval = retrieval
         self.llm = llm
         self.validator = CitationValidator()
+        self.trace_sink = trace_sink
         self.graph = self._build()
 
     def _build(self):
@@ -364,6 +368,57 @@ class FastRAGWorkflow:
         policy: PolicyContext,
         conversation: object | None,
     ) -> FastRAGResult:
+        started = perf_counter()
+        try:
+            result = await self._invoke(request, policy, conversation)
+        except Exception as error:
+            emit_trace(
+                self.trace_sink,
+                TraceEvent(
+                    trace_id=uuid.uuid4().hex,
+                    node_name="fast_rag.invoke",
+                    duration_ms=int((perf_counter() - started) * 1000),
+                    status="error",
+                    index_version_hash=hash_trace_value("shared-retrieval"),
+                    prompt_version_hash=hash_trace_value("fast-v1"),
+                    model_hash=hash_trace_value(
+                        str(getattr(self.llm, "model", "none"))
+                    ),
+                    owner_hash=hash_trace_value(policy.user_id),
+                    query_hash=hash_trace_value(request.message),
+                    route="fast",
+                    error_class=type(error).__name__,
+                ),
+            )
+            raise
+        emit_trace(
+            self.trace_sink,
+            TraceEvent(
+                trace_id=uuid.uuid4().hex,
+                node_name="fast_rag.invoke",
+                duration_ms=int((perf_counter() - started) * 1000),
+                status="ok",
+                index_version_hash=hash_trace_value("shared-retrieval"),
+                prompt_version_hash=hash_trace_value("fast-v1"),
+                model_hash=hash_trace_value(str(getattr(self.llm, "model", "none"))),
+                owner_hash=hash_trace_value(policy.user_id),
+                query_hash=hash_trace_value(request.message),
+                document_hashes=[
+                    hash_trace_value(item.document_id) for item in result.evidence
+                ],
+                evidence_count=len(result.evidence),
+                retrieval_mode=result.quality.retrieval_mode,
+                route="fast",
+            ),
+        )
+        return result
+
+    async def _invoke(
+        self,
+        request: ChatRequest,
+        policy: PolicyContext,
+        conversation: object | None,
+    ) -> FastRAGResult:
         if request.user_id != policy.user_id:
             raise ValueError("request owner and policy owner must match exactly")
         had_debug = hasattr(langchain, "debug")
@@ -409,12 +464,50 @@ class FastRAGWorkflow:
         )
 
     async def respond_general(self, request: ChatRequest) -> FastRAGResult:
-        answer = await self.llm.complete_text(
-            GENERAL_SYSTEM,
-            sanitize_text(request.message),
+        started = perf_counter()
+        try:
+            answer = await self.llm.complete_text(
+                GENERAL_SYSTEM,
+                sanitize_text(request.message),
+            )
+            result = FastRAGResult(
+                answer=sanitize_text(answer),
+                evidence=[],
+                quality=QualityStatus(citation_valid=True, limited_answer=False),
+            )
+        except Exception as error:
+            emit_trace(
+                self.trace_sink,
+                TraceEvent(
+                    trace_id=uuid.uuid4().hex,
+                    node_name="fast_rag.general",
+                    duration_ms=int((perf_counter() - started) * 1000),
+                    status="error",
+                    index_version_hash=hash_trace_value("none"),
+                    prompt_version_hash=hash_trace_value("general-v1"),
+                    model_hash=hash_trace_value(
+                        str(getattr(self.llm, "model", "none"))
+                    ),
+                    owner_hash=hash_trace_value(request.user_id),
+                    query_hash=hash_trace_value(request.message),
+                    route="general",
+                    error_class=type(error).__name__,
+                ),
+            )
+            raise
+        emit_trace(
+            self.trace_sink,
+            TraceEvent(
+                trace_id=uuid.uuid4().hex,
+                node_name="fast_rag.general",
+                duration_ms=int((perf_counter() - started) * 1000),
+                status="ok",
+                index_version_hash=hash_trace_value("none"),
+                prompt_version_hash=hash_trace_value("general-v1"),
+                model_hash=hash_trace_value(str(getattr(self.llm, "model", "none"))),
+                owner_hash=hash_trace_value(request.user_id),
+                query_hash=hash_trace_value(request.message),
+                route="general",
+            ),
         )
-        return FastRAGResult(
-            answer=sanitize_text(answer),
-            evidence=[],
-            quality=QualityStatus(citation_valid=True, limited_answer=False),
-        )
+        return result

@@ -2,7 +2,9 @@ import asyncio
 import json
 import re
 from hashlib import sha256
+from time import perf_counter
 from typing import Any, Literal
+import uuid
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field
@@ -14,12 +16,18 @@ from app.retrieval.embedding import EmbeddingGateway
 from app.retrieval.filters import build_owner_filters
 from app.retrieval.fusion import RankedHit, reciprocal_rank_fusion
 from app.retrieval.opensearch import OpenSearchGateway
+from app.observability.tracing import (
+    TraceEvent,
+    emit_trace,
+    hash_trace_value,
+)
 
 
 class RetrievalResult(BaseModel):
     evidence: list[Evidence] = Field(default_factory=list)
     mode: Literal["hybrid", "bm25"] = "hybrid"
     embedding_error: str | None = None
+    embedding_error_class: str | None = None
     disclosures: list[str] = Field(default_factory=list)
 
 
@@ -31,14 +39,63 @@ class RetrievalService:
         child_index: str,
         parent_index: str | None = None,
         wiki_index: str = "wiki_summaries_v2",
+        trace_sink=None,
     ):
         self.backend = search
         self.embeddings = embeddings
         self.child_index = child_index
         self.parent_index = parent_index
         self.wiki_index = wiki_index
+        self.trace_sink = trace_sink
 
     async def search(
+        self,
+        task: SearchTask,
+        policy: PolicyContext,
+    ) -> RetrievalResult:
+        started = perf_counter()
+        try:
+            result = await self._search(task, policy)
+        except Exception as error:
+            emit_trace(
+                self.trace_sink,
+                TraceEvent(
+                    trace_id=uuid.uuid4().hex,
+                    node_name="retrieval.search",
+                    duration_ms=int((perf_counter() - started) * 1000),
+                    status="error",
+                    index_version_hash=hash_trace_value(self.child_index),
+                    prompt_version_hash=hash_trace_value("retrieval-v1"),
+                    model_hash=hash_trace_value("embedding"),
+                    owner_hash=hash_trace_value(policy.user_id),
+                    query_hash=hash_trace_value(task.query),
+                    error_class=type(error).__name__,
+                ),
+            )
+            raise
+        emit_trace(
+            self.trace_sink,
+            TraceEvent(
+                trace_id=uuid.uuid4().hex,
+                node_name="retrieval.search",
+                duration_ms=int((perf_counter() - started) * 1000),
+                status="ok",
+                index_version_hash=hash_trace_value(self.child_index),
+                prompt_version_hash=hash_trace_value("retrieval-v1"),
+                model_hash=hash_trace_value("embedding"),
+                owner_hash=hash_trace_value(policy.user_id),
+                query_hash=hash_trace_value(task.query),
+                document_hashes=[
+                    hash_trace_value(item.document_id) for item in result.evidence
+                ],
+                evidence_count=len(result.evidence),
+                retrieval_mode=result.mode,
+                error_class=result.embedding_error_class,
+            ),
+        )
+        return result
+
+    async def _search(
         self,
         task: SearchTask,
         policy: PolicyContext,
@@ -49,15 +106,17 @@ class RetrievalService:
         index_name = self.wiki_index if task.source == "wiki" else self.child_index
         bm25_body = self._bm25_body(task, policy)
         embedding_error = None
+        embedding_error_class = None
         disclosures: list[str] = []
 
         try:
             vector = await self.embeddings.embed(task.query)
-        except Exception:
+        except Exception as error:
             bm25_response = await self.backend.search(index_name, bm25_body)
             rankings = [self._rank(bm25_response)]
             mode: Literal["hybrid", "bm25"] = "bm25"
             embedding_error = "EMBEDDING_UNAVAILABLE"
+            embedding_error_class = type(error).__name__
             disclosures = [BM25_FALLBACK_DISCLOSURE]
         else:
             vector_body = self._vector_body(task, policy, vector)
@@ -70,8 +129,7 @@ class RetrievalService:
 
         fused_hits = reciprocal_rank_fusion(rankings)
         raw_hits = [
-            {**item.raw, "_rrf_score": item.score}
-            for item in fused_hits[: task.top_k]
+            {**item.raw, "_rrf_score": item.score} for item in fused_hits[: task.top_k]
         ]
         if task.source == "mail":
             raw_hits = await self._expand_mail_context(raw_hits, policy, task)
@@ -81,6 +139,7 @@ class RetrievalService:
             evidence=evidence,
             mode=mode,
             embedding_error=embedding_error,
+            embedding_error_class=embedding_error_class,
             disclosures=disclosures,
         )
 
@@ -322,9 +381,7 @@ class RetrievalService:
             seed_part = int(seed_by_mail[mail_id]["_source"].get("part_index") or 0)
             base = min(
                 parts,
-                key=lambda item: abs(
-                    int(item["_source"]["part_index"]) - seed_part
-                ),
+                key=lambda item: abs(int(item["_source"]["part_index"]) - seed_part),
             )
             context = "\n\n".join(
                 str(item["_source"].get("text") or "")
@@ -368,14 +425,11 @@ class RetrievalService:
                     team=source.get("team"),
                     week=source.get("week"),
                     source_locator=self._safe_locator(source.get("document_locator")),
-                    score=float(
-                        hit.get("_rrf_score") or hit.get("_score") or 0
-                    ),
+                    score=float(hit.get("_rrf_score") or hit.get("_score") or 0),
                     user_id=policy.user_id,
                     acl_decision_id=policy.decision_id,
                     content_hash=str(
-                        source.get("content_hash")
-                        or sha256(text.encode()).hexdigest()
+                        source.get("content_hash") or sha256(text.encode()).hexdigest()
                     ),
                 )
             )
@@ -418,9 +472,7 @@ class RetrievalService:
             "query": {"bool": {"filter": self._filters(policy, facets)}},
             "aggs": {
                 "by_team": {"terms": {"field": "team", "size": 100}},
-                "by_mail_type": {
-                    "terms": {"field": "mail_type", "size": 10}
-                },
+                "by_mail_type": {"terms": {"field": "mail_type", "size": 10}},
             },
         }
         response = await self.backend.search(self.child_index, body)

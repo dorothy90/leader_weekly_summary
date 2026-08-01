@@ -1,4 +1,5 @@
 import uuid
+from time import perf_counter
 
 from fastapi import FastAPI, Request
 from fastapi.exception_handlers import http_exception_handler
@@ -11,6 +12,7 @@ from app.api.routes.content import router as content_router
 from app.api.routes.health import router as health_router
 from app.api.routes.research import router as research_router
 from app.domain.errors import AppError, ErrorCode
+from app.observability.tracing import TraceEvent, emit_trace, hash_trace_value
 
 _SAFE_MESSAGES = {
     ErrorCode.INVALID_USER_ID: "요청을 확인할 수 없습니다.",
@@ -69,9 +71,33 @@ def create_app(container) -> FastAPI:
     @app.middleware("http")
     async def trace_requests(request: Request, call_next):
         request.state.trace_id = uuid.uuid4().hex
-        response = await call_next(request)
-        response.headers["x-trace-id"] = request.state.trace_id
-        return response
+        started = perf_counter()
+        status = "ok"
+        error_class = None
+        try:
+            response = await call_next(request)
+            if response.status_code >= 500:
+                status = "error"
+            response.headers["x-trace-id"] = request.state.trace_id
+            return response
+        except Exception as error:
+            status = "error"
+            error_class = type(error).__name__
+            raise
+        finally:
+            emit_trace(
+                getattr(container, "traces", None),
+                TraceEvent(
+                    trace_id=request.state.trace_id,
+                    node_name="api.request",
+                    duration_ms=int((perf_counter() - started) * 1000),
+                    status=status,
+                    index_version_hash=hash_trace_value("none"),
+                    prompt_version_hash=hash_trace_value("api-v1"),
+                    model_hash=hash_trace_value("none"),
+                    error_class=error_class,
+                ),
+            )
 
     @app.exception_handler(AppError)
     async def app_error_handler(request: Request, error: AppError):
