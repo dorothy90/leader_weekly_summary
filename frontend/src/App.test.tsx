@@ -4,8 +4,41 @@ import { describe, expect, it } from 'vitest'
 
 import App from './App'
 import { DummyMailSourceService } from './services/mailSourceService'
+import type { RagApiClient } from './services/ragApiService'
+
+const fakeRagService = {
+  getHealth: async () => ({
+    request: { method: 'GET' as const, path: '/health' },
+    response: { status: 'ok' as const },
+    status: 200,
+    durationMs: 4,
+    receivedAt: new Date(0).toISOString(),
+  }),
+  getReadiness: async () => ({
+    request: { method: 'GET' as const, path: '/ready' },
+    response: { status: 'ready' as const, dependencies: { mongo: 'ready' } },
+    status: 200,
+    durationMs: 5,
+    receivedAt: new Date(0).toISOString(),
+  }),
+} as Pick<RagApiClient, 'getHealth' | 'getReadiness'> as RagApiClient
 
 describe('Outlook folder setup wizard', () => {
+  it('navigates between folder setup and the RAG Lab without replacing the app', async () => {
+    const user = userEvent.setup()
+    window.history.replaceState({}, '', '/rag')
+    render(<App ragService={fakeRagService} />)
+
+    expect(
+      screen.getByRole('heading', { name: 'RAG 검증 콘솔' }),
+    ).toBeInTheDocument()
+    await user.click(screen.getByRole('link', { name: 'Folder setup' }))
+    expect(window.location.pathname).toBe('/')
+    expect(
+      screen.getByRole('heading', { name: 'Outlook 계정 연결' }),
+    ).toBeInTheDocument()
+  })
+
   it('connects, selects folders, saves, and shows a password-free summary', async () => {
     const user = userEvent.setup()
     render(<App service={new DummyMailSourceService(window.localStorage)} />)

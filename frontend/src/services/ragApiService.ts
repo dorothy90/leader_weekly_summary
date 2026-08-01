@@ -12,6 +12,23 @@ import type {
 
 const SAFE_FAILURE_MESSAGE = '요청을 처리할 수 없습니다.'
 
+export interface RagApiClient {
+  sendChat(payload: ChatPayload): Promise<ApiExchange<ChatResponse>>
+  researchAction(
+    jobId: string,
+    action: 'status' | 'cancel' | 'retry',
+    userId: string,
+  ): Promise<ApiExchange<ResearchJobResponse>>
+  getHealth(): Promise<ApiExchange<HealthResponse>>
+  getReadiness(): Promise<ApiExchange<ReadinessResponse>>
+  streamResearchEvents(
+    jobId: string,
+    userId: string,
+    onEvent: (event: ResearchEvent) => void,
+    signal: AbortSignal,
+  ): Promise<void>
+}
+
 interface ErrorEnvelope {
   error?: {
     code?: unknown
@@ -41,7 +58,7 @@ const safeError = (payload: unknown): SafeApiError => {
   }
 }
 
-export class RagApiService {
+export class RagApiService implements RagApiClient {
   private readonly baseUrl: string
 
   constructor(baseUrl = '/api') {
