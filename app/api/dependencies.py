@@ -19,15 +19,18 @@ def build_opensearch_client(settings=None):
     from app.config.settings import get_settings
 
     current = settings or get_settings()
+    password = current.opensearch_password.get_secret_value()
+    if current.opensearch_user and not password:
+        raise RuntimeError("OPENSEARCH_PASSWORD is required")
     return OpenSearch(
         hosts=[{"host": current.opensearch_host, "port": current.opensearch_port}],
         http_auth=(
             current.opensearch_user,
-            current.opensearch_password.get_secret_value(),
+            password,
         ),
         use_ssl=current.opensearch_use_ssl,
         verify_certs=current.opensearch_verify_certs,
-        ssl_show_warn=not current.opensearch_verify_certs,
+        ssl_show_warn=current.opensearch_verify_certs,
     )
 
 

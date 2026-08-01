@@ -32,6 +32,9 @@ OPENSEARCH_PORT = int(os.getenv("OPENSEARCH_PORT", "9200"))
 OPENSEARCH_USER = os.getenv("OPENSEARCH_USER", "admin")
 OPENSEARCH_PASSWORD = os.getenv("OPENSEARCH_PASSWORD", "")
 OPENSEARCH_USE_SSL = os.getenv("OPENSEARCH_USE_SSL", "false").lower() == "true"
+OPENSEARCH_VERIFY_CERTS = (
+    os.getenv("OPENSEARCH_VERIFY_CERTS", "true").lower() == "true"
+)
 
 # 임베딩 설정
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
@@ -50,12 +53,14 @@ CHUNK_OVERLAP = 300  # 300자 오버랩 (20%)
 # ========== OpenSearch 클라이언트 ==========
 def get_opensearch_client() -> OpenSearch:
     """OpenSearch 클라이언트 생성"""
+    if OPENSEARCH_USER and not OPENSEARCH_PASSWORD:
+        raise RuntimeError("OPENSEARCH_PASSWORD is required")
     client = OpenSearch(
         hosts=[{"host": OPENSEARCH_HOST, "port": OPENSEARCH_PORT}],
         http_auth=(OPENSEARCH_USER, OPENSEARCH_PASSWORD),
         use_ssl=OPENSEARCH_USE_SSL,
-        verify_certs=False,
-        ssl_show_warn=False,
+        verify_certs=OPENSEARCH_VERIFY_CERTS,
+        ssl_show_warn=OPENSEARCH_VERIFY_CERTS,
     )
     return client
 

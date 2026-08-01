@@ -1,6 +1,6 @@
 import asyncio
 
-import langchain
+import langchain_core.globals as langchain_globals
 import pytest
 
 from app.domain.chat import BM25_FALLBACK_DISCLOSURE, ChatRequest
@@ -85,47 +85,51 @@ class ScriptedLLM:
         return "재작성 검색어"
 
 
-def test_fast_workflow_does_not_override_existing_process_debug_setting():
-    original = getattr(langchain, "debug", None)
-    langchain.debug = True
-    try:
-        FastRAGWorkflow(
-            RecordingRetrieval(
-                lambda task, policy: RetrievalResult(evidence=[], mode="hybrid")
-            ),
-            ScriptedLLM(tasks=[{"query": "수율", "source": "mail"}]),
+def test_fast_workflow_construction_does_not_mutate_langchain_core_globals():
+    original = (
+        langchain_globals._debug,
+        langchain_globals._verbose,
+        langchain_globals._llm_cache,
+    )
+    FastRAGWorkflow(
+        RecordingRetrieval(
+            lambda task, policy: RetrievalResult(evidence=[], mode="hybrid")
+        ),
+        ScriptedLLM(tasks=[{"query": "수율", "source": "mail"}]),
+    )
+    assert (
+        langchain_globals._debug,
+        langchain_globals._verbose,
+        langchain_globals._llm_cache,
+    ) == original
+
+
+def test_fast_workflow_invoke_does_not_mutate_langchain_core_globals():
+    original = (
+        langchain_globals._debug,
+        langchain_globals._verbose,
+        langchain_globals._llm_cache,
+    )
+    workflow = FastRAGWorkflow(
+        RecordingRetrieval(
+            lambda task, policy: RetrievalResult(evidence=[], mode="hybrid")
+        ),
+        ScriptedLLM(tasks=[{"query": "수율", "source": "mail"}]),
+    )
+
+    asyncio.run(
+        workflow.invoke(
+            ChatRequest(user_id="kim", message="질문"),
+            PolicyContext.from_user_id("kim"),
+            None,
         )
-        assert langchain.debug is True
-    finally:
-        langchain.debug = original if original is not None else False
+    )
 
-
-def test_fast_workflow_restores_absent_process_debug_attribute_after_invoke():
-    had_debug = hasattr(langchain, "debug")
-    original = getattr(langchain, "debug", None)
-    if had_debug:
-        delattr(langchain, "debug")
-    try:
-        workflow = FastRAGWorkflow(
-            RecordingRetrieval(
-                lambda task, policy: RetrievalResult(evidence=[], mode="hybrid")
-            ),
-            ScriptedLLM(tasks=[{"query": "수율", "source": "mail"}]),
-        )
-        assert not hasattr(langchain, "debug")
-
-        asyncio.run(
-            workflow.invoke(
-                ChatRequest(user_id="kim", message="질문"),
-                PolicyContext.from_user_id("kim"),
-                None,
-            )
-        )
-
-        assert not hasattr(langchain, "debug")
-    finally:
-        if had_debug:
-            langchain.debug = original
+    assert (
+        langchain_globals._debug,
+        langchain_globals._verbose,
+        langchain_globals._llm_cache,
+    ) == original
 
 
 def test_fast_rag_rejects_request_policy_owner_mismatch_before_retrieval():

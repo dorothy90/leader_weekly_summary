@@ -205,6 +205,49 @@ The embedding failure case must use BM25 only and include this exact disclosure:
 
 Local unit tests and the synthetic evaluator do not establish production latency or quality. Record live index/corpus versions, command output, and service endpoints only after a configured integration run; otherwise mark live-service verification as pending.
 
+### Verification record: 2026-08-01
+
+Live-service verification is **pending**. The verification environment had no configured `OPENSEARCH_HOST`, `OPENSEARCH_PASSWORD`, `MONGO_URI`, `OPENROUTER_API_KEY`, or `OPENROUTER_BASE_URL`, and the repository has no registered integration-test marker. No live OpenSearch, MongoDB, embedding, or LLM request was attempted. Production latency, retrieval quality, live index versions, and live corpus versions are therefore unverified.
+
+The deterministic evaluator contract was exercised with a strict oracle adapter generated from the committed gold expectations. This checks evaluator behavior, owner-leakage rejection, and exact fallback-disclosure enforcement; it is not application-output or live-quality evidence. Exact evaluator command:
+
+```bash
+python scripts/evaluate_mail_rag.py \
+  --cases evals/datasets/mail_rag_gold.json \
+  --corpus evals/datasets/mail_rag_synthetic_corpus.json \
+  --results /tmp/mail-rag-eval.WVIOJp/results.json
+```
+
+Recorded output:
+
+```json
+{
+  "cases": 30,
+  "retrieval_recall": 1.0,
+  "citation_precision": 1.0,
+  "unsupported_claim_rate": 0.0,
+  "router_accuracy": 1.0,
+  "fast_route_accuracy": 1.0,
+  "deep_route_accuracy": 1.0,
+  "multiturn_accuracy": 1.0,
+  "fallback_accuracy": 1.0,
+  "owner_leakage": 0,
+  "malformed_results": 0,
+  "passed": true
+}
+```
+
+Committed artifact versions used by that offline check:
+
+```text
+mail-rag-synthetic-v1
+mail_rag_gold.json sha256=e86b00a6a9ecff1d99070daf4724b80c4a8377bfad8c869c9f378b063a521b91
+mail_rag_synthetic_corpus.json sha256=ece617ba2616632fb2ff3d1982e13a96bd530f17489e82a0aa1ba3eaafc5ee7a
+weekly_mail_child_v2.json sha256=5332fd8db81421d00cf7a6ccdc99c6cae3d606bdea3de11faeed587815b5a3ea
+weekly_mail_parent_v2.json sha256=fb376570b9a7666a5aadfd717e7e785d02961207b58cc7c68ec67ee152ba3a15
+wiki_summaries_v2.json sha256=cb92c697633128a8fe768cb36bd8c528f76648461980a359c17220b4d9aad56f
+```
+
 ## Tracing and logging
 
 API middleware, shared retrieval, Fast/General/Deep workflows, and research workers emit through an injected trace sink. `build_container(trace_sink=...)` connects one sink to the API, retrieval, and Fast workflow; the worker bootstrap passes the same sink to `DeepResearchWorkflow` and `ResearchWorker`. The default is an explicit no-op sink, and sink failures never fail requests or jobs.

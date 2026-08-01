@@ -3,7 +3,6 @@ from time import perf_counter
 from typing import Literal, TypedDict
 import uuid
 
-import langchain
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field
 
@@ -401,9 +400,6 @@ class DeepResearchWorkflow:
             raise AppError(
                 ErrorCode.UNAUTHORIZED_RESOURCE, "조사 소유자를 확인할 수 없습니다."
             )
-        had_debug = hasattr(langchain, "debug")
-        if not had_debug:
-            langchain.debug = False
         try:
             async with asyncio.timeout(MAX_ELAPSED_SECONDS):
                 state = await self.graph.ainvoke(
@@ -418,9 +414,6 @@ class DeepResearchWorkflow:
                 ErrorCode.BUDGET_EXCEEDED,
                 "조사 시간 한도를 초과했습니다.",
             ) from None
-        finally:
-            if not had_debug and hasattr(langchain, "debug"):
-                delattr(langchain, "debug")
         return DeepResearchResult(
             report=state["report"],
             evidence=state.get("evidence", []),

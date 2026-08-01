@@ -3,7 +3,6 @@ from time import perf_counter
 from typing import Literal, TypedDict
 import uuid
 
-import langchain
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field
 
@@ -421,20 +420,13 @@ class FastRAGWorkflow:
     ) -> FastRAGResult:
         if request.user_id != policy.user_id:
             raise ValueError("request owner and policy owner must match exactly")
-        had_debug = hasattr(langchain, "debug")
-        if not had_debug:
-            langchain.debug = False
-        try:
-            state = await self.graph.ainvoke(
-                {
-                    "request": request,
-                    "policy": policy,
-                    "conversation": conversation,
-                }
-            )
-        finally:
-            if not had_debug and hasattr(langchain, "debug"):
-                delattr(langchain, "debug")
+        state = await self.graph.ainvoke(
+            {
+                "request": request,
+                "policy": policy,
+                "conversation": conversation,
+            }
+        )
         evidence = state.get("evidence", [])
         answer = sanitize_text(state["answer"])
         disclosures = state.get("disclosures", [])

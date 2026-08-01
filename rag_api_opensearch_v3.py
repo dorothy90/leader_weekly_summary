@@ -21,7 +21,7 @@ from typing import List, Dict, Optional, Any, Annotated, Sequence, Literal, Type
 from datetime import datetime, timedelta, UTC
 from urllib.parse import quote
 
-from fastapi import FastAPI, HTTPException
+from fastapi import APIRouter, FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 from pydantic import BaseModel, Field, field_validator
@@ -48,8 +48,22 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from dotenv import load_dotenv
 import tiktoken
 
-from knowledge_api import router as knowledge_router
-from knowledge_web import mount_knowledge_web
+try:
+    from knowledge_api import router as knowledge_router
+except ModuleNotFoundError as error:
+    if error.name != "knowledge_api":
+        raise
+    knowledge_router = APIRouter()
+
+try:
+    from knowledge_web import mount_knowledge_web
+except ModuleNotFoundError as error:
+    if error.name != "knowledge_web":
+        raise
+
+    def mount_knowledge_web(_app):
+        """Leave the optional legacy knowledge UI unmounted when unavailable."""
+
 from hybrid_rag import (
     MAX_ANSWER_REVISIONS,
     MAX_QUERY_REWRITES,
@@ -96,8 +110,11 @@ load_dotenv()
 OPENSEARCH_HOST = os.getenv("OPENSEARCH_HOST", "localhost")
 OPENSEARCH_PORT = int(os.getenv("OPENSEARCH_PORT", "9200"))
 OPENSEARCH_USER = os.getenv("OPENSEARCH_USER", "admin")
-OPENSEARCH_PASSWORD = os.getenv("OPENSEARCH_PASSWORD", "rlaeorka1!K")
+OPENSEARCH_PASSWORD = os.getenv("OPENSEARCH_PASSWORD", "")
 OPENSEARCH_USE_SSL = os.getenv("OPENSEARCH_USE_SSL", "false").lower() == "true"
+OPENSEARCH_VERIFY_CERTS = (
+    os.getenv("OPENSEARCH_VERIFY_CERTS", "true").lower() == "true"
+)
 INDEX_NAME = os.getenv("OPENSEARCH_INDEX", "weekly_mail")
 SECONDARY_INDEX_NAME = os.getenv("OPENSEARCH_SECONDARY_INDEX", "syldgpt")
 
@@ -249,12 +266,14 @@ class OpenSearchClient:
     """OpenSearch 클라이언트"""
 
     def __init__(self):
+        if OPENSEARCH_USER and not OPENSEARCH_PASSWORD:
+            raise RuntimeError("OPENSEARCH_PASSWORD is required")
         self.client = OpenSearch(
             hosts=[{"host": OPENSEARCH_HOST, "port": OPENSEARCH_PORT}],
             http_auth=(OPENSEARCH_USER, OPENSEARCH_PASSWORD),
             use_ssl=OPENSEARCH_USE_SSL,
-            verify_certs=False,
-            ssl_show_warn=False,
+            verify_certs=OPENSEARCH_VERIFY_CERTS,
+            ssl_show_warn=OPENSEARCH_VERIFY_CERTS,
         )
         self.embedding_client = OpenAI(
             api_key=OPENROUTER_API_KEY, base_url=OPENROUTER_BASE_URL

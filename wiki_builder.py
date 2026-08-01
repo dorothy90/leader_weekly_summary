@@ -78,6 +78,9 @@ OPENSEARCH_PORT = int(os.getenv("OPENSEARCH_PORT", "9200"))
 OPENSEARCH_USER = os.getenv("OPENSEARCH_USER", "admin")
 OPENSEARCH_PASSWORD = os.getenv("OPENSEARCH_PASSWORD", "")
 OPENSEARCH_USE_SSL = os.getenv("OPENSEARCH_USE_SSL", "false").lower() == "true"
+OPENSEARCH_VERIFY_CERTS = (
+    os.getenv("OPENSEARCH_VERIFY_CERTS", "true").lower() == "true"
+)
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "")
@@ -99,12 +102,14 @@ TEAMS = [t for members in teams_by_group.values() for t in members]
 
 # ========== OpenSearch 클라이언트 ==========
 def get_client() -> OpenSearch:
+    if OPENSEARCH_USER and not OPENSEARCH_PASSWORD:
+        raise RuntimeError("OPENSEARCH_PASSWORD is required")
     return OpenSearch(
         hosts=[{"host": OPENSEARCH_HOST, "port": OPENSEARCH_PORT}],
         http_auth=(OPENSEARCH_USER, OPENSEARCH_PASSWORD),
         use_ssl=OPENSEARCH_USE_SSL,
-        verify_certs=False,
-        ssl_show_warn=False,
+        verify_certs=OPENSEARCH_VERIFY_CERTS,
+        ssl_show_warn=OPENSEARCH_VERIFY_CERTS,
     )
 
 

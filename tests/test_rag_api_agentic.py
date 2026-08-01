@@ -14,10 +14,6 @@ sys.modules["motor.motor_asyncio"] = motor_asyncio
 
 import rag_api_opensearch_v3 as rag_api
 import streamlit_chat_v2 as streamlit_chat
-import langchain
-
-if not hasattr(langchain, "debug"):
-    langchain.debug = False
 
 
 class RecordingGraph:
