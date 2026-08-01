@@ -24,8 +24,8 @@ def reciprocal_rank_fusion(
     raw: dict[str, dict[str, Any]] = {}
     for ranking in rankings:
         for hit in ranking:
-            scores[hit.document_id] = (
-                scores.get(hit.document_id, 0.0) + 1.0 / (k + hit.rank)
+            scores[hit.document_id] = scores.get(hit.document_id, 0.0) + 1.0 / (
+                k + hit.rank
             )
             raw.setdefault(hit.document_id, hit.raw)
 

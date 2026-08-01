@@ -50,8 +50,7 @@ class CitationValidator:
             for evidence_id in cited_ids
             if evidence_id in evidence_by_id
             and any(
-                item.user_id != policy.user_id
-                for item in evidence_by_id[evidence_id]
+                item.user_id != policy.user_id for item in evidence_by_id[evidence_id]
             )
         ]
         return CitationValidation(

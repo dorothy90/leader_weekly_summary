@@ -28,7 +28,9 @@ def test_policy_context_rejects_invalid_owner(value):
 
 
 def test_chat_request_keeps_user_id_in_body_and_normalizes_weeks():
-    request = ChatRequest(user_id="kim", message="최근 이슈", filters={"weeks": ["2026-8"]})
+    request = ChatRequest(
+        user_id="kim", message="최근 이슈", filters={"weeks": ["2026-8"]}
+    )
     assert request.user_id == "kim"
     assert request.filters.weeks == ["2026-08"]
 
@@ -42,17 +44,27 @@ def test_chat_request_rejects_noncanonical_week_widths(week):
 def test_evidence_requires_owner_and_bounded_excerpt():
     with pytest.raises(ValidationError):
         Evidence(
-            evidence_id="S1", source_type="mail", document_id="doc-1",
-            title="title", excerpt="x" * 8001, score=1.0,
-            user_id="kim", acl_decision_id="d1", content_hash="h1",
+            evidence_id="S1",
+            source_type="mail",
+            document_id="doc-1",
+            title="title",
+            excerpt="x" * 8001,
+            score=1.0,
+            user_id="kim",
+            acl_decision_id="d1",
+            content_hash="h1",
         )
 
 
 def test_research_job_serializes_utc_state():
     job = ResearchJob(
-        job_id="research-1", user_id="kim", trace_id="trace-1",
-        question="12주 추세", status=ResearchStatus.QUEUED,
-        created_at=datetime.now(UTC), updated_at=datetime.now(UTC),
+        job_id="research-1",
+        user_id="kim",
+        trace_id="trace-1",
+        question="12주 추세",
+        status=ResearchStatus.QUEUED,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
     )
     serialized = job.model_dump(mode="json")
     assert serialized["status"] == "queued"
