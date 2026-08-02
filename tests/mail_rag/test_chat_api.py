@@ -2,6 +2,7 @@ from dataclasses import dataclass
 import asyncio
 
 import httpx
+import pytest
 
 from app.api.dependencies import ServiceContainer
 from app.api.main import create_app
@@ -129,6 +130,43 @@ def test_chat_uses_body_owner_and_returns_trace_without_trusting_headers():
     assert body["mode"] == "fast_rag"
     assert len(body["trace_id"]) == 32
     assert fast.calls[0][1].user_id == "kim"
+
+
+@pytest.mark.parametrize(
+    ("requested_mode", "route", "executed_system", "expected_status"),
+    [
+        ("auto", "general", "general", 200),
+        ("fast", "fast", "fast_rag", 200),
+        ("deep", "deep", "deep_research", 202),
+        ("auto", "clarify", "clarification", 200),
+    ],
+)
+def test_chat_returns_authoritative_routing_diagnostics(
+    requested_mode,
+    route,
+    executed_system,
+    expected_status,
+):
+    response = client(router=FakeRouter(route), deep=FakeDeep()).post(
+        "/v1/chat",
+        json={
+            "user_id": "kim",
+            "message": "hi" if route == "general" else "질문",
+            "response_mode": requested_mode,
+        },
+    )
+
+    assert response.status_code == expected_status
+    assert response.json()["routing"] == {
+        "requested_mode": requested_mode,
+        "route": route,
+        "executed_system": executed_system,
+        "reason_code": "test",
+        "confidence": 1.0,
+        "estimated_searches": 1,
+    }
+    if route in {"general", "clarify"}:
+        assert response.json()["quality"]["retrieval_mode"] == "not_used"
 
 
 def test_mongo_failure_degrades_to_single_turn_with_context_disclosure():

@@ -9,6 +9,7 @@ from app.domain.chat import (
     ChatRequest,
     ChatResponse,
     QualityStatus,
+    RoutingDiagnostics,
 )
 from app.domain.errors import AppError, ErrorCode
 from app.domain.policy import PolicyContext
@@ -49,6 +50,17 @@ def _research_status(value) -> ResearchStatus:
             "조사 작업 상태를 확인할 수 없습니다.",
             retryable=True,
         ) from None
+
+
+def _routing_diagnostics(payload, decision, executed_system):
+    return RoutingDiagnostics(
+        requested_mode=payload.response_mode,
+        route=decision.route,
+        executed_system=executed_system,
+        reason_code=sanitize_text(decision.reason_code) or "unspecified",
+        confidence=decision.confidence,
+        estimated_searches=decision.estimated_searches,
+    )
 
 
 def _safe_reference(item) -> ChatReference:
@@ -201,9 +213,14 @@ async def chat(payload: ChatRequest, request: Request, response: Response):
             conversation_id=conversation_id,
             mode="fast_rag",
             answer=answer,
-            quality=QualityStatus(citation_valid=True, limited_answer=True),
+            quality=QualityStatus(
+                citation_valid=True,
+                limited_answer=False,
+                retrieval_mode="not_used",
+            ),
             disclosures=context_disclosures,
             trace_id=trace_id,
+            routing=_routing_diagnostics(payload, decision, "clarification"),
         )
 
     if decision.route == "general":
@@ -211,6 +228,7 @@ async def chat(payload: ChatRequest, request: Request, response: Response):
         answer, references, quality, disclosures, owned = _safe_fast_result(
             result, policy
         )
+        quality = quality.model_copy(update={"retrieval_mode": "not_used"})
         saved = await _save_messages(
             services,
             conversation_id,
@@ -230,6 +248,7 @@ async def chat(payload: ChatRequest, request: Request, response: Response):
             quality=quality,
             disclosures=[*context_disclosures, *disclosures],
             trace_id=trace_id,
+            routing=_routing_diagnostics(payload, decision, "general"),
         )
 
     if decision.route == "deep":
@@ -255,6 +274,7 @@ async def chat(payload: ChatRequest, request: Request, response: Response):
             conversation_id=conversation_id,
             mode="deep_research",
             trace_id=trace_id,
+            routing=_routing_diagnostics(payload, decision, "deep_research"),
             job_id=opaque_identifier(job.job_id),
             status=_research_status(job.status),
             plan_summary=sanitize_text(job.plan_summary),
@@ -282,4 +302,5 @@ async def chat(payload: ChatRequest, request: Request, response: Response):
         quality=quality,
         disclosures=[*context_disclosures, *disclosures],
         trace_id=trace_id,
+        routing=_routing_diagnostics(payload, decision, "fast_rag"),
     )
