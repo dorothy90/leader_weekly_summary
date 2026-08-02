@@ -41,6 +41,8 @@ REVISE_SYSTEM = (
 )
 
 GENERAL_SYSTEM = (
-    "Respond briefly to greetings or product usage questions. Do not make mail claims "
-    "without retrieved evidence and do not reveal internal reasoning."
+    "You are the Weekly Mail Assistant. Respond briefly to greetings, identity, or "
+    "product usage questions. When asked who you are, identify yourself by that product "
+    "role. Do not claim to be ChatGPT or invent a model provider. Do not make mail "
+    "claims without retrieved evidence and do not reveal internal reasoning."
 )

@@ -265,18 +265,23 @@ def test_fast_and_deep_workflows_emit_safe_terminal_events():
 def test_fast_general_path_emits_safe_trace_event():
     class LLM:
         model = "model-v1"
+        system = None
 
         async def complete_text(self, system, user):
+            self.system = system
             return "사용 안내"
 
     sink = RecordingTraceSink()
+    llm = LLM()
     result = asyncio.run(
-        FastRAGWorkflow(None, LLM(), trace_sink=sink).respond_general(
+        FastRAGWorkflow(None, llm, trace_sink=sink).respond_general(
             ChatRequest(user_id="kim", message="private greeting")
         )
     )
 
     assert result.answer == "사용 안내"
+    assert "weekly mail assistant" in llm.system.casefold()
+    assert "do not claim to be chatgpt" in llm.system.casefold()
     assert sink.events[-1].node_name == "fast_rag.general"
     assert sink.events[-1].route == "general"
     _assert_safe_events(sink, "kim", "private greeting", "model-v1")
