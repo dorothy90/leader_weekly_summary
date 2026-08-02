@@ -33,7 +33,7 @@ class FakeRouter:
             route=self.route_name,
             reason_code=self.reason_code,
             confidence=1,
-            estimated_searches=1,
+            estimated_searches=0 if self.route_name == "clarify" else 1,
         )
 
 
@@ -139,12 +139,18 @@ def test_chat_uses_body_owner_and_returns_trace_without_trusting_headers():
 
 
 @pytest.mark.parametrize(
-    ("requested_mode", "route", "executed_system", "expected_status"),
+    (
+        "requested_mode",
+        "route",
+        "executed_system",
+        "expected_status",
+        "estimated_searches",
+    ),
     [
-        ("auto", "general", "general", 200),
-        ("fast", "fast", "fast_rag", 200),
-        ("deep", "deep", "deep_research", 202),
-        ("auto", "clarify", "clarification", 200),
+        ("auto", "general", "general", 200, 1),
+        ("fast", "fast", "fast_rag", 200, 1),
+        ("deep", "deep", "deep_research", 202, 1),
+        ("auto", "clarify", "clarification", 200, 0),
     ],
 )
 def test_chat_returns_authoritative_routing_diagnostics(
@@ -152,6 +158,7 @@ def test_chat_returns_authoritative_routing_diagnostics(
     route,
     executed_system,
     expected_status,
+    estimated_searches,
 ):
     response = client(router=FakeRouter(route), deep=FakeDeep()).post(
         "/v1/chat",
@@ -169,7 +176,7 @@ def test_chat_returns_authoritative_routing_diagnostics(
         "executed_system": executed_system,
         "reason_code": f"model_{route}",
         "confidence": 1.0,
-        "estimated_searches": 1,
+        "estimated_searches": estimated_searches,
     }
     if route in {"general", "clarify"}:
         assert response.json()["quality"]["retrieval_mode"] == "not_used"

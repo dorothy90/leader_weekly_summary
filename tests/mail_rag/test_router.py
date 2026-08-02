@@ -121,6 +121,28 @@ def test_deterministic_deep_policy_overrides_structured_fast_decision():
     assert decision.reason_code == "deterministic_long_period"
 
 
+def test_three_team_policy_remains_a_deterministic_deep_constraint():
+    llm = RecordingLLM(
+        RouteDecision(
+            route="general",
+            reason_code="conversation",
+            confidence=0.9,
+            estimated_searches=0,
+        )
+    )
+    request = ChatRequest(
+        user_id="kim",
+        message="팀별 현황을 알려줘",
+        filters={"teams": ["etch", "cmp", "photo"]},
+    )
+
+    decision = asyncio.run(route_request(request, llm))
+
+    assert decision.route == "deep"
+    assert decision.reason_code == "deterministic_multi_team"
+    assert decision.estimated_searches == 3
+
+
 @pytest.mark.parametrize(
     "message",
     [
@@ -170,6 +192,26 @@ def test_valid_model_general_is_not_reclassified_by_sentence_rules():
 
     assert decision.route == "general"
     assert decision.reason_code == "model_general"
+    assert decision.estimated_searches == 0
+
+
+def test_valid_model_clarify_normalizes_estimated_searches_to_zero():
+    llm = RecordingLLM(
+        RouteDecision(
+            route="clarify",
+            reason_code="missing_scope",
+            confidence=0.8,
+            estimated_searches=5,
+            clarification_question="Which period?",
+        )
+    )
+
+    decision = asyncio.run(
+        route_request(ChatRequest(user_id="kim", message="메일 좀 찾아줘"), llm)
+    )
+
+    assert decision.route == "clarify"
+    assert decision.reason_code == "model_clarify"
     assert decision.estimated_searches == 0
 
 
@@ -287,6 +329,9 @@ def test_router_failure_defaults_unseen_non_mail_input_to_general(message):
         "지난주 수율 이슈 알려줘",
         "김대환이 보낸 메일 찾아줘",
         "최근 이메일을 요약해줘",
+        "find last week's email",
+        "summarize recent emails",
+        "search mail from Kim",
     ],
 )
 def test_router_failure_uses_fast_for_clear_mail_retrieval(message):
@@ -322,7 +367,9 @@ def test_router_failure_uses_fast_when_retrieval_filters_are_present():
     [
         ("PPT로 만들어줘", "presentation"),
         ("보고서 작성", "report"),
-        ("최근 추세", "answer"),
+        ("최근 추세 분석해줘", "answer"),
+        ("create a report", "report"),
+        ("make a presentation", "presentation"),
     ],
 )
 def test_router_failure_uses_all_research_output_indicators(
@@ -339,3 +386,29 @@ def test_router_failure_uses_all_research_output_indicators(
     assert decision.route == "deep"
     assert decision.reason_code == "router_error_deterministic_research_output"
     assert decision.requested_output == requested_output
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "보고서가 뭐야?",
+        "PPT가 뭐야?",
+        "추세 분석 기능을 설명해줘",
+        "what is a report?",
+        "what is a presentation?",
+        "explain trend analysis",
+        "explain how to create a report",
+        "explain how to search mail",
+    ],
+)
+def test_router_failure_keeps_output_and_analysis_concepts_general(message):
+    decision = asyncio.run(
+        route_request(
+            ChatRequest(user_id="kim", message=message),
+            RecordingLLM(error=TimeoutError("router unavailable")),
+        )
+    )
+
+    assert decision.route == "general"
+    assert decision.reason_code == "router_error_deterministic_general"
+    assert decision.estimated_searches == 0
