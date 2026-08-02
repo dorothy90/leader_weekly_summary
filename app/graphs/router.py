@@ -99,6 +99,7 @@ async def route_request(request: ChatRequest, llm) -> RouteDecision:
         )
     except Exception:
         fallback = _deterministic_fallback(request)
-        return fallback.model_copy(
-            update={"reason_code": f"router_error_{fallback.reason_code}"}
+        normalized = _apply_deterministic_policy(request, fallback)
+        return normalized.model_copy(
+            update={"reason_code": f"router_error_{normalized.reason_code}"}
         )

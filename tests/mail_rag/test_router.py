@@ -192,6 +192,19 @@ def test_router_failure_uses_deterministic_fallback_decision():
     )
 
 
+def test_router_failure_keeps_greeting_out_of_mail_retrieval():
+    decision = asyncio.run(
+        route_request(
+            ChatRequest(user_id="kim", message="hi"),
+            RecordingLLM(error=TimeoutError("router unavailable")),
+        )
+    )
+
+    assert decision.route == "general"
+    assert decision.reason_code == "router_error_deterministic_general"
+    assert decision.estimated_searches == 0
+
+
 @pytest.mark.parametrize(
     ("message", "requested_output"),
     [

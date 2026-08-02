@@ -28,6 +28,21 @@ _INVALID_CITATIONS = "검증된 근거만으로 답변을 제공할 수 없습�
 CONTEXT_UNAVAILABLE_DISCLOSURE = (
     "대화 저장소를 사용할 수 없어 이번 요청은 단일 턴으로 처리했습니다."
 )
+_PUBLIC_ROUTING_REASONS = {
+    "explicit_mode",
+    "deterministic_fast",
+    "deterministic_general",
+    "deterministic_long_period",
+    "deterministic_mail",
+    "deterministic_multi_team",
+    "deterministic_research_output",
+    "router_error_deterministic_fast",
+    "router_error_deterministic_general",
+    "router_error_deterministic_long_period",
+    "router_error_deterministic_mail",
+    "router_error_deterministic_multi_team",
+    "router_error_deterministic_research_output",
+}
 
 
 def _policy_for(payload: ChatRequest) -> PolicyContext:
@@ -53,11 +68,14 @@ def _research_status(value) -> ResearchStatus:
 
 
 def _routing_diagnostics(payload, decision, executed_system):
+    reason_code = sanitize_text(decision.reason_code)
+    if reason_code not in _PUBLIC_ROUTING_REASONS:
+        reason_code = f"model_{decision.route}"
     return RoutingDiagnostics(
         requested_mode=payload.response_mode,
         route=decision.route,
         executed_system=executed_system,
-        reason_code=sanitize_text(decision.reason_code) or "unspecified",
+        reason_code=reason_code,
         confidence=decision.confidence,
         estimated_searches=decision.estimated_searches,
     )

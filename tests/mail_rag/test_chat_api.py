@@ -15,8 +15,9 @@ from app.persistence.conversations import InMemoryConversationStore
 
 
 class FakeRouter:
-    def __init__(self, route="fast"):
+    def __init__(self, route="fast", reason_code=None):
         self.route_name = route
+        self.reason_code = reason_code or f"model_{route}"
         self.requests = []
 
     async def route(self, request):
@@ -25,7 +26,7 @@ class FakeRouter:
         self.requests.append(request)
         return RouteDecision(
             route=self.route_name,
-            reason_code="test",
+            reason_code=self.reason_code,
             confidence=1,
             estimated_searches=1,
         )
@@ -161,12 +162,26 @@ def test_chat_returns_authoritative_routing_diagnostics(
         "requested_mode": requested_mode,
         "route": route,
         "executed_system": executed_system,
-        "reason_code": "test",
+        "reason_code": f"model_{route}",
         "confidence": 1.0,
         "estimated_searches": 1,
     }
     if route in {"general", "clarify"}:
         assert response.json()["quality"]["retrieval_mode"] == "not_used"
+
+
+@pytest.mark.parametrize(
+    "unsafe_reason",
+    ["Explain the user's intent in detail", "x" * 500],
+)
+def test_chat_maps_unsafe_model_reason_to_bounded_server_code(unsafe_reason):
+    response = client(router=FakeRouter("fast", unsafe_reason)).post(
+        "/v1/chat",
+        json={"user_id": "kim", "message": "질문"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["routing"]["reason_code"] == "model_fast"
 
 
 def test_mongo_failure_degrades_to_single_turn_with_context_disclosure():

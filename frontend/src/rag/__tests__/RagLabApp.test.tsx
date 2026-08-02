@@ -167,6 +167,44 @@ describe('RagLabApp', () => {
     expect(within(resultPanel).queryByText('not_used')).not.toBeInTheDocument()
   })
 
+  it('shows clarification routing while keeping retrieval diagnostics out of result badges', async () => {
+    const user = userEvent.setup()
+    const service = baseService()
+    vi.mocked(service.sendChat).mockResolvedValue(
+      exchange<ChatResponse>({
+        conversation_id: 'conversation-clarify',
+        mode: 'fast_rag',
+        answer: '조회할 기간을 알려주세요.',
+        references: [],
+        quality: {
+          citation_valid: true,
+          limited_answer: false,
+          retrieval_mode: 'not_used',
+        },
+        disclosures: [],
+        trace_id: 'trace-clarify',
+        routing: fastRouting({
+          requested_mode: 'auto',
+          route: 'clarify',
+          executed_system: 'clarification',
+          reason_code: 'model_clarify',
+          estimated_searches: 0,
+        }),
+      }),
+    )
+
+    render(<RagLabApp service={service} />)
+    await submitQuestion(user, 'Auto')
+
+    expect(await screen.findByRole('heading', { name: 'Clarification' })).toBeInTheDocument()
+    expect(screen.getByText('Router clarify')).toBeInTheDocument()
+    expect(screen.getByText('실행 clarification')).toBeInTheDocument()
+    const resultPanel = screen.getByLabelText('대화 및 결과')
+    expect(within(resultPanel).queryByText('인용 유효')).not.toBeInTheDocument()
+    expect(within(resultPanel).queryByText('not_used')).not.toBeInTheDocument()
+    expect(within(screen.getByLabelText('API 검사기')).getByText('not_used')).toBeInTheDocument()
+  })
+
   it('tracks a Deep job from accepted events to the completed report', async () => {
     const user = userEvent.setup()
     const service = baseService()
