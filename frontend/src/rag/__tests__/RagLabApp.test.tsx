@@ -9,6 +9,7 @@ import type {
   HealthResponse,
   ReadinessResponse,
   ResearchJobResponse,
+  RoutingDiagnostics,
 } from '../types'
 import { RagLabApp } from '../RagLabApp'
 
@@ -29,6 +30,27 @@ const readiness = exchange<ReadinessResponse>({
   dependencies: { mongo: 'ready', opensearch: 'ready' },
 })
 
+const fastRouting = (
+  overrides: Partial<RoutingDiagnostics> = {},
+): RoutingDiagnostics => ({
+  requested_mode: 'fast',
+  route: 'fast',
+  executed_system: 'fast_rag',
+  reason_code: 'explicit_mode',
+  confidence: 1,
+  estimated_searches: 1,
+  ...overrides,
+})
+
+const deepRouting = (): RoutingDiagnostics => ({
+  requested_mode: 'deep',
+  route: 'deep',
+  executed_system: 'deep_research',
+  reason_code: 'explicit_mode',
+  confidence: 1,
+  estimated_searches: 6,
+})
+
 const baseService = (): RagApiClient => ({
   sendChat: vi.fn(),
   researchAction: vi.fn(),
@@ -41,7 +63,10 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-async function submitQuestion(user: ReturnType<typeof userEvent.setup>, mode: 'Fast' | 'Deep') {
+async function submitQuestion(
+  user: ReturnType<typeof userEvent.setup>,
+  mode: 'Auto' | 'Fast 강제' | 'Deep 강제',
+) {
   await user.type(screen.getByLabelText('user_id'), 'kim')
   await user.click(screen.getByRole('button', { name: mode }))
   await user.type(screen.getByLabelText('질문'), '최근 현황을 알려줘')
@@ -86,11 +111,12 @@ describe('RagLabApp', () => {
         },
         disclosures: [FALLBACK],
         trace_id: 'trace-1',
+        routing: fastRouting(),
       }),
     )
 
     render(<RagLabApp service={service} />)
-    await submitQuestion(user, 'Fast')
+    await submitQuestion(user, 'Fast 강제')
 
     expect(await screen.findByText(/확인된 답변입니다/)).toBeInTheDocument()
     expect(screen.getByText(FALLBACK)).toBeInTheDocument()
@@ -100,6 +126,45 @@ describe('RagLabApp', () => {
     expect(screen.getAllByText('bm25')).toHaveLength(2)
     expect(screen.getByText('trace-1')).toBeInTheDocument()
     expect(screen.getByText('200')).toBeInTheDocument()
+  })
+
+  it('shows authoritative general routing without retrieval quality badges', async () => {
+    const user = userEvent.setup()
+    const service = baseService()
+    vi.mocked(service.sendChat).mockResolvedValue(
+      exchange<ChatResponse>({
+        conversation_id: 'conversation-general',
+        mode: 'fast_rag',
+        answer: 'Hello!',
+        references: [],
+        quality: {
+          citation_valid: true,
+          limited_answer: false,
+          retrieval_mode: 'not_used',
+        },
+        disclosures: [],
+        trace_id: 'trace-general',
+        routing: fastRouting({
+          requested_mode: 'auto',
+          route: 'general',
+          executed_system: 'general',
+          reason_code: 'deterministic_general',
+          estimated_searches: 0,
+        }),
+      }),
+    )
+
+    render(<RagLabApp service={service} />)
+    await submitQuestion(user, 'Auto')
+
+    expect(await screen.findByText('Hello!')).toBeInTheDocument()
+    expect(screen.getByText('요청 Auto')).toBeInTheDocument()
+    expect(screen.getByText('Router general')).toBeInTheDocument()
+    expect(screen.getByText('실행 general')).toBeInTheDocument()
+    expect(screen.getAllByText(/deterministic_general/)).toHaveLength(2)
+    const resultPanel = screen.getByLabelText('대화 및 결과')
+    expect(within(resultPanel).queryByText('인용 유효')).not.toBeInTheDocument()
+    expect(within(resultPanel).queryByText('not_used')).not.toBeInTheDocument()
   })
 
   it('tracks a Deep job from accepted events to the completed report', async () => {
@@ -115,6 +180,7 @@ describe('RagLabApp', () => {
           quality: null,
           disclosures: [],
           trace_id: 'trace-deep',
+          routing: deepRouting(),
           job_id: 'job-1',
           status: 'queued',
           plan_summary: '4주 조사 계획',
@@ -149,10 +215,10 @@ describe('RagLabApp', () => {
     )
 
     render(<RagLabApp service={service} />)
-    await submitQuestion(user, 'Deep')
+    await submitQuestion(user, 'Deep 강제')
 
     expect(await screen.findByText(/완료된 보고서/)).toBeInTheDocument()
-    expect(screen.getByText('100%')).toBeInTheDocument()
+    expect(screen.getAllByText('100%').length).toBeGreaterThanOrEqual(2)
     expect(screen.getByText('completed')).toBeInTheDocument()
     expect(screen.getByText('trace-deep')).toBeInTheDocument()
     expect(screen.getByText('owner: kim')).toBeInTheDocument()
@@ -180,6 +246,7 @@ describe('RagLabApp', () => {
           quality: null,
           disclosures: [],
           trace_id: 'trace-reconnect',
+          routing: deepRouting(),
           job_id: 'job-reconnect',
           status: 'queued',
           plan_summary: '재연결 검사',
@@ -204,7 +271,7 @@ describe('RagLabApp', () => {
     )
 
     render(<RagLabApp service={service} />)
-    await submitQuestion(user, 'Deep')
+    await submitQuestion(user, 'Deep 강제')
 
     await waitFor(() =>
       expect(service.streamResearchEvents).toHaveBeenCalledTimes(2),
@@ -234,7 +301,7 @@ describe('RagLabApp', () => {
     })
 
     render(<RagLabApp service={service} />)
-    await submitQuestion(user, 'Fast')
+    await submitQuestion(user, 'Fast 강제')
 
     const resultPanel = screen.getByLabelText('대화 및 결과')
     const resultAlert = await within(resultPanel).findByRole('alert')
@@ -261,6 +328,7 @@ describe('RagLabApp', () => {
           quality: null,
           disclosures: [],
           trace_id: 'trace-terminal',
+          routing: deepRouting(),
           job_id: 'job-terminal',
           status: 'queued',
           plan_summary: '최종 상태 재시도',
@@ -295,7 +363,7 @@ describe('RagLabApp', () => {
       )
 
     render(<RagLabApp service={service} pollIntervalMs={1} />)
-    await submitQuestion(user, 'Deep')
+    await submitQuestion(user, 'Deep 강제')
 
     await waitFor(() => expect(service.researchAction).toHaveBeenCalledTimes(2))
     expect(await screen.findByText('복구된 보고서')).toBeInTheDocument()
@@ -318,6 +386,7 @@ describe('RagLabApp', () => {
           },
           disclosures: [],
           trace_id: 'trace-first',
+          routing: fastRouting(),
         }),
       )
       .mockResolvedValueOnce(
@@ -333,11 +402,12 @@ describe('RagLabApp', () => {
           },
           disclosures: [],
           trace_id: 'trace-second',
+          routing: fastRouting(),
         }),
       )
 
     render(<RagLabApp service={service} />)
-    await submitQuestion(user, 'Fast')
+    await submitQuestion(user, 'Fast 강제')
     await screen.findByText('첫 답변')
     expect(screen.getByLabelText('conversation_id 선택')).toHaveValue(
       'conversation-followup',

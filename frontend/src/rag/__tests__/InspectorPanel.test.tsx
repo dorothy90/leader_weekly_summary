@@ -9,20 +9,28 @@ const selectedExchange: ApiExchange<ChatResponse> = {
   request: {
     method: 'POST',
     path: '/v1/chat',
-    body: { user_id: 'kim', response_mode: 'fast', message: '질문' },
+    body: { user_id: 'kim', response_mode: 'auto', message: 'hi' },
   },
   response: {
     conversation_id: 'c1',
     mode: 'fast_rag',
-    answer: '답변',
+    answer: 'Hello!',
     references: [],
     quality: {
       citation_valid: true,
       limited_answer: false,
-      retrieval_mode: 'hybrid',
+      retrieval_mode: 'not_used',
     },
     disclosures: [],
     trace_id: 'trace-1',
+    routing: {
+      requested_mode: 'auto',
+      route: 'general',
+      executed_system: 'general',
+      reason_code: 'deterministic_general',
+      confidence: 1,
+      estimated_searches: 0,
+    },
   },
   status: 200,
   durationMs: 42,
@@ -52,6 +60,11 @@ describe('InspectorPanel', () => {
 
     expect(screen.getByText('42 ms')).toBeInTheDocument()
     expect(screen.getByText('trace-1')).toBeInTheDocument()
+    expect(screen.getAllByText('auto').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('general').length).toBeGreaterThan(0)
+    expect(screen.getByText('deterministic_general')).toBeInTheDocument()
+    expect(screen.getByText('100%')).toBeInTheDocument()
+    expect(screen.getByText('not_used')).toBeInTheDocument()
 
     await user.click(screen.getByRole('tab', { name: 'JSON' }))
     expect(screen.getByText(/"user_id": "kim"/)).toBeInTheDocument()

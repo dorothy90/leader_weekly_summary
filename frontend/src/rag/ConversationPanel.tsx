@@ -11,6 +11,11 @@ interface ConversationPanelProps {
 
 const terminalRetry = new Set(['failed', 'cancelled'])
 const cancellable = new Set(['queued', 'running', 'cancelling'])
+const modeLabels = {
+  auto: 'Auto',
+  fast: 'Fast 강제',
+  deep: 'Deep 강제',
+} as const
 
 export function ConversationPanel({
   question,
@@ -23,13 +28,20 @@ export function ConversationPanel({
   const references = job?.references ?? chat?.references ?? []
   const disclosures = job?.disclosures ?? chat?.disclosures ?? []
   const result = job?.result_markdown ?? chat?.answer
+  const resultTitle = job
+    ? 'Deep Research'
+    : chat?.routing.executed_system === 'general'
+      ? 'General response'
+      : chat?.routing.executed_system === 'clarification'
+        ? 'Clarification'
+        : 'Fast answer'
 
   return (
     <section className="conversation-panel" aria-label="대화 및 결과">
       <header className="conversation-header">
         <div>
           <span className="eyebrow">Result stream</span>
-          <h2>{job ? 'Deep Research' : 'Fast answer'}</h2>
+          <h2>{resultTitle}</h2>
         </div>
         {job ? (
           <div className={`job-state is-${job.status}`}>
@@ -60,6 +72,22 @@ export function ConversationPanel({
             <p>Deep Research 작업이 {job.status} 상태로 종료되었습니다.</p>
           </div>
         ) : null}
+        {chat ? (
+          <div className="routing-flow" aria-label="라우팅 결과">
+            <div className="routing-steps">
+              <span>요청 {modeLabels[chat.routing.requested_mode]}</span>
+              <i aria-hidden="true">→</i>
+              <span>Router {chat.routing.route}</span>
+              <i aria-hidden="true">→</i>
+              <span>실행 {chat.routing.executed_system}</span>
+            </div>
+            <small>
+              {chat.routing.reason_code} · 신뢰도{' '}
+              {Math.round(chat.routing.confidence * 100)}% · 예상 검색{' '}
+              {chat.routing.estimated_searches}회
+            </small>
+          </div>
+        ) : null}
         {job && !result ? (
           <div className="message is-system">
             <strong>{job.plan_summary || '조사 계획을 준비하고 있습니다.'}</strong>
@@ -78,7 +106,7 @@ export function ConversationPanel({
         {result ? (
           <div className="message is-assistant">
             <p className="answer-text">{result}</p>
-            {chat?.quality ? (
+            {chat?.quality && chat.routing.executed_system === 'fast_rag' ? (
               <div className="quality-row" aria-label="답변 품질">
                 <span className={chat.quality.citation_valid ? 'is-good' : 'is-bad'}>
                   {chat.quality.citation_valid ? '인용 유효' : '인용 실패'}

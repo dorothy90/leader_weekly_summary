@@ -120,6 +120,12 @@ export function InspectorPanel({
                 <div><dt>trace_id</dt><dd>{chat?.trace_id ?? '서버 미제공'}</dd></div>
                 <div><dt>conversation</dt><dd>{chat?.conversation_id ?? '서버 미제공'}</dd></div>
                 <div><dt>job_id</dt><dd>{chat?.job_id ?? job?.job_id ?? '해당 없음'}</dd></div>
+                <div><dt>requested</dt><dd>{chat?.routing.requested_mode ?? '서버 미제공'}</dd></div>
+                <div><dt>route</dt><dd>{chat?.routing.route ?? '서버 미제공'}</dd></div>
+                <div><dt>executed</dt><dd>{chat?.routing.executed_system ?? '서버 미제공'}</dd></div>
+                <div><dt>reason</dt><dd>{chat?.routing.reason_code ?? '서버 미제공'}</dd></div>
+                <div><dt>confidence</dt><dd>{chat ? `${Math.round(chat.routing.confidence * 100)}%` : '서버 미제공'}</dd></div>
+                <div><dt>searches</dt><dd>{chat?.routing.estimated_searches ?? '서버 미제공'}</dd></div>
                 <div><dt>retrieval</dt><dd>{chat?.quality?.retrieval_mode ?? '서버 미제공'}</dd></div>
                 <div><dt>citation</dt><dd>{chat?.quality ? String(chat.quality.citation_valid) : '서버 미제공'}</dd></div>
               </dl>

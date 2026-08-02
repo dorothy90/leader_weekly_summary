@@ -233,7 +233,7 @@ a:focus-visible {
 
 .mode-switch {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, 1fr);
   gap: 4px;
   padding: 4px;
   background: #eef0f4;
@@ -335,6 +335,46 @@ a:focus-visible {
 .message.is-assistant,
 .message.is-system { background: #fbfcfe; }
 .answer-text { margin: 0; white-space: pre-wrap; }
+
+.routing-flow {
+  width: min(100%, 760px);
+  padding: 10px 12px;
+  margin: 0 0 14px;
+  color: #47516a;
+  background: linear-gradient(90deg, #f0f2fb, #f7f8fc);
+  border: 1px solid #dfe3f2;
+  border-left: 3px solid var(--signal-blue);
+  border-radius: 9px;
+}
+
+.routing-steps {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.routing-steps span {
+  padding: 4px 7px;
+  color: #39445e;
+  background: #fff;
+  border: 1px solid #dfe3ed;
+  border-radius: 6px;
+  font: 750 10px ui-monospace, "SFMono-Regular", Consolas, monospace;
+}
+
+.routing-steps i {
+  color: #8a92a5;
+  font-style: normal;
+  font-size: 11px;
+}
+
+.routing-flow > small {
+  display: block;
+  margin-top: 7px;
+  color: #747d91;
+  font: 9px/1.5 ui-monospace, "SFMono-Regular", Consolas, monospace;
+}
 
 .empty-result {
   display: grid;
