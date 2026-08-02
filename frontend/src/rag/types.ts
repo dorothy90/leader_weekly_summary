@@ -119,3 +119,12 @@ export interface RagRequestSettings {
   conversationId?: string
   filters: RetrievalFilters
 }
+
+export interface ConversationTurn {
+  id: number
+  question: string
+  chat?: ChatResponse
+  job?: ResearchJobResponse
+  error?: SafeApiError
+  pending: boolean
+}

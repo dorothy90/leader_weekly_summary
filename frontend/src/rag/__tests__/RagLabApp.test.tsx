@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -69,8 +69,8 @@ async function submitQuestion(
 ) {
   await user.type(screen.getByLabelText('user_id'), 'kim')
   await user.click(screen.getByRole('button', { name: mode }))
-  await user.type(screen.getByLabelText('질문'), '최근 현황을 알려줘')
-  await user.click(screen.getByRole('button', { name: '실행' }))
+  await user.type(screen.getByRole('textbox', { name: '메시지' }), '최근 현황을 알려줘')
+  await user.click(screen.getByRole('button', { name: '전송' }))
 }
 
 describe('RagLabApp', () => {
@@ -447,17 +447,101 @@ describe('RagLabApp', () => {
     render(<RagLabApp service={service} />)
     await submitQuestion(user, 'Fast 강제')
     await screen.findByText('첫 답변')
-    expect(screen.getByLabelText('conversation_id 선택')).toHaveValue(
+    expect(screen.getByLabelText('conversation_id 자동 입력')).toHaveValue(
       'conversation-followup',
     )
 
-    await user.clear(screen.getByLabelText('질문'))
-    await user.type(screen.getByLabelText('질문'), '후속 질문')
-    await user.click(screen.getByRole('button', { name: '실행' }))
+    const composer = screen.getByRole('textbox', { name: '메시지' })
+    await user.type(composer, '후속 질문')
+    await user.click(screen.getByRole('button', { name: '전송' }))
 
     await waitFor(() => expect(service.sendChat).toHaveBeenCalledTimes(2))
     expect(service.sendChat).toHaveBeenLastCalledWith(
       expect.objectContaining({ conversation_id: 'conversation-followup' }),
+    )
+    expect(screen.getByText('최근 현황을 알려줘')).toBeInTheDocument()
+    expect(screen.getByText('첫 답변')).toBeInTheDocument()
+    expect(screen.getByText('후속 질문')).toBeInTheDocument()
+    expect(await screen.findByText('후속 답변')).toBeInTheDocument()
+    expect(composer).toHaveValue('')
+  })
+
+  it('uses Enter to send, Shift+Enter for a newline, and blocks an empty message', async () => {
+    const user = userEvent.setup()
+    const service = baseService()
+    vi.mocked(service.sendChat).mockResolvedValue(
+      exchange<ChatResponse>({
+        conversation_id: 'conversation-keys',
+        mode: 'fast_rag',
+        answer: '키 입력 답변',
+        references: [],
+        quality: { citation_valid: true, limited_answer: false, retrieval_mode: 'hybrid' },
+        disclosures: [],
+        trace_id: 'trace-keys',
+        routing: fastRouting(),
+      }),
+    )
+
+    render(<RagLabApp service={service} />)
+    await user.type(screen.getByLabelText('user_id'), 'kim')
+    const composer = screen.getByRole('textbox', { name: '메시지' })
+    const send = screen.getByRole('button', { name: '전송' })
+    expect(send).toBeDisabled()
+
+    await user.type(composer, '첫 줄')
+    fireEvent.keyDown(composer, { key: 'Enter', shiftKey: true })
+    expect(service.sendChat).not.toHaveBeenCalled()
+
+    fireEvent.change(composer, { target: { value: '첫 줄\n둘째 줄' } })
+    fireEvent.keyDown(composer, { key: 'Enter' })
+
+    await waitFor(() => expect(service.sendChat).toHaveBeenCalledTimes(1))
+    expect(service.sendChat).toHaveBeenCalledWith(
+      expect.objectContaining({ message: '첫 줄\n둘째 줄' }),
+    )
+  })
+
+  it('does not reuse a conversation id after the owner changes', async () => {
+    const user = userEvent.setup()
+    const service = baseService()
+    vi.mocked(service.sendChat)
+      .mockResolvedValueOnce(
+        exchange<ChatResponse>({
+          conversation_id: 'conversation-kim',
+          mode: 'fast_rag',
+          answer: '김 답변',
+          references: [],
+          quality: { citation_valid: true, limited_answer: false, retrieval_mode: 'hybrid' },
+          disclosures: [],
+          trace_id: 'trace-kim',
+          routing: fastRouting(),
+        }),
+      )
+      .mockResolvedValueOnce(
+        exchange<ChatResponse>({
+          conversation_id: 'conversation-lee',
+          mode: 'fast_rag',
+          answer: '이 답변',
+          references: [],
+          quality: { citation_valid: true, limited_answer: false, retrieval_mode: 'hybrid' },
+          disclosures: [],
+          trace_id: 'trace-lee',
+          routing: fastRouting(),
+        }),
+      )
+
+    render(<RagLabApp service={service} />)
+    await submitQuestion(user, 'Auto')
+    await screen.findByText('김 답변')
+
+    await user.clear(screen.getByLabelText('user_id'))
+    await user.type(screen.getByLabelText('user_id'), 'lee')
+    await user.type(screen.getByRole('textbox', { name: '메시지' }), '새 소유자 질문')
+    await user.click(screen.getByRole('button', { name: '전송' }))
+
+    await waitFor(() => expect(service.sendChat).toHaveBeenCalledTimes(2))
+    expect(service.sendChat).toHaveBeenLastCalledWith(
+      expect.not.objectContaining({ conversation_id: 'conversation-kim' }),
     )
   })
 })
