@@ -68,34 +68,43 @@ def build_opensearch_client(settings=None):
     )
 
 
+def build_ai_gateways(settings):
+    from openai import AsyncOpenAI
+
+    from app.llm.gateway import OpenAILLMGateway
+    from app.retrieval.embedding import OpenAIEmbeddingGateway
+
+    provider = settings.resolve_ai_provider()
+    ai = AsyncOpenAI(
+        api_key=provider.api_key.get_secret_value(),
+        base_url=provider.base_url or None,
+    )
+    return (
+        OpenAILLMGateway(ai, provider.llm_model),
+        OpenAIEmbeddingGateway(ai, provider.embedding_model),
+    )
+
+
 def build_container(settings=None, trace_sink=None) -> ServiceContainer:
     """Build synchronous Fast and distinct persistent Deep services."""
     from motor.motor_asyncio import AsyncIOMotorClient
-    from openai import AsyncOpenAI
 
     from app.config.settings import get_settings
     from app.graphs.fast_rag import FastRAGWorkflow
     from app.content.mail import MailContentStore
     from app.graphs.deep_research import DeepCoordinator
     from app.graphs.router import route_request
-    from app.llm.gateway import OpenAILLMGateway
     from app.persistence.conversations import MongoConversationStore
     from app.persistence.research_jobs import MongoResearchJobStore
     from app.observability.tracing import NoOpTraceSink
-    from app.retrieval.embedding import OpenAIEmbeddingGateway
     from app.retrieval.opensearch import AsyncOpenSearchGateway
     from app.retrieval.service import RetrievalService
 
     current = settings or get_settings()
     traces = trace_sink if trace_sink is not None else NoOpTraceSink()
-    ai = AsyncOpenAI(
-        api_key=current.openrouter_api_key.get_secret_value(),
-        base_url=current.openrouter_base_url or None,
-    )
-    llm = OpenAILLMGateway(ai, current.llm_model)
+    llm, embeddings = build_ai_gateways(current)
     opensearch_client = build_opensearch_client(current)
     search = AsyncOpenSearchGateway(opensearch_client)
-    embeddings = OpenAIEmbeddingGateway(ai, current.embedding_model)
     retrieval = RetrievalService(
         search,
         embeddings,
