@@ -68,6 +68,8 @@ When the LLM router raises or returns an unusable result and deterministic fallb
 
 Deterministic policy overrides that occur after a valid LLM decision retain their existing `deterministic_*` reason codes. This distinguishes a valid policy override from an error fallback without exposing sensitive details.
 
+When a greeting or help request is normalized to `general`, `estimated_searches` is normalized to `0` because that branch performs no retrieval.
+
 ## Server Components and Data Flow
 
 ### Domain Models
