@@ -1,4 +1,5 @@
 from app.domain.chat import ChatRequest, RouteDecision
+from app.graphs.general_intents import is_identity_question
 from app.llm.prompts import ROUTER_SYSTEM
 from app.security.redaction import sanitize_text
 
@@ -52,7 +53,6 @@ def _apply_deterministic_policy(
     if deterministic.route == "deep":
         return deterministic
     text = request.message.casefold().strip()
-    compact = "".join(text.split()).rstrip("?!？！.")
     non_mail = text in {
         "안녕",
         "안녕하세요",
@@ -60,16 +60,7 @@ def _apply_deterministic_policy(
         "hi",
         "도움말",
         "사용법",
-    } or compact in {
-        "넌누구야",
-        "너누구야",
-        "너는누구야",
-        "넌누구니",
-        "너는누구니",
-        "누구세요",
-        "당신은누구세요",
-        "whoareyou",
-    }
+    } or is_identity_question(text)
     if non_mail:
         return decision.model_copy(
             update={

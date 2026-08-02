@@ -135,6 +135,22 @@ def test_fast_workflow_invoke_does_not_mutate_langchain_core_globals():
     ) == original
 
 
+def test_general_identity_response_uses_product_identity_without_llm_claims():
+    llm = ScriptedLLM(tasks=[])
+    workflow = FastRAGWorkflow(None, llm)
+
+    result = asyncio.run(
+        workflow.respond_general(ChatRequest(user_id="kim", message="넌누구야"))
+    )
+
+    assert result.answer == (
+        "저는 Weekly Mail Assistant입니다. 사용자별 메일 근거를 검색하고 "
+        "Fast 답변과 Deep Research 보고서를 제공하는 도우미입니다."
+    )
+    assert result.quality.retrieval_mode == "not_used"
+    assert llm.text_calls == []
+
+
 def test_fast_rag_rejects_request_policy_owner_mismatch_before_retrieval():
     retrieval = RecordingRetrieval(
         lambda task, policy: RetrievalResult(evidence=[], mode="hybrid")

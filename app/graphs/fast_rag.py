@@ -15,6 +15,7 @@ from app.domain.chat import (
 )
 from app.domain.evidence import Evidence, SearchTask
 from app.domain.policy import PolicyContext
+from app.graphs.general_intents import IDENTITY_ANSWER, is_identity_question
 from app.llm.prompts import (
     CONTEXTUALIZE_SYSTEM,
     GENERAL_SYSTEM,
@@ -505,14 +506,21 @@ class FastRAGWorkflow:
     async def respond_general(self, request: ChatRequest) -> FastRAGResult:
         started = perf_counter()
         try:
-            answer = await self.llm.complete_text(
-                GENERAL_SYSTEM,
-                sanitize_text(request.message),
-            )
+            if is_identity_question(request.message):
+                answer = IDENTITY_ANSWER
+            else:
+                answer = await self.llm.complete_text(
+                    GENERAL_SYSTEM,
+                    sanitize_text(request.message),
+                )
             result = FastRAGResult(
                 answer=sanitize_text(answer),
                 evidence=[],
-                quality=QualityStatus(citation_valid=True, limited_answer=False),
+                quality=QualityStatus(
+                    citation_valid=True,
+                    limited_answer=False,
+                    retrieval_mode="not_used",
+                ),
             )
         except Exception as error:
             emit_trace(
