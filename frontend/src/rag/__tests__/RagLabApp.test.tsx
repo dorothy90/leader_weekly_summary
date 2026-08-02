@@ -83,6 +83,13 @@ describe('RagLabApp', () => {
 
     expect(nav.parentElement).toHaveAttribute('data-mobile-view', 'inspector')
     expect(screen.getByLabelText('API 검사기')).toBeInTheDocument()
+    expect(
+      within(screen.getByLabelText('대화 및 결과')).getByRole('textbox', { name: '메시지' }),
+    ).toBeInTheDocument()
+    expect(
+      within(screen.getByRole('heading', { name: 'RAG 검증 콘솔' }).closest('form')!)
+        .queryByRole('textbox', { name: '메시지' }),
+    ).not.toBeInTheDocument()
   })
 
   it('shows Fast answer, evidence, exact fallback, quality, and exchange diagnostics', async () => {

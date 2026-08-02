@@ -314,6 +314,12 @@ a:focus-visible {
   content-visibility: auto;
 }
 
+.conversation-turn + .conversation-turn {
+  padding-top: 18px;
+  margin-top: 18px;
+  border-top: 1px solid #e7e9ef;
+}
+
 .message {
   width: fit-content;
   max-width: min(88%, 760px);
@@ -473,6 +479,51 @@ a:focus-visible {
   border-top: 1px solid var(--line);
 }
 
+.conversation-composer {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 12px 14px;
+  background: #fff;
+  border-top: 1px solid var(--line);
+}
+
+.composer-field {
+  flex: 1;
+  min-width: 0;
+}
+
+.composer-field textarea {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  max-height: 144px;
+  padding: 11px 13px;
+  color: var(--ink);
+  background: #f8f9fc;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.55;
+  resize: vertical;
+}
+
+.composer-field textarea:focus {
+  background: #fff;
+  border-color: var(--signal-blue);
+  box-shadow: 0 0 0 3px rgb(83 105 218 / 10%);
+}
+
+.composer-send {
+  min-width: 70px;
+  min-height: 44px;
+}
+
+.pending-message {
+  color: var(--muted);
+}
+
 .inspector-panel {
   align-self: start;
   max-height: calc(100vh - 82px);
@@ -581,6 +632,9 @@ a:focus-visible {
   .rag-console-grid[data-mobile-view="inspector"] > .inspector-panel { display: block; }
   .conversation-scroll { padding: 14px; }
   .message { max-width: 96%; }
+  .conversation-composer { padding: 10px; }
+  .conversation-composer > .button-secondary { display: none; }
+  .composer-send { min-width: 62px; }
 }
 
 .sr-only {

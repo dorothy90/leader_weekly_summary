@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
 import type {
   ExecutionMode,
@@ -43,7 +43,7 @@ export function RequestPanel({
   const [teams, setTeams] = useState('')
   const [weeks, setWeeks] = useState('')
   const [mailType, setMailType] = useState<RetrievalFilters['mail_type']>()
-  const normalizedWeeks = splitValues(weeks)
+  const normalizedWeeks = useMemo(() => splitValues(weeks), [weeks])
   const weekError = normalizedWeeks.some((week) => !/^\d{4}-\d{2}$/.test(week))
   const weekDescription = [weekError ? 'rag-request-error' : '', apiError ? 'rag-api-error' : '']
     .filter(Boolean)
@@ -64,7 +64,7 @@ export function RequestPanel({
         ...(mailType ? { mail_type: mailType } : {}),
       },
     })
-  }, [conversationId, mailType, mode, onSettingsChange, teams, userId, weekError, weeks])
+  }, [conversationId, mailType, mode, normalizedWeeks, onSettingsChange, teams, userId, weekError])
 
   return (
     <form className="rag-request-panel" onSubmit={(event) => event.preventDefault()} noValidate>
