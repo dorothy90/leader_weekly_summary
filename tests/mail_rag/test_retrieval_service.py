@@ -77,6 +77,14 @@ class BrokenSearch:
         raise ConnectionError("index down")
 
 
+class VectorMismatchSearch(FakeSearch):
+    async def search(self, index, body):
+        if "knn" in str(body):
+            self.calls.append((index, deepcopy(body)))
+            raise ValueError("vector dimension mismatch with secret-vector-detail")
+        return await super().search(index, body)
+
+
 def test_opensearch_failure_is_retryable_index_unavailable():
     service = RetrievalService(BrokenSearch(), FakeEmbedding(), child_index="mail")
     with pytest.raises(AppError) as error:
@@ -85,6 +93,29 @@ def test_opensearch_failure_is_retryable_index_unavailable():
         )
     assert error.value.code == ErrorCode.INDEX_UNAVAILABLE
     assert error.value.retryable is True
+
+
+def test_vector_dimension_failure_uses_owner_scoped_bm25_and_disclosure():
+    backend = VectorMismatchSearch()
+    service = RetrievalService(backend, FakeEmbedding(), child_index="weekly_mail")
+
+    result = asyncio.run(
+        service.search(SearchTask(query="수율"), PolicyContext.from_user_id("kim"))
+    )
+
+    assert result.mode == "bm25"
+    assert result.embedding_error == "EMBEDDING_UNAVAILABLE"
+    assert result.embedding_error_class == "ValueError"
+    assert result.disclosures == [BM25_FALLBACK_DISCLOSURE]
+    assert "secret-vector-detail" not in result.model_dump_json()
+    assert all(
+        _owner_filter(body) == {"term": {"user_id": "kim"}}
+        for _, body in backend.calls
+    )
+    assert any("knn" in str(body) for _, body in backend.calls)
+    assert any(
+        '"match"' in str(body).replace("'", '"') for _, body in backend.calls
+    )
 
 
 def test_hybrid_vector_bm25_and_expansion_queries_are_owner_scoped():

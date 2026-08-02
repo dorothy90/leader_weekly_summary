@@ -127,12 +127,22 @@ class RetrievalService:
             disclosures = [BM25_FALLBACK_DISCLOSURE]
         else:
             vector_body = self._vector_body(task, policy, vector)
-            vector_response, bm25_response = await asyncio.gather(
+            vector_result, bm25_result = await asyncio.gather(
                 self.backend.search(index_name, vector_body),
                 self.backend.search(index_name, bm25_body),
+                return_exceptions=True,
             )
-            rankings = [self._rank(vector_response), self._rank(bm25_response)]
-            mode = "hybrid"
+            if isinstance(bm25_result, Exception):
+                raise bm25_result
+            if isinstance(vector_result, Exception):
+                rankings = [self._rank(bm25_result)]
+                mode = "bm25"
+                embedding_error = "EMBEDDING_UNAVAILABLE"
+                embedding_error_class = type(vector_result).__name__
+                disclosures = [BM25_FALLBACK_DISCLOSURE]
+            else:
+                rankings = [self._rank(vector_result), self._rank(bm25_result)]
+                mode = "hybrid"
 
         fused_hits = reciprocal_rank_fusion(rankings)
         raw_hits = [
