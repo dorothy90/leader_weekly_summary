@@ -100,22 +100,56 @@ def test_deterministic_deep_policy_overrides_structured_fast_decision():
     assert decision.reason_code == "deterministic_long_period"
 
 
-def test_substantive_mail_question_cannot_be_routed_as_general():
+@pytest.mark.parametrize(
+    "message",
+    [
+        "내 이름은 대환",
+        "고마워",
+        "무슨 일을 할 수 있어?",
+        "Fast와 Deep의 차이가 뭐야?",
+        "오늘 기분 어때?",
+    ],
+)
+def test_valid_model_general_decision_is_authoritative_for_unseen_conversation(
+    message,
+):
+    llm = RecordingLLM(
+        RouteDecision(
+            route="general",
+            reason_code="conversation",
+            confidence=0.99,
+            estimated_searches=3,
+        )
+    )
+
+    decision = asyncio.run(
+        route_request(ChatRequest(user_id="kim", message=message), llm)
+    )
+
+    assert decision.route == "general"
+    assert decision.reason_code == "model_general"
+    assert decision.estimated_searches == 0
+
+
+def test_valid_model_general_is_not_reclassified_by_sentence_rules():
     llm = RecordingLLM(
         RouteDecision(
             route="general",
             reason_code="model_general",
             confidence=0.9,
-            estimated_searches=0,
+            estimated_searches=1,
         )
     )
+
     decision = asyncio.run(
         route_request(
             ChatRequest(user_id="kim", message="지난주 수율 이슈 알려줘"), llm
         )
     )
-    assert decision.route == "fast"
-    assert decision.reason_code == "deterministic_mail"
+
+    assert decision.route == "general"
+    assert decision.reason_code == "model_general"
+    assert decision.estimated_searches == 0
 
 
 @pytest.mark.parametrize(
@@ -137,67 +171,6 @@ def test_auto_router_model_cannot_spoof_server_owned_reason_codes(spoofed_reason
     )
 
     assert decision.reason_code == "model_fast"
-
-
-def test_non_mail_greeting_may_use_general_route():
-    llm = RecordingLLM(
-        RouteDecision(
-            route="general", reason_code="greeting", confidence=1, estimated_searches=5
-        )
-    )
-    decision = asyncio.run(
-        route_request(ChatRequest(user_id="kim", message="안녕하세요"), llm)
-    )
-    assert decision.route == "general"
-    assert decision.reason_code == "deterministic_general"
-    assert decision.estimated_searches == 0
-
-
-@pytest.mark.parametrize(
-    "message",
-    ["넌누구야", "넌 누구야?", "너는 누구야", "누구세요?"],
-)
-def test_identity_questions_use_general_route_without_mail_retrieval(message):
-    llm = RecordingLLM(
-        RouteDecision(
-            route="general",
-            reason_code="identity_question",
-            confidence=0.99,
-            estimated_searches=1,
-        )
-    )
-
-    decision = asyncio.run(
-        route_request(ChatRequest(user_id="kim", message=message), llm)
-    )
-
-    assert decision.route == "general"
-    assert decision.reason_code == "deterministic_general"
-    assert decision.estimated_searches == 0
-
-
-def test_identity_phrase_inside_mail_search_still_uses_retrieval():
-    llm = RecordingLLM(
-        RouteDecision(
-            route="general",
-            reason_code="model_general",
-            confidence=0.9,
-            estimated_searches=0,
-        )
-    )
-
-    decision = asyncio.run(
-        route_request(
-            ChatRequest(
-                user_id="kim",
-                message="메일에서 넌 누구야라고 질문한 사람을 찾아줘",
-            ),
-            llm,
-        )
-    )
-
-    assert decision.route == "fast"
-    assert decision.reason_code == "deterministic_mail"
 
 
 def test_router_redacts_credentials_and_file_uris_before_model_call():
@@ -271,6 +244,56 @@ def test_router_failure_keeps_greeting_out_of_mail_retrieval():
     assert decision.route == "general"
     assert decision.reason_code == "router_error_deterministic_general"
     assert decision.estimated_searches == 0
+
+
+@pytest.mark.parametrize("message", ["내 이름은 대환", "고마워", "오늘 기분 어때?"])
+def test_router_failure_defaults_unseen_non_mail_input_to_general(message):
+    decision = asyncio.run(
+        route_request(
+            ChatRequest(user_id="kim", message=message),
+            RecordingLLM(error=TimeoutError("router unavailable")),
+        )
+    )
+
+    assert decision.route == "general"
+    assert decision.reason_code == "router_error_deterministic_general"
+    assert decision.estimated_searches == 0
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "지난주 수율 이슈 알려줘",
+        "김대환이 보낸 메일 찾아줘",
+        "최근 이메일을 요약해줘",
+    ],
+)
+def test_router_failure_uses_fast_for_clear_mail_retrieval(message):
+    decision = asyncio.run(
+        route_request(
+            ChatRequest(user_id="kim", message=message),
+            RecordingLLM(error=TimeoutError("router unavailable")),
+        )
+    )
+
+    assert decision.route == "fast"
+    assert decision.reason_code == "router_error_deterministic_fast"
+    assert decision.estimated_searches == 1
+
+
+def test_router_failure_uses_fast_when_retrieval_filters_are_present():
+    decision = asyncio.run(
+        route_request(
+            ChatRequest(
+                user_id="kim",
+                message="확인해줘",
+                filters={"weeks": ["2026-31"]},
+            ),
+            RecordingLLM(error=TimeoutError("router unavailable")),
+        )
+    )
+
+    assert decision.route == "fast"
 
 
 @pytest.mark.parametrize(

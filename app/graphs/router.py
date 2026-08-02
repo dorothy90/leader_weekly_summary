@@ -1,7 +1,41 @@
 from app.domain.chat import ChatRequest, RouteDecision
-from app.graphs.general_intents import is_identity_question
 from app.llm.prompts import ROUTER_SYSTEM
 from app.security.redaction import sanitize_text
+
+
+_MAIL_OBJECTS = (
+    "메일",
+    "이메일",
+    "발신자",
+    "수신자",
+    "보낸 사람",
+    "받은 사람",
+    "수율",
+    "주간 보고",
+    "이슈",
+    "현황",
+)
+_RETRIEVAL_ACTIONS = (
+    "찾아",
+    "검색",
+    "알려",
+    "보여",
+    "요약",
+    "비교",
+    "분석",
+    "최근",
+    "지난주",
+    "이번주",
+)
+
+
+def _has_mail_retrieval_intent(request: ChatRequest) -> bool:
+    if request.filters.teams or request.filters.weeks:
+        return True
+    text = request.message.casefold()
+    return any(term in text for term in _MAIL_OBJECTS) and any(
+        term in text for term in _RETRIEVAL_ACTIONS
+    )
 
 
 def _deterministic_fallback(request: ChatRequest) -> RouteDecision:
@@ -37,11 +71,19 @@ def _deterministic_fallback(request: ChatRequest) -> RouteDecision:
             estimated_searches=4,
             requested_output=requested_output,
         )
+    if _has_mail_retrieval_intent(request):
+        return RouteDecision(
+            route="fast",
+            reason_code="deterministic_fast",
+            confidence=1,
+            estimated_searches=1,
+            requested_output=requested_output,
+        )
     return RouteDecision(
-        route="fast",
-        reason_code="deterministic_fast",
+        route="general",
+        reason_code="deterministic_general",
         confidence=1,
-        estimated_searches=1,
+        estimated_searches=0,
         requested_output=requested_output,
     )
 
@@ -52,31 +94,8 @@ def _apply_deterministic_policy(
     deterministic = _deterministic_fallback(request)
     if deterministic.route == "deep":
         return deterministic
-    text = request.message.casefold().strip()
-    non_mail = text in {
-        "안녕",
-        "안녕하세요",
-        "hello",
-        "hi",
-        "도움말",
-        "사용법",
-    } or is_identity_question(text)
-    if non_mail:
-        return decision.model_copy(
-            update={
-                "route": "general",
-                "reason_code": "deterministic_general",
-                "estimated_searches": 0,
-            }
-        )
     if decision.route == "general":
-        return decision.model_copy(
-            update={
-                "route": "fast",
-                "reason_code": "deterministic_mail",
-                "estimated_searches": max(1, decision.estimated_searches),
-            }
-        )
+        return decision.model_copy(update={"estimated_searches": 0})
     return decision
 
 
