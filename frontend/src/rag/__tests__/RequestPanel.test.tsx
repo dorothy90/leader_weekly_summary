@@ -5,6 +5,31 @@ import { describe, expect, it, vi } from 'vitest'
 import { RequestPanel } from '../RequestPanel'
 
 describe('RequestPanel', () => {
+  it('defaults to Auto routing and submits the automatic mode', async () => {
+    const user = userEvent.setup()
+    const onSubmit = vi.fn()
+    render(
+      <RequestPanel
+        disabled={false}
+        conversationId=""
+        onConversationIdChange={vi.fn()}
+        onSubmit={onSubmit}
+      />,
+    )
+
+    expect(screen.getByRole('button', { name: 'Auto' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
+    await user.type(screen.getByLabelText('user_id'), 'kim')
+    await user.type(screen.getByLabelText('질문'), 'hi')
+    await user.click(screen.getByRole('button', { name: '실행' }))
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: 'auto', question: 'hi' }),
+    )
+  })
+
   it('submits only explicit Deep mode with normalized facets', async () => {
     const user = userEvent.setup()
     const onSubmit = vi.fn()
@@ -18,7 +43,7 @@ describe('RequestPanel', () => {
     )
 
     await user.type(screen.getByLabelText('user_id'), ' kim ')
-    await user.click(screen.getByRole('button', { name: 'Deep' }))
+    await user.click(screen.getByRole('button', { name: 'Deep 강제' }))
     await user.type(screen.getByLabelText('팀 필터'), 'YIELD, 품질')
     await user.type(screen.getByLabelText('주차 필터'), '2026-31, 2026-32')
     await user.selectOptions(screen.getByLabelText('메일 유형'), 'weekly_report')
@@ -35,7 +60,7 @@ describe('RequestPanel', () => {
         mail_type: 'weekly_report',
       },
     })
-    expect(screen.queryByRole('button', { name: 'Auto' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Auto' })).toBeInTheDocument()
   })
 
   it('requires owner and question and rejects invalid weeks', async () => {

@@ -1,4 +1,4 @@
-export type ExecutionMode = 'fast' | 'deep'
+export type ExecutionMode = 'auto' | 'fast' | 'deep'
 export type ResearchStatus =
   | 'queued'
   | 'running'
@@ -24,7 +24,16 @@ export interface ChatPayload {
 export interface QualityStatus {
   citation_valid: boolean
   limited_answer: boolean
-  retrieval_mode: 'hybrid' | 'bm25'
+  retrieval_mode: 'hybrid' | 'bm25' | 'not_used'
+}
+
+export interface RoutingDiagnostics {
+  requested_mode: ExecutionMode
+  route: 'general' | 'fast' | 'deep' | 'clarify'
+  executed_system: 'general' | 'fast_rag' | 'deep_research' | 'clarification'
+  reason_code: string
+  confidence: number
+  estimated_searches: number
 }
 
 export interface ChatReference {
@@ -45,6 +54,7 @@ export interface ChatResponse {
   quality?: QualityStatus | null
   disclosures: string[]
   trace_id: string
+  routing: RoutingDiagnostics
   job_id?: string | null
   status?: ResearchStatus | null
   plan_summary?: string | null

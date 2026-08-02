@@ -46,6 +46,14 @@ describe('RagApiService', () => {
           limited_answer: false,
           retrieval_mode: 'hybrid',
         },
+        routing: {
+          requested_mode: 'fast',
+          route: 'fast',
+          executed_system: 'fast_rag',
+          reason_code: 'explicit_mode',
+          confidence: 1,
+          estimated_searches: 1,
+        },
         disclosures: [],
         trace_id: 't1',
       }),
@@ -83,6 +91,71 @@ describe('RagApiService', () => {
     expect(exchange.durationMs).toBe(42)
     expect(exchange.response?.trace_id).toBe('t1')
     expect(exchange.request).not.toHaveProperty('headers')
+  })
+
+  it('accepts general routing with retrieval not used', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        conversation_id: 'c-general',
+        mode: 'fast_rag',
+        answer: 'Hello!',
+        references: [],
+        quality: {
+          citation_valid: true,
+          limited_answer: false,
+          retrieval_mode: 'not_used',
+        },
+        routing: {
+          requested_mode: 'auto',
+          route: 'general',
+          executed_system: 'general',
+          reason_code: 'deterministic_general',
+          confidence: 1,
+          estimated_searches: 0,
+        },
+        disclosures: [],
+        trace_id: 'trace-general',
+      }),
+    )
+
+    const exchange = await new RagApiService('/api').sendChat({
+      user_id: 'kim',
+      message: 'hi',
+      response_mode: 'auto',
+      filters: { teams: [], weeks: [] },
+    })
+
+    expect(exchange.error).toBeUndefined()
+    expect(exchange.response?.routing.route).toBe('general')
+    expect(exchange.response?.quality?.retrieval_mode).toBe('not_used')
+  })
+
+  it('rejects a successful chat response without routing diagnostics', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        conversation_id: 'c1',
+        mode: 'fast_rag',
+        answer: '답변',
+        references: [],
+        quality: {
+          citation_valid: true,
+          limited_answer: false,
+          retrieval_mode: 'hybrid',
+        },
+        disclosures: [],
+        trace_id: 'trace-1',
+      }),
+    )
+
+    const exchange = await new RagApiService('/api').sendChat({
+      user_id: 'kim',
+      message: '질문',
+      response_mode: 'fast',
+      filters: { teams: [], weeks: [] },
+    })
+
+    expect(exchange.response).toBeUndefined()
+    expect(exchange.error?.code).toBe('INVALID_RESPONSE')
   })
 
   it.each(['status', 'cancel', 'retry'] as const)(

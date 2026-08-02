@@ -26,6 +26,12 @@ const splitValues = (value: string) =>
     ),
   )
 
+const executionModes: Array<{ value: ExecutionMode; label: string }> = [
+  { value: 'auto', label: 'Auto' },
+  { value: 'fast', label: 'Fast 강제' },
+  { value: 'deep', label: 'Deep 강제' },
+]
+
 export function RequestPanel({
   disabled,
   onSubmit,
@@ -35,7 +41,7 @@ export function RequestPanel({
   apiError,
 }: RequestPanelProps) {
   const [userId, setUserId] = useState('')
-  const [mode, setMode] = useState<ExecutionMode>('fast')
+  const [mode, setMode] = useState<ExecutionMode>('auto')
   const [teams, setTeams] = useState('')
   const [weeks, setWeeks] = useState('')
   const [mailType, setMailType] = useState<RetrievalFilters['mail_type']>()
@@ -114,7 +120,7 @@ export function RequestPanel({
       <fieldset className="mode-fieldset">
         <legend>실행 시스템</legend>
         <div className="mode-switch">
-          {(['fast', 'deep'] as const).map((value) => (
+          {executionModes.map(({ value, label }) => (
             <button
               key={value}
               type="button"
@@ -122,7 +128,7 @@ export function RequestPanel({
               className={mode === value ? 'is-active' : ''}
               onClick={() => setMode(value)}
             >
-              {value === 'fast' ? 'Fast' : 'Deep'}
+              {label}
             </button>
           ))}
         </div>

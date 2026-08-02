@@ -48,7 +48,24 @@ const isQuality = (value: unknown) =>
   isRecord(value) &&
   typeof value.citation_valid === 'boolean' &&
   typeof value.limited_answer === 'boolean' &&
-  (value.retrieval_mode === 'hybrid' || value.retrieval_mode === 'bm25')
+  ['hybrid', 'bm25', 'not_used'].includes(String(value.retrieval_mode))
+
+const isRouting = (value: unknown) =>
+  isRecord(value) &&
+  ['auto', 'fast', 'deep'].includes(String(value.requested_mode)) &&
+  ['general', 'fast', 'deep', 'clarify'].includes(String(value.route)) &&
+  ['general', 'fast_rag', 'deep_research', 'clarification'].includes(
+    String(value.executed_system),
+  ) &&
+  typeof value.reason_code === 'string' &&
+  value.reason_code.length > 0 &&
+  typeof value.confidence === 'number' &&
+  value.confidence >= 0 &&
+  value.confidence <= 1 &&
+  typeof value.estimated_searches === 'number' &&
+  Number.isInteger(value.estimated_searches) &&
+  value.estimated_searches >= 0 &&
+  value.estimated_searches <= 24
 
 const isProgress = (value: unknown) =>
   typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 100
@@ -62,6 +79,7 @@ const isChatResponse = (value: unknown): value is ChatResponse =>
   (value.quality === undefined || value.quality === null || isQuality(value.quality)) &&
   isStringArray(value.disclosures) &&
   typeof value.trace_id === 'string' &&
+  isRouting(value.routing) &&
   isNullableString(value.job_id) &&
   (value.status === undefined || value.status === null || researchStatuses.has(String(value.status))) &&
   isNullableString(value.plan_summary)
