@@ -143,6 +143,7 @@ describe('RagApiService', () => {
     const exchange = await new RagApiService('/api').getHealth()
 
     expect(exchange.error?.message).toBe('요청을 처리할 수 없습니다.')
+    expect(exchange.error?.retryable).toBe(true)
     expect(JSON.stringify(exchange)).not.toContain('/srv/private')
   })
 

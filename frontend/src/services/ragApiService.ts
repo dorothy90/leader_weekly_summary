@@ -118,14 +118,15 @@ interface ErrorEnvelope {
   trace_id?: unknown
 }
 
-const safeError = (payload: unknown): SafeApiError => {
+const safeError = (payload: unknown, status: number): SafeApiError => {
+  const retryable = status >= 500
   if (!payload || typeof payload !== 'object') {
-    return { code: 'HTTP_ERROR', message: SAFE_FAILURE_MESSAGE, retryable: false }
+    return { code: 'HTTP_ERROR', message: SAFE_FAILURE_MESSAGE, retryable }
   }
   const envelope = payload as ErrorEnvelope
   const error = envelope.error
   if (!error || typeof error !== 'object') {
-    return { code: 'HTTP_ERROR', message: SAFE_FAILURE_MESSAGE, retryable: false }
+    return { code: 'HTTP_ERROR', message: SAFE_FAILURE_MESSAGE, retryable }
   }
   return {
     code: typeof error.code === 'string' ? error.code : 'HTTP_ERROR',
@@ -197,7 +198,7 @@ export class RagApiService implements RagApiClient {
       receivedAt: new Date().toISOString(),
     }
     if (!response.ok) {
-      exchange.error = safeError(payload)
+      exchange.error = safeError(payload, response.status)
       return exchange
     }
     if (!contentType.includes('application/json') || !validate(payload)) {
