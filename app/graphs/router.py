@@ -62,7 +62,11 @@ def _apply_deterministic_policy(
     }
     if non_mail:
         return decision.model_copy(
-            update={"route": "general", "reason_code": "deterministic_general"}
+            update={
+                "route": "general",
+                "reason_code": "deterministic_general",
+                "estimated_searches": 0,
+            }
         )
     if decision.route == "general":
         return decision.model_copy(
@@ -94,4 +98,7 @@ async def route_request(request: ChatRequest, llm) -> RouteDecision:
             request, RouteDecision.model_validate(decision)
         )
     except Exception:
-        return _deterministic_fallback(request)
+        fallback = _deterministic_fallback(request)
+        return fallback.model_copy(
+            update={"reason_code": f"router_error_{fallback.reason_code}"}
+        )

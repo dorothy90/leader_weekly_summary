@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from app.domain.chat import ChatRequest
+from app.domain.chat import ChatRequest, QualityStatus, RoutingDiagnostics
 from app.domain.evidence import Evidence
 from app.domain.policy import PolicyContext
 from app.domain.research import ResearchJob, ResearchStatus
@@ -33,6 +33,21 @@ def test_chat_request_keeps_user_id_in_body_and_normalizes_weeks():
     )
     assert request.user_id == "kim"
     assert request.filters.weeks == ["2026-08"]
+
+
+def test_routing_diagnostics_and_not_used_retrieval_are_bounded():
+    routing = RoutingDiagnostics(
+        requested_mode="auto",
+        route="general",
+        executed_system="general",
+        reason_code="deterministic_general",
+        confidence=1,
+        estimated_searches=0,
+    )
+    quality = QualityStatus(citation_valid=True, retrieval_mode="not_used")
+
+    assert routing.route == "general"
+    assert quality.retrieval_mode == "not_used"
 
 
 @pytest.mark.parametrize("week", ["26-8", "20260-8", "2026-008"])

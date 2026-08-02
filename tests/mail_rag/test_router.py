@@ -121,13 +121,15 @@ def test_substantive_mail_question_cannot_be_routed_as_general():
 def test_non_mail_greeting_may_use_general_route():
     llm = RecordingLLM(
         RouteDecision(
-            route="general", reason_code="greeting", confidence=1, estimated_searches=0
+            route="general", reason_code="greeting", confidence=1, estimated_searches=5
         )
     )
     decision = asyncio.run(
         route_request(ChatRequest(user_id="kim", message="안녕하세요"), llm)
     )
     assert decision.route == "general"
+    assert decision.reason_code == "deterministic_general"
+    assert decision.estimated_searches == 0
 
 
 def test_router_redacts_credentials_and_file_uris_before_model_call():
@@ -183,7 +185,7 @@ def test_router_failure_uses_deterministic_fallback_decision():
 
     assert decision == RouteDecision(
         route="deep",
-        reason_code="deterministic_long_period",
+        reason_code="router_error_deterministic_long_period",
         confidence=1,
         estimated_searches=4,
         requested_output="report",
@@ -210,5 +212,5 @@ def test_router_failure_uses_all_research_output_indicators(
     )
 
     assert decision.route == "deep"
-    assert decision.reason_code == "deterministic_research_output"
+    assert decision.reason_code == "router_error_deterministic_research_output"
     assert decision.requested_output == requested_output

@@ -61,10 +61,21 @@ class RouteDecision(BaseModel):
     requested_output: Literal["answer", "table", "report", "presentation"] = "answer"
 
 
+class RoutingDiagnostics(BaseModel):
+    requested_mode: Literal["auto", "fast", "deep"]
+    route: Literal["fast", "deep", "clarify", "general"]
+    executed_system: Literal[
+        "general", "fast_rag", "deep_research", "clarification"
+    ]
+    reason_code: str = Field(min_length=1, max_length=128)
+    confidence: float = Field(ge=0, le=1)
+    estimated_searches: int = Field(ge=0, le=24)
+
+
 class QualityStatus(BaseModel):
     citation_valid: bool
     limited_answer: bool = False
-    retrieval_mode: Literal["hybrid", "bm25"] = "hybrid"
+    retrieval_mode: Literal["hybrid", "bm25", "not_used"] = "hybrid"
 
 
 class FastRAGResult(BaseModel):
@@ -96,6 +107,7 @@ class ChatResponse(BaseModel):
     quality: QualityStatus | None = None
     disclosures: list[str] = Field(default_factory=list)
     trace_id: str
+    routing: RoutingDiagnostics
     job_id: str | None = None
     status: ResearchStatus | None = None
     plan_summary: str | None = None
