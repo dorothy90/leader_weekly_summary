@@ -113,10 +113,9 @@ export interface ReadinessResponse {
   dependencies: Record<string, string>
 }
 
-export interface RagRequestDraft {
+export interface RagRequestSettings {
   userId: string
   mode: ExecutionMode
   conversationId?: string
-  question: string
   filters: RetrievalFilters
 }

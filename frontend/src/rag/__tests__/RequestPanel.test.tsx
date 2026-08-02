@@ -1,44 +1,41 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 
 import { RequestPanel } from '../RequestPanel'
 
 describe('RequestPanel', () => {
-  it('defaults to Auto routing and submits the automatic mode', async () => {
-    const user = userEvent.setup()
-    const onSubmit = vi.fn()
+  it('keeps request settings on the left without chat input controls', async () => {
+    const onSettingsChange = vi.fn()
     render(
       <RequestPanel
-        disabled={false}
         conversationId=""
         onConversationIdChange={vi.fn()}
-        onSubmit={onSubmit}
+        onSettingsChange={onSettingsChange}
       />,
     )
 
+    expect(screen.queryByLabelText('질문')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '실행' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Auto' })).toHaveAttribute(
       'aria-pressed',
       'true',
     )
-    await user.type(screen.getByLabelText('user_id'), 'kim')
-    await user.type(screen.getByLabelText('질문'), 'hi')
-    await user.click(screen.getByRole('button', { name: '실행' }))
-
-    expect(onSubmit).toHaveBeenCalledWith(
-      expect.objectContaining({ mode: 'auto', question: 'hi' }),
+    await waitFor(() =>
+      expect(onSettingsChange).toHaveBeenLastCalledWith(
+        expect.objectContaining({ mode: 'auto', userId: '' }),
+      ),
     )
   })
 
-  it('submits only explicit Deep mode with normalized facets', async () => {
+  it('emits normalized owner, mode, and retrieval filters', async () => {
     const user = userEvent.setup()
-    const onSubmit = vi.fn()
+    const onSettingsChange = vi.fn()
     render(
       <RequestPanel
-        disabled={false}
         conversationId=""
         onConversationIdChange={vi.fn()}
-        onSubmit={onSubmit}
+        onSettingsChange={onSettingsChange}
       />,
     )
 
@@ -47,67 +44,68 @@ describe('RequestPanel', () => {
     await user.type(screen.getByLabelText('팀 필터'), 'YIELD, 품질')
     await user.type(screen.getByLabelText('주차 필터'), '2026-31, 2026-32')
     await user.selectOptions(screen.getByLabelText('메일 유형'), 'weekly_report')
-    await user.type(screen.getByLabelText('질문'), '4주 보고서')
-    await user.click(screen.getByRole('button', { name: '실행' }))
 
-    expect(onSubmit).toHaveBeenCalledWith({
-      userId: 'kim',
-      mode: 'deep',
-      question: '4주 보고서',
-      filters: {
-        teams: ['YIELD', '품질'],
-        weeks: ['2026-31', '2026-32'],
-        mail_type: 'weekly_report',
-      },
-    })
-    expect(screen.getByRole('button', { name: 'Auto' })).toBeInTheDocument()
+    await waitFor(() =>
+      expect(onSettingsChange).toHaveBeenLastCalledWith({
+        userId: 'kim',
+        mode: 'deep',
+        filters: {
+          teams: ['YIELD', '품질'],
+          weeks: ['2026-31', '2026-32'],
+          mail_type: 'weekly_report',
+        },
+      }),
+    )
   })
 
-  it('requires owner and question and rejects invalid weeks', async () => {
+  it('withholds invalid week settings and explains the format', async () => {
     const user = userEvent.setup()
-    const onSubmit = vi.fn()
+    const onSettingsChange = vi.fn()
     render(
       <RequestPanel
-        disabled={false}
         conversationId=""
         onConversationIdChange={vi.fn()}
-        onSubmit={onSubmit}
+        onSettingsChange={onSettingsChange}
       />,
     )
 
     await user.type(screen.getByLabelText('주차 필터'), '2026-W31')
-    await user.click(screen.getByRole('button', { name: '실행' }))
 
-    expect(screen.getByRole('alert')).toHaveTextContent('user_id를 입력해 주세요.')
-    expect(screen.getByLabelText('user_id')).toHaveAttribute('aria-invalid', 'true')
-    expect(screen.getByLabelText('user_id')).toHaveAttribute(
-      'aria-describedby',
-      'rag-request-error',
-    )
-    expect(onSubmit).not.toHaveBeenCalled()
-
-    await user.type(screen.getByLabelText('user_id'), 'kim')
-    await user.type(screen.getByLabelText('질문'), '질문')
-    await user.click(screen.getByRole('button', { name: '실행' }))
-    expect(screen.getByRole('alert')).toHaveTextContent('YYYY-WW')
-    expect(onSubmit).not.toHaveBeenCalled()
+    expect(await screen.findByRole('alert')).toHaveTextContent('YYYY-WW')
+    expect(screen.getByLabelText('주차 필터')).toHaveAttribute('aria-invalid', 'true')
+    expect(onSettingsChange).toHaveBeenLastCalledWith(undefined)
   })
 
-  it('explains that team is not authorization and never writes the draft to storage', async () => {
+  it('clears a carried conversation when the owner changes', async () => {
+    const user = userEvent.setup()
+    const onConversationIdChange = vi.fn()
+    render(
+      <RequestPanel
+        conversationId="conversation-kim"
+        conversationOwner="kim"
+        onConversationIdChange={onConversationIdChange}
+        onSettingsChange={vi.fn()}
+      />,
+    )
+
+    await user.type(screen.getByLabelText('user_id'), 'lee')
+
+    expect(onConversationIdChange).toHaveBeenCalledWith('')
+  })
+
+  it('explains team filtering and never stores sensitive settings', async () => {
     const user = userEvent.setup()
     const setItem = vi.spyOn(window.localStorage, 'setItem')
     render(
       <RequestPanel
-        disabled={false}
         conversationId=""
         onConversationIdChange={vi.fn()}
-        onSubmit={vi.fn()}
+        onSettingsChange={vi.fn()}
       />,
     )
 
     expect(screen.getByText(/팀은 검색 범위만 좁히며/)).toBeInTheDocument()
     await user.type(screen.getByLabelText('user_id'), 'sensitive-owner')
-    await user.type(screen.getByLabelText('질문'), 'sensitive-question')
 
     expect(setItem).not.toHaveBeenCalled()
   })
