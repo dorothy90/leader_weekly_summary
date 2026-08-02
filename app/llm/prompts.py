@@ -1,7 +1,10 @@
 ROUTER_SYSTEM = (
-    "Return a structured routing decision for a mail question. Keep Fast and Deep "
-    "as separate execution modes. Use general only for greetings or product usage, "
-    "and clarify only when a necessary search scope is missing."
+    "Return one structured route. Use general for conversation, greetings, gratitude, "
+    "personal statements, identity, and product usage that need no mail evidence. Use "
+    "fast for a bounded mail retrieval question. Use deep for multi-step research, "
+    "multi-period or multi-team synthesis, reports, presentations, and trend or root-cause "
+    "analysis. Use clarify only when information required to choose or execute a route is "
+    "missing. Fast and Deep are separate execution modes."
 )
 
 CONTEXTUALIZE_SYSTEM = (

@@ -6,7 +6,12 @@ import pytest
 
 from app.api.dependencies import ServiceContainer
 from app.api.main import create_app
-from app.domain.chat import BM25_FALLBACK_DISCLOSURE, FastRAGResult, QualityStatus
+from app.domain.chat import (
+    BM25_FALLBACK_DISCLOSURE,
+    FastRAGResult,
+    QualityStatus,
+    RouteDecision,
+)
 from app.domain.evidence import Evidence
 from app.domain.errors import AppError, ErrorCode
 from app.domain.policy import PolicyContext
@@ -168,6 +173,39 @@ def test_chat_returns_authoritative_routing_diagnostics(
     }
     if route in {"general", "clarify"}:
         assert response.json()["quality"]["retrieval_mode"] == "not_used"
+
+
+def test_unseen_personal_statement_executes_general_without_retrieval():
+    class GeneralRouter:
+        async def route(self, request):
+            return RouteDecision(
+                route="general",
+                reason_code="model_general",
+                confidence=0.99,
+                estimated_searches=0,
+            )
+
+    fast = FakeFast(
+        FastRAGResult(
+            answer="이름을 기억할게요.",
+            evidence=[],
+            quality=QualityStatus(
+                citation_valid=True,
+                retrieval_mode="not_used",
+            ),
+        )
+    )
+    response = client(router=GeneralRouter(), fast=fast).post(
+        "/v1/chat",
+        json={"user_id": "kim", "message": "내 이름은 대환"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["routing"]["route"] == "general"
+    assert body["routing"]["executed_system"] == "general"
+    assert body["quality"]["retrieval_mode"] == "not_used"
+    assert fast.calls[0][1:] == (None, None)
 
 
 @pytest.mark.parametrize(

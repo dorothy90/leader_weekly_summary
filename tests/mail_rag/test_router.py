@@ -38,6 +38,27 @@ class FakeCompletions:
         )
 
 
+def test_router_prompt_defines_conversation_and_retrieval_boundaries():
+    llm = RecordingLLM(
+        RouteDecision(
+            route="general",
+            reason_code="conversation",
+            confidence=1,
+            estimated_searches=0,
+        )
+    )
+
+    asyncio.run(
+        route_request(ChatRequest(user_id="kim", message="내 이름은 대환"), llm)
+    )
+
+    system = llm.inputs[0][0].casefold()
+    assert "personal statements" in system
+    assert "mail retrieval" in system
+    assert "deep" in system
+    assert "clarify" in system
+
+
 def test_llm_gateway_sends_deterministic_system_and_user_messages():
     completions = FakeCompletions("답변")
     client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
