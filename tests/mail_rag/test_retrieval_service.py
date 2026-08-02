@@ -85,6 +85,31 @@ class VectorMismatchSearch(FakeSearch):
         return await super().search(index, body)
 
 
+class CancelledVectorSearch(FakeSearch):
+    async def search(self, index, body):
+        if "knn" in str(body):
+            self.calls.append((index, deepcopy(body)))
+            raise asyncio.CancelledError()
+        return await super().search(index, body)
+
+
+class Bm25FailsWhileVectorBlocks:
+    def __init__(self):
+        self.vector_started = asyncio.Event()
+        self.vector_cancelled = False
+
+    async def search(self, index, body):
+        if "knn" in str(body):
+            self.vector_started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.vector_cancelled = True
+                raise
+        await self.vector_started.wait()
+        raise ConnectionError("bm25 unavailable")
+
+
 def test_opensearch_failure_is_retryable_index_unavailable():
     service = RetrievalService(BrokenSearch(), FakeEmbedding(), child_index="mail")
     with pytest.raises(AppError) as error:
@@ -93,6 +118,41 @@ def test_opensearch_failure_is_retryable_index_unavailable():
         )
     assert error.value.code == ErrorCode.INDEX_UNAVAILABLE
     assert error.value.retryable is True
+
+
+def test_cancelled_vector_search_propagates_cancellation():
+    backend = CancelledVectorSearch()
+    service = RetrievalService(backend, FakeEmbedding(), child_index="weekly_mail")
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(
+            service.search(
+                SearchTask(query="수율"),
+                PolicyContext.from_user_id("kim"),
+            )
+        )
+
+
+def test_bm25_failure_cancels_blocked_vector_without_waiting_for_it():
+    backend = Bm25FailsWhileVectorBlocks()
+    service = RetrievalService(backend, FakeEmbedding(), child_index="weekly_mail")
+
+    async def exercise():
+        with pytest.raises(AppError) as error:
+            await asyncio.wait_for(
+                service.search(
+                    SearchTask(query="수율"),
+                    PolicyContext.from_user_id("kim"),
+                ),
+                timeout=0.2,
+            )
+        return error.value
+
+    error = asyncio.run(exercise())
+
+    assert error.code == ErrorCode.INDEX_UNAVAILABLE
+    assert error.retryable is True
+    assert backend.vector_cancelled is True
 
 
 def test_vector_dimension_failure_uses_owner_scoped_bm25_and_disclosure():

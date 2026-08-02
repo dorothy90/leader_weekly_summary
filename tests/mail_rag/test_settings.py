@@ -1,3 +1,4 @@
+import pytest
 from pydantic import SecretStr
 
 from app.config.settings import Settings
@@ -26,10 +27,22 @@ def test_complete_cloudflare_credentials_take_precedence():
     assert "cf-secret-token" not in repr(provider)
 
 
-def test_incomplete_cloudflare_pair_uses_existing_openrouter_configuration():
+@pytest.mark.parametrize(
+    ("account_id", "token"),
+    [
+        ("", "cf-secret-token"),
+        ("account-123", ""),
+        ("   ", "cf-secret-token"),
+        ("account-123", "   "),
+    ],
+)
+def test_incomplete_cloudflare_pair_uses_existing_openrouter_configuration(
+    account_id,
+    token,
+):
     settings = Settings(
-        cloudflare_account_id="account-123",
-        cloudflare_api_token=SecretStr(""),
+        cloudflare_account_id=account_id,
+        cloudflare_api_token=SecretStr(token),
         openrouter_api_key=SecretStr("openrouter-secret-token"),
         openrouter_base_url="https://openrouter.example/v1",
         llm_model="openrouter-llm",
