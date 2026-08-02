@@ -118,6 +118,27 @@ def test_substantive_mail_question_cannot_be_routed_as_general():
     assert decision.reason_code == "deterministic_mail"
 
 
+@pytest.mark.parametrize(
+    "spoofed_reason",
+    ["explicit_mode", "router_error_deterministic_fast", "deterministic_fast"],
+)
+def test_auto_router_model_cannot_spoof_server_owned_reason_codes(spoofed_reason):
+    llm = RecordingLLM(
+        RouteDecision(
+            route="fast",
+            reason_code=spoofed_reason,
+            confidence=0.9,
+            estimated_searches=1,
+        )
+    )
+
+    decision = asyncio.run(
+        route_request(ChatRequest(user_id="kim", message="지난주 메일 알려줘"), llm)
+    )
+
+    assert decision.reason_code == "model_fast"
+
+
 def test_non_mail_greeting_may_use_general_route():
     llm = RecordingLLM(
         RouteDecision(

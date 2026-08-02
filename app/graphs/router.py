@@ -94,9 +94,11 @@ async def route_request(request: ChatRequest, llm) -> RouteDecision:
             sanitize_text(request.message),
             RouteDecision,
         )
-        return _apply_deterministic_policy(
-            request, RouteDecision.model_validate(decision)
+        model_decision = RouteDecision.model_validate(decision)
+        model_decision = model_decision.model_copy(
+            update={"reason_code": f"model_{model_decision.route}"}
         )
+        return _apply_deterministic_policy(request, model_decision)
     except Exception:
         fallback = _deterministic_fallback(request)
         normalized = _apply_deterministic_policy(request, fallback)
