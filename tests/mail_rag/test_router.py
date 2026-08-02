@@ -399,6 +399,8 @@ def test_router_failure_uses_all_research_output_indicators(
         "explain trend analysis",
         "explain how to create a report",
         "explain how to search mail",
+        "summarize recent messages",
+        "find yesterday's messages",
     ],
 )
 def test_router_failure_keeps_output_and_analysis_concepts_general(message):

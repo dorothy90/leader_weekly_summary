@@ -29,7 +29,7 @@ _RETRIEVAL_ACTIONS = (
     "지난주",
     "이번주",
 )
-_ENGLISH_MAIL_OBJECT = re.compile(r"\b(?:e-?mails?|mails?|messages?)\b")
+_ENGLISH_MAIL_OBJECT = re.compile(r"\b(?:e-?mails?|mails?)\b")
 _ENGLISH_REQUEST_PREFIX = (
     r"^\s*(?:(?:please|kindly)\s+|(?:can|could|would|will)\s+you\s+){0,2}"
 )
