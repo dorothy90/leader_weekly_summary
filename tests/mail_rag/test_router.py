@@ -153,6 +153,53 @@ def test_non_mail_greeting_may_use_general_route():
     assert decision.estimated_searches == 0
 
 
+@pytest.mark.parametrize(
+    "message",
+    ["넌누구야", "넌 누구야?", "너는 누구야", "누구세요?"],
+)
+def test_identity_questions_use_general_route_without_mail_retrieval(message):
+    llm = RecordingLLM(
+        RouteDecision(
+            route="general",
+            reason_code="identity_question",
+            confidence=0.99,
+            estimated_searches=1,
+        )
+    )
+
+    decision = asyncio.run(
+        route_request(ChatRequest(user_id="kim", message=message), llm)
+    )
+
+    assert decision.route == "general"
+    assert decision.reason_code == "deterministic_general"
+    assert decision.estimated_searches == 0
+
+
+def test_identity_phrase_inside_mail_search_still_uses_retrieval():
+    llm = RecordingLLM(
+        RouteDecision(
+            route="general",
+            reason_code="model_general",
+            confidence=0.9,
+            estimated_searches=0,
+        )
+    )
+
+    decision = asyncio.run(
+        route_request(
+            ChatRequest(
+                user_id="kim",
+                message="메일에서 넌 누구야라고 질문한 사람을 찾아줘",
+            ),
+            llm,
+        )
+    )
+
+    assert decision.route == "fast"
+    assert decision.reason_code == "deterministic_mail"
+
+
 def test_router_redacts_credentials_and_file_uris_before_model_call():
     llm = RecordingLLM(
         RouteDecision(
