@@ -212,7 +212,7 @@ describe('RagLabApp', () => {
     expect(within(screen.getByLabelText('API 검사기')).getByText('not_used')).toBeInTheDocument()
   })
 
-  it('tracks a Deep job from accepted events to the completed report', async () => {
+  it('renders a synchronous Deep answer without job tracking', async () => {
     const user = userEvent.setup()
     const service = baseService()
     vi.mocked(service.sendChat).mockResolvedValue(
@@ -220,62 +220,37 @@ describe('RagLabApp', () => {
         {
           conversation_id: 'conversation-2',
           mode: 'deep_research',
-          answer: null,
-          references: [],
-          quality: null,
+          answer: '완료된 보고서 [S1]',
+          references: [
+            {
+              evidence_id: 'S1',
+              source_type: 'mail',
+              document_id: 'opaque-1',
+              title: '조사 근거',
+              excerpt: '확인된 내용',
+            },
+          ],
+          quality: {
+            citation_valid: true,
+            limited_answer: false,
+            retrieval_mode: 'hybrid',
+          },
           disclosures: [],
           trace_id: 'trace-deep',
           routing: deepRouting(),
-          job_id: 'job-1',
-          status: 'queued',
-          plan_summary: '4주 조사 계획',
         },
-        202,
+        200,
       ),
-    )
-    const completed: ResearchJobResponse = {
-      job_id: 'job-1',
-      status: 'completed',
-      progress: 100,
-      plan_summary: '4주 조사 계획',
-      result_markdown: '완료된 보고서 [S1]',
-      references: [
-        {
-          evidence_id: 'S1',
-          source_type: 'mail',
-          document_id: 'opaque-1',
-          title: '조사 근거',
-          excerpt: '확인된 내용',
-        },
-      ],
-      disclosures: [],
-      error_code: null,
-    }
-    vi.mocked(service.researchAction).mockResolvedValue(exchange(completed))
-    vi.mocked(service.streamResearchEvents).mockImplementation(
-      async (_jobId, _userId, onEvent) => {
-        onEvent({ job_id: 'job-1', status: 'running', progress: 40 })
-        onEvent({ job_id: 'job-1', status: 'completed', progress: 100 })
-      },
     )
 
     render(<RagLabApp service={service} />)
     await submitQuestion(user, 'Deep 강제')
 
     expect(await screen.findByText(/완료된 보고서/)).toBeInTheDocument()
-    expect(screen.getAllByText('100%').length).toBeGreaterThanOrEqual(2)
-    expect(screen.getByText('completed')).toBeInTheDocument()
     expect(screen.getByText('trace-deep')).toBeInTheDocument()
     expect(screen.getByText('owner: kim')).toBeInTheDocument()
-    await waitFor(() =>
-      expect(service.researchAction).toHaveBeenCalledWith('job-1', 'status', 'kim'),
-    )
-    expect(service.streamResearchEvents).toHaveBeenCalledWith(
-      'job-1',
-      'kim',
-      expect.any(Function),
-      expect.any(AbortSignal),
-    )
+    expect(service.researchAction).not.toHaveBeenCalled()
+    expect(service.streamResearchEvents).not.toHaveBeenCalled()
   })
 
   it('reconnects a failed Deep event stream once before polling status', async () => {

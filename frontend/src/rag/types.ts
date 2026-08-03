@@ -22,15 +22,51 @@ export interface ChatPayload {
 }
 
 export interface QualityStatus {
-  citation_valid: boolean
+  citation_valid: boolean | null
   limited_answer: boolean
-  retrieval_mode: 'hybrid' | 'bm25' | 'not_used'
+  retrieval_mode: 'hybrid' | 'bm25' | 'not_used' | 'not_started'
+}
+
+export interface NodeRunMetrics {
+  history_messages?: number
+  task_count?: number
+  search_count?: number
+  candidate_count?: number
+  evidence_count?: number
+  rewrite_count?: number
+  revision_count?: number
+  retrieval_mode?: 'hybrid' | 'bm25' | 'not_used' | 'not_started' | null
+  fallback_used?: boolean
+}
+
+export interface NodeRun {
+  sequence: number
+  node_name: string
+  status: 'ok' | 'error' | 'cancelled'
+  started_ms: number
+  duration_ms: number
+  attempt: number
+  input: NodeRunMetrics
+  output: NodeRunMetrics
+  error_class?: string | null
+}
+
+export interface ExecutionMetadata {
+  status: 'succeeded' | 'limited' | 'failed'
+  failure_stage?: string | null
+  error_code?: string | null
+  retryable: boolean
+  search_count: number
+  evidence_count: number
+  duration_ms: number
+  include_in_llm_history: boolean
+  node_runs: NodeRun[]
 }
 
 export interface RoutingDiagnostics {
   requested_mode: ExecutionMode
-  route: 'general' | 'fast' | 'deep' | 'clarify'
-  executed_system: 'general' | 'fast_rag' | 'deep_research' | 'clarification'
+  route: 'general' | 'fast' | 'deep' | 'clarify' | 'diagnostic' | 'corpus_info'
+  executed_system: 'general' | 'fast_rag' | 'deep_research' | 'clarification' | 'diagnostic' | 'corpus_info'
   reason_code: string
   confidence: number
   estimated_searches: number
@@ -48,7 +84,7 @@ export interface ChatReference {
 
 export interface ChatResponse {
   conversation_id: string
-  mode: 'fast_rag' | 'deep_research'
+  mode: 'fast_rag' | 'deep_research' | 'diagnostic' | 'corpus_info'
   answer?: string | null
   references: ChatReference[]
   quality?: QualityStatus | null
@@ -58,6 +94,7 @@ export interface ChatResponse {
   job_id?: string | null
   status?: ResearchStatus | null
   plan_summary?: string | null
+  execution?: ExecutionMetadata | null
 }
 
 export interface ResearchJobResponse {

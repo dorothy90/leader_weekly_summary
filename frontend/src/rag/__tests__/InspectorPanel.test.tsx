@@ -31,6 +31,40 @@ const selectedExchange: ApiExchange<ChatResponse> = {
       confidence: 1,
       estimated_searches: 0,
     },
+    execution: {
+      status: 'succeeded',
+      failure_stage: null,
+      error_code: null,
+      retryable: false,
+      search_count: 0,
+      evidence_count: 0,
+      duration_ms: 12,
+      include_in_llm_history: true,
+      node_runs: [
+        {
+          sequence: 1,
+          node_name: 'router.route',
+          status: 'ok',
+          started_ms: 0,
+          duration_ms: 4,
+          attempt: 1,
+          input: { history_messages: 2 },
+          output: { task_count: 1 },
+          error_class: null,
+        },
+        {
+          sequence: 2,
+          node_name: 'retrieval.embedding',
+          status: 'error',
+          started_ms: 4,
+          duration_ms: 150000,
+          attempt: 1,
+          input: {},
+          output: { retrieval_mode: 'bm25', fallback_used: true },
+          error_class: 'APITimeoutError',
+        },
+      ],
+    },
   },
   status: 200,
   durationMs: 42,
@@ -65,6 +99,16 @@ describe('InspectorPanel', () => {
     expect(screen.getByText('deterministic_general')).toBeInTheDocument()
     expect(screen.getByText('100%')).toBeInTheDocument()
     expect(screen.getByText('not_used')).toBeInTheDocument()
+    expect(screen.getByText('succeeded')).toBeInTheDocument()
+    expect(screen.getByText('12 ms')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('tab', { name: 'Nodes' }))
+    expect(screen.getByText('router.route')).toBeInTheDocument()
+    expect(screen.getByText('retrieval.embedding')).toBeInTheDocument()
+    expect(screen.getByText('+4 ms')).toBeInTheDocument()
+    expect(screen.getByText('150000 ms')).toBeInTheDocument()
+    expect(screen.getByText('APITimeoutError')).toBeInTheDocument()
+    expect(screen.getByText(/fallback/)).toBeInTheDocument()
 
     await user.click(screen.getByRole('tab', { name: 'JSON' }))
     expect(screen.getByText(/"user_id": "kim"/)).toBeInTheDocument()

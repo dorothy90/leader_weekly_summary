@@ -46,15 +46,15 @@ const isReferenceArray = (value: unknown) =>
 
 const isQuality = (value: unknown) =>
   isRecord(value) &&
-  typeof value.citation_valid === 'boolean' &&
+  (typeof value.citation_valid === 'boolean' || value.citation_valid === null) &&
   typeof value.limited_answer === 'boolean' &&
-  ['hybrid', 'bm25', 'not_used'].includes(String(value.retrieval_mode))
+  ['hybrid', 'bm25', 'not_used', 'not_started'].includes(String(value.retrieval_mode))
 
 const isRouting = (value: unknown) =>
   isRecord(value) &&
   ['auto', 'fast', 'deep'].includes(String(value.requested_mode)) &&
-  ['general', 'fast', 'deep', 'clarify'].includes(String(value.route)) &&
-  ['general', 'fast_rag', 'deep_research', 'clarification'].includes(
+  ['general', 'fast', 'deep', 'clarify', 'diagnostic', 'corpus_info'].includes(String(value.route)) &&
+  ['general', 'fast_rag', 'deep_research', 'clarification', 'diagnostic', 'corpus_info'].includes(
     String(value.executed_system),
   ) &&
   typeof value.reason_code === 'string' &&
@@ -67,19 +67,31 @@ const isRouting = (value: unknown) =>
   value.estimated_searches >= 0 &&
   value.estimated_searches <= 24
 
+const isExecution = (value: unknown) =>
+  isRecord(value) &&
+  ['succeeded', 'limited', 'failed'].includes(String(value.status)) &&
+  isNullableString(value.failure_stage) &&
+  isNullableString(value.error_code) &&
+  typeof value.retryable === 'boolean' &&
+  Number.isInteger(value.search_count) && Number(value.search_count) >= 0 &&
+  Number.isInteger(value.evidence_count) && Number(value.evidence_count) >= 0 &&
+  Number.isInteger(value.duration_ms) && Number(value.duration_ms) >= 0 &&
+  typeof value.include_in_llm_history === 'boolean'
+
 const isProgress = (value: unknown) =>
   typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 100
 
 const isChatResponse = (value: unknown): value is ChatResponse =>
   isRecord(value) &&
   typeof value.conversation_id === 'string' &&
-  (value.mode === 'fast_rag' || value.mode === 'deep_research') &&
+  ['fast_rag', 'deep_research', 'diagnostic', 'corpus_info'].includes(String(value.mode)) &&
   isNullableString(value.answer) &&
   isReferenceArray(value.references) &&
   (value.quality === undefined || value.quality === null || isQuality(value.quality)) &&
   isStringArray(value.disclosures) &&
   typeof value.trace_id === 'string' &&
   isRouting(value.routing) &&
+  (value.execution === undefined || value.execution === null || isExecution(value.execution)) &&
   isNullableString(value.job_id) &&
   (value.status === undefined || value.status === null || researchStatuses.has(String(value.status))) &&
   isNullableString(value.plan_summary)

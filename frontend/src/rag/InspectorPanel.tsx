@@ -3,12 +3,13 @@ import { useRef, useState, type KeyboardEvent } from 'react'
 import type {
   ApiExchange,
   ChatResponse,
+  NodeRunMetrics,
   RecordedResearchEvent,
   ResearchJobResponse,
 } from './types'
 
 type InspectableResponse = ChatResponse | ResearchJobResponse
-type InspectorTab = 'summary' | 'json' | 'events'
+type InspectorTab = 'summary' | 'nodes' | 'json' | 'events'
 
 interface InspectorPanelProps {
   exchange?: ApiExchange<InspectableResponse>
@@ -24,6 +25,27 @@ const requestOwner = (exchange: ApiExchange<unknown> | undefined) => {
   const body = exchange?.request.body
   if (!body || typeof body !== 'object' || !('user_id' in body)) return '서버 미제공'
   return typeof body.user_id === 'string' ? body.user_id : '서버 미제공'
+}
+
+const metricSummary = (metrics: NodeRunMetrics) => {
+  const parts: string[] = []
+  if (metrics.history_messages) parts.push(`history ${metrics.history_messages}`)
+  if (metrics.task_count) parts.push(`tasks ${metrics.task_count}`)
+  if (metrics.search_count) parts.push(`searches ${metrics.search_count}`)
+  if (metrics.candidate_count) parts.push(`candidates ${metrics.candidate_count}`)
+  if (metrics.evidence_count) parts.push(`evidence ${metrics.evidence_count}`)
+  if (metrics.rewrite_count) parts.push(`rewrites ${metrics.rewrite_count}`)
+  if (metrics.revision_count) parts.push(`revisions ${metrics.revision_count}`)
+  if (metrics.retrieval_mode) parts.push(metrics.retrieval_mode)
+  if (metrics.fallback_used) parts.push('fallback')
+  return parts.join(' · ') || '없음'
+}
+
+const tabLabel = (tab: InspectorTab) => {
+  if (tab === 'summary') return 'Summary'
+  if (tab === 'nodes') return 'Nodes'
+  if (tab === 'json') return 'JSON'
+  return 'Events'
 }
 
 export function InspectorPanel({
@@ -58,7 +80,7 @@ export function InspectorPanel({
     }
   }
 
-  const tabs: InspectorTab[] = ['summary', 'json', 'events']
+  const tabs: InspectorTab[] = ['summary', 'nodes', 'json', 'events']
   const moveTab = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
     if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
     event.preventDefault()
@@ -95,7 +117,7 @@ export function InspectorPanel({
             onClick={() => setTab(value)}
             onKeyDown={(event) => moveTab(event, index)}
           >
-            {value === 'summary' ? 'Summary' : value === 'json' ? 'JSON' : 'Events'}
+            {tabLabel(value)}
           </button>
         ))}
       </div>
@@ -128,6 +150,13 @@ export function InspectorPanel({
                 <div><dt>searches</dt><dd>{chat?.routing.estimated_searches ?? '서버 미제공'}</dd></div>
                 <div><dt>retrieval</dt><dd>{chat?.quality?.retrieval_mode ?? '서버 미제공'}</dd></div>
                 <div><dt>citation</dt><dd>{chat?.quality ? String(chat.quality.citation_valid) : '서버 미제공'}</dd></div>
+                <div><dt>status</dt><dd>{chat?.execution?.status ?? '서버 미제공'}</dd></div>
+                <div><dt>failure stage</dt><dd>{chat?.execution?.failure_stage ?? '해당 없음'}</dd></div>
+                <div><dt>error code</dt><dd>{chat?.execution?.error_code ?? '해당 없음'}</dd></div>
+                <div><dt>actual searches</dt><dd>{chat?.execution?.search_count ?? '서버 미제공'}</dd></div>
+                <div><dt>evidence</dt><dd>{chat?.execution?.evidence_count ?? '서버 미제공'}</dd></div>
+                <div><dt>duration</dt><dd>{chat?.execution ? `${chat.execution.duration_ms} ms` : '서버 미제공'}</dd></div>
+                <div><dt>history eligible</dt><dd>{chat?.execution ? String(chat.execution.include_in_llm_history) : '서버 미제공'}</dd></div>
               </dl>
               {exchange.error ? (
                 <div className="error-diagnostic" role="alert">
@@ -199,6 +228,40 @@ export function InspectorPanel({
               <pre>{jobJson}</pre>
             </section>
           ) : null}
+        </div>
+      ) : null}
+
+      {tab === 'nodes' ? (
+        <div
+          id="inspector-panel-nodes"
+          className="inspector-content node-run-list"
+          role="tabpanel"
+          aria-labelledby="inspector-tab-nodes"
+        >
+          {!chat?.execution?.node_runs.length ? (
+            <p className="inspector-empty">서버가 제공한 노드 실행 기록이 없습니다.</p>
+          ) : null}
+          {chat?.execution?.node_runs.map((run) => (
+            <article className={`node-run is-${run.status}`} key={run.sequence}>
+              <div className="node-run-heading">
+                <span className="node-sequence">#{run.sequence}</span>
+                <strong>{run.node_name}</strong>
+                <span className="node-status">{run.status}</span>
+              </div>
+              <div className="node-run-timing">
+                <span>+{run.started_ms} ms</span>
+                <b>{run.duration_ms} ms</b>
+                <span>attempt {run.attempt}</span>
+              </div>
+              <dl className="node-run-metrics">
+                <div><dt>입력</dt><dd>{metricSummary(run.input)}</dd></div>
+                <div><dt>출력</dt><dd>{metricSummary(run.output)}</dd></div>
+                {run.error_class ? (
+                  <div><dt>오류</dt><dd>{run.error_class}</dd></div>
+                ) : null}
+              </dl>
+            </article>
+          ))}
         </div>
       ) : null}
 

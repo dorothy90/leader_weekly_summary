@@ -130,6 +130,53 @@ describe('RagApiService', () => {
     expect(exchange.response?.quality?.retrieval_mode).toBe('not_used')
   })
 
+  it('accepts typed failed execution with unrun citation and search', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        conversation_id: 'c-failed',
+        mode: 'fast_rag',
+        answer: null,
+        references: [],
+        quality: {
+          citation_valid: null,
+          limited_answer: true,
+          retrieval_mode: 'not_started',
+        },
+        routing: {
+          requested_mode: 'fast',
+          route: 'fast',
+          executed_system: 'fast_rag',
+          reason_code: 'explicit_mode',
+          confidence: 1,
+          estimated_searches: 1,
+        },
+        execution: {
+          status: 'failed',
+          failure_stage: 'planning',
+          error_code: 'LLM_TIMEOUT',
+          retryable: true,
+          search_count: 0,
+          evidence_count: 0,
+          duration_ms: 5000,
+          include_in_llm_history: false,
+        },
+        disclosures: [],
+        trace_id: 'trace-failed',
+      }),
+    )
+
+    const exchange = await new RagApiService('/api').sendChat({
+      user_id: 'kim',
+      message: '질문',
+      response_mode: 'fast',
+      filters: { teams: [], weeks: [] },
+    })
+
+    expect(exchange.error).toBeUndefined()
+    expect(exchange.response?.execution?.error_code).toBe('LLM_TIMEOUT')
+    expect(exchange.response?.quality?.citation_valid).toBeNull()
+  })
+
   it('rejects a successful chat response without routing diagnostics', async () => {
     fetchMock.mockResolvedValue(
       jsonResponse({

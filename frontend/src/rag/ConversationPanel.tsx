@@ -42,6 +42,13 @@ function TurnResult({ turn }: { turn: ConversationTurn }) {
           <p>Deep Research 작업이 {job.status} 상태로 종료되었습니다.</p>
         </div>
       ) : null}
+      {chat?.execution?.status === 'failed' ? (
+        <div className="error-diagnostic result-error" role="alert">
+          <strong>{chat.execution.error_code ?? 'EXECUTION_FAILED'}</strong>
+          <p>{chat.execution.failure_stage ?? 'unknown'} 단계에서 실행이 중단되었습니다.</p>
+          <small>{chat.execution.retryable ? '재시도 가능' : '재시도 불가'}</small>
+        </div>
+      ) : null}
       {chat ? (
         <div className="routing-flow" aria-label="라우팅 결과">
           <div className="routing-steps">
@@ -55,6 +62,12 @@ function TurnResult({ turn }: { turn: ConversationTurn }) {
             {chat.routing.reason_code} · 신뢰도 {Math.round(chat.routing.confidence * 100)}%
             {' · '}예상 검색 {chat.routing.estimated_searches}회
           </small>
+          {chat.execution ? (
+            <small>
+              상태 {chat.execution.status} · 실제 검색 {chat.execution.search_count}회 · 근거 {chat.execution.evidence_count}개 · {chat.execution.duration_ms}ms
+              {chat.execution.error_code ? ` · ${chat.execution.failure_stage ?? 'unknown'} / ${chat.execution.error_code}` : ''}
+            </small>
+          ) : null}
         </div>
       ) : null}
       {job && !result ? (
@@ -80,10 +93,10 @@ function TurnResult({ turn }: { turn: ConversationTurn }) {
           <p className="answer-text">{result}</p>
           {chat?.quality && chat.routing.executed_system === 'fast_rag' ? (
             <div className="quality-row" aria-label="답변 품질">
-              <span className={chat.quality.citation_valid ? 'is-good' : 'is-bad'}>
-                {chat.quality.citation_valid ? '인용 유효' : '인용 실패'}
+              <span className={chat.quality.citation_valid === false ? 'is-bad' : 'is-good'}>
+                {chat.quality.citation_valid === null ? '인용 미실행' : chat.quality.citation_valid ? '인용 유효' : '인용 실패'}
               </span>
-              <span>{chat.quality.retrieval_mode}</span>
+              <span>{chat.quality.retrieval_mode === 'not_started' ? '검색 시작 전 실패' : chat.quality.retrieval_mode}</span>
               {chat.quality.limited_answer ? <span>제한 답변</span> : null}
             </div>
           ) : null}
@@ -136,6 +149,10 @@ export function ConversationPanel({
     ? 'Deep Research'
     : latest?.chat?.routing.executed_system === 'general'
       ? 'General response'
+      : latest?.chat?.routing.executed_system === 'diagnostic'
+        ? 'Execution diagnostic'
+        : latest?.chat?.routing.executed_system === 'corpus_info'
+          ? 'Corpus information'
       : latest?.chat?.routing.executed_system === 'clarification'
         ? 'Clarification'
         : latest?.chat
