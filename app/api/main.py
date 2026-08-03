@@ -7,6 +7,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.api.dependencies import build_container
 from app.api.routes.chat import router as chat_router
 from app.api.routes.content import router as content_router
 from app.api.routes.health import router as health_router
@@ -148,3 +149,6 @@ def create_app(container) -> FastAPI:
     app.include_router(research_router)
     app.include_router(health_router)
     return app
+
+
+app = create_app(build_container())
