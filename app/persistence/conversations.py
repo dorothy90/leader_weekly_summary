@@ -4,6 +4,7 @@ from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.domain.chat import ExecutionMetadata, QualityStatus
 from app.domain.evidence import Evidence, RetrievalFilters
 from app.domain.errors import AppError, ErrorCode
 from app.domain.policy import PolicyContext
@@ -22,7 +23,10 @@ def _validate_conversation_id(conversation_id: str) -> str:
 def _validate_memory_owner(
     memory: "ConversationMemory", policy: PolicyContext
 ) -> "ConversationMemory":
-    if any(item.user_id != policy.user_id for item in memory.cited_evidence):
+    evidence = [*memory.cited_evidence]
+    for turn in memory.turns:
+        evidence.extend(turn.cited_evidence)
+    if any(item.user_id != policy.user_id for item in evidence):
         raise AppError(ErrorCode.UNAUTHORIZED_RESOURCE, _OWNER_ERROR)
     return memory
 
@@ -74,8 +78,39 @@ def _sanitize_memory(
     for message in validated.messages:
         safe = sanitize_text(message["content"]) or "[REDACTED]"
         messages.append({"role": message["role"], "content": safe})
+    turns = []
+    for turn in validated.turns:
+        turns.append(
+            turn.model_copy(
+                update={
+                    "user_content": sanitize_text(turn.user_content) or "[REDACTED]",
+                    "assistant_content": (
+                        sanitize_text(turn.assistant_content) or "[REDACTED]"
+                        if turn.assistant_content is not None
+                        else None
+                    ),
+                    "trace_id": (
+                        opaque_identifier(turn.trace_id) if turn.trace_id else None
+                    ),
+                    "reason_code": (
+                        sanitize_text(turn.reason_code) if turn.reason_code else None
+                    ),
+                    "disclosures": [
+                        safe
+                        for item in turn.disclosures
+                        if (safe := sanitize_text(item))
+                    ][:4],
+                    "cited_evidence": [
+                        sanitize_evidence_for_memory(item, policy)
+                        for item in turn.cited_evidence
+                    ][:8],
+                }
+            )
+        )
     return ConversationMemory(
+        revision=validated.revision,
         messages=messages,
+        turns=turns,
         filters=sanitize_filters_for_memory(validated.filters),
         cited_evidence=[
             sanitize_evidence_for_memory(item, policy)
@@ -84,10 +119,27 @@ def _sanitize_memory(
     )
 
 
+class TurnRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    user_content: str = Field(min_length=1, max_length=4000)
+    assistant_content: str | None = Field(default=None, max_length=8000)
+    route: str = Field(min_length=1, max_length=32)
+    executed_system: str = Field(min_length=1, max_length=32)
+    execution: ExecutionMetadata
+    trace_id: str | None = Field(default=None, max_length=128)
+    reason_code: str | None = Field(default=None, max_length=128)
+    quality: QualityStatus | None = None
+    disclosures: list[str] = Field(default_factory=list, max_length=4)
+    cited_evidence: list[Evidence] = Field(default_factory=list, max_length=8)
+
+
 class ConversationMemory(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    revision: int = Field(default=0, ge=0)
     messages: list[dict[str, str]] = Field(default_factory=list, max_length=20)
+    turns: list[TurnRecord] = Field(default_factory=list, max_length=20)
     filters: RetrievalFilters = Field(default_factory=RetrievalFilters)
     cited_evidence: list[Evidence] = Field(default_factory=list, max_length=8)
 
@@ -143,6 +195,17 @@ class InMemoryConversationStore:
         if existing is not None and existing[0] != policy.user_id:
             raise AppError(ErrorCode.UNAUTHORIZED_RESOURCE, _OWNER_ERROR)
         validated = _sanitize_memory(ConversationMemory.model_validate(memory), policy)
+        if existing is not None:
+            current_revision = existing[1].revision
+            if validated.revision != current_revision:
+                raise AppError(
+                    ErrorCode.CONVERSATION_CONFLICT,
+                    "대화가 동시에 갱신되었습니다.",
+                    retryable=True,
+                )
+            validated = validated.model_copy(
+                update={"revision": current_revision + 1}
+            )
         self.records[conversation_id] = (
             policy.user_id,
             validated.model_copy(deep=True),
@@ -178,17 +241,42 @@ class MongoConversationStore:
         _validate_conversation_id(conversation_id)
         memory = _sanitize_memory(ConversationMemory.model_validate(memory), policy)
         existing = await self.collection.find_one(
-            {"_id": conversation_id}, {"user_id": 1}
+            {"_id": conversation_id}, {"user_id": 1, "revision": 1}
         )
         if existing is not None and existing.get("user_id") != policy.user_id:
             raise AppError(ErrorCode.UNAUTHORIZED_RESOURCE, _OWNER_ERROR)
 
+        expected_revision = memory.revision
+        next_revision = expected_revision if existing is None else expected_revision + 1
+        if existing is not None:
+            current_revision = int(existing.get("revision", 0))
+            if expected_revision != current_revision:
+                raise AppError(
+                    ErrorCode.CONVERSATION_CONFLICT,
+                    "대화가 동시에 갱신되었습니다.",
+                    retryable=True,
+                )
+            revision_filter = (
+                current_revision
+                if "revision" in existing
+                else {"$exists": False}
+            )
+            update_filter = {
+                "_id": conversation_id,
+                "user_id": policy.user_id,
+                "revision": revision_filter,
+            }
+        else:
+            update_filter = {"_id": conversation_id, "user_id": policy.user_id}
+        stored_memory = memory.model_copy(update={"revision": next_revision})
+
         try:
             result = await self.collection.update_one(
-                {"_id": conversation_id, "user_id": policy.user_id},
+                update_filter,
                 {
                     "$set": {
-                        "memory": memory.model_dump(mode="json"),
+                        "memory": stored_memory.model_dump(mode="json"),
+                        "revision": next_revision,
                         "updated_at": datetime.now(UTC),
                     },
                     "$setOnInsert": {
@@ -196,7 +284,7 @@ class MongoConversationStore:
                         "user_id": policy.user_id,
                     },
                 },
-                upsert=True,
+                upsert=existing is None,
             )
         except Exception as error:
             # Mongo's unique _id turns an ownership race into a duplicate-key
@@ -209,4 +297,13 @@ class MongoConversationStore:
             raise error
 
         if result.matched_count == 0 and result.upserted_id is None:
+            raced = await self.collection.find_one(
+                {"_id": conversation_id}, {"user_id": 1}
+            )
+            if raced is not None and raced.get("user_id") == policy.user_id:
+                raise AppError(
+                    ErrorCode.CONVERSATION_CONFLICT,
+                    "대화가 동시에 갱신되었습니다.",
+                    retryable=True,
+                )
             raise AppError(ErrorCode.UNAUTHORIZED_RESOURCE, _OWNER_ERROR)

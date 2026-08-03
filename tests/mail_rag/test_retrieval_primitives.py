@@ -122,3 +122,41 @@ def test_citation_validator_reports_same_owner_duplicates_in_citation_order():
     assert result.cited_ids == ["S1", "S2"]
     assert result.duplicate_ids == ["S1", "S2"]
     assert result.unauthorized_ids == []
+
+
+def test_citation_validator_normalizes_supported_model_label_variants_only():
+    evidence = [
+        Evidence(
+            evidence_id="S1",
+            source_type="mail",
+            document_id="d1",
+            title="t",
+            excerpt="fact",
+            score=1,
+            user_id="kim",
+            acl_decision_id="x",
+            content_hash="h1",
+        ),
+        Evidence(
+            evidence_id="S2",
+            source_type="mail",
+            document_id="d2",
+            title="t",
+            excerpt="fact",
+            score=1,
+            user_id="kim",
+            acl_decision_id="x",
+            content_hash="h2",
+        ),
+    ]
+
+    normalized = CitationValidator().normalize(
+        "첫 사실 [1], 둘째 【s2】, 미등록 (S99), 일반 숫자 (2026)", evidence
+    )
+
+    assert normalized == "첫 사실 [S1], 둘째 [S2], 미등록 (S99), 일반 숫자 (2026)"
+    validation = CitationValidator().validate(
+        normalized, evidence, PolicyContext.from_user_id("kim")
+    )
+    assert validation.valid is False
+    assert validation.unknown_ids == ["S99"]

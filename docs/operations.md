@@ -2,9 +2,9 @@
 
 ## Architecture and hard limits
 
-Fast RAG and Deep Research are separate systems that share owner-filtered retrieval and citation validation. Run the API and the research worker as separate processes. Fast RAG is synchronous and bounded to six searches, two rewrites, one answer revision, eight evidence objects, and a configured 16,000 context tokens budget that is enforced conservatively as 16,000 UTF-8 bytes.
+Fast RAG and Deep Research are separate systems and workflows that share owner-filtered retrieval and citation validation. Both execute synchronously through `POST /v1/chat`; a separate research worker is not required for chat requests. Fast RAG is bounded to six searches, two rewrites, one answer revision, eight evidence objects, and a configured 16,000 context tokens budget that is enforced conservatively as 16,000 UTF-8 bytes.
 
-Deep Research is persistent and bounded to eight initial sub-questions, four follow-up questions, 12 searches, two rounds, four concurrent searches, 32 evidence objects, 32,000 model-input bytes, one report revision, an 8,000-byte report, and 120 seconds elapsed time. The worker lease defaults to 180 seconds. These limits are safety ceilings, not production latency guarantees.
+Deep Research is bounded to eight initial sub-questions, four follow-up questions, 12 searches, two rounds, four concurrent searches, 32 evidence objects, 32,000 model-input bytes, one report revision, and an 8,000-byte report. Fast and Deep have no workflow-wide deadline; each OpenRouter request has a 150-second default safety limit. The optional compatibility worker retains its 180-second lease. These limits are safety ceilings, not production latency guarantees.
 
 Every OpenSearch query and MongoDB lookup is scoped by exact request-body `user_id`. `team` is only a facet. Missing owners remain invisible; never infer an owner from team, index, mail text, or path.
 
@@ -24,15 +24,26 @@ MAIL_PARENT_INDEX
 WIKI_INDEX
 OPENROUTER_API_KEY
 OPENROUTER_BASE_URL
-EMBEDDING_MODEL
-LLM_MODEL
+OPENROUTER_LLM_MODEL
+OPENROUTER_EMBEDDING_MODEL
+OPENROUTER_REQUEST_TIMEOUT_SECONDS
 MONGO_URI
 MONGO_DB
-FAST_DEADLINE_SECONDS
 MAIL_CONTENT_ROOT
 ```
 
-`OPENROUTER_API_KEY`, a reachable `MONGO_URI`, and reachable model endpoints are required for normal service operation. When `OPENSEARCH_USER` is configured, provide `OPENSEARCH_PASSWORD`. Production requires TLS (`OPENSEARCH_USE_SSL=true`) and certificate verification (`OPENSEARCH_VERIFY_CERTS=true`) against a trusted CA. Plain HTTP is for explicitly isolated local development only. Do not disable certificate verification to work around trust failures.
+`OPENROUTER_API_KEY`, a reachable `MONGO_URI`, and reachable OpenRouter and OpenSearch endpoints are required for normal service operation. The default AI endpoint, models, and per-request timeout are:
+
+```dotenv
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+OPENROUTER_LLM_MODEL=google/gemma-4-26b-a4b-it:free
+OPENROUTER_EMBEDDING_MODEL=qwen/qwen3-embedding-8b
+OPENROUTER_REQUEST_TIMEOUT_SECONDS=150
+```
+
+The OpenSearch index and query path must use the same Qwen3-Embedding-8B output dimension. If OpenRouter embedding generation fails, retrieval degrades to owner-filtered BM25 and includes the embedding-unavailable disclosure.
+
+When `OPENSEARCH_USER` is configured, provide `OPENSEARCH_PASSWORD`. Production requires TLS (`OPENSEARCH_USE_SSL=true`) and certificate verification (`OPENSEARCH_VERIFY_CERTS=true`) against a trusted CA. Plain HTTP is for explicitly isolated local development only. Do not disable certificate verification to work around trust failures.
 
 Mail collection separately requires `MAIL_USER_ID`. It is the explicit owner written into `meta.json`; it is not derived from team membership.
 
@@ -50,7 +61,9 @@ uvicorn.run(create_app(build_container()), host="127.0.0.1", port=8000)
 PY
 ```
 
-Start one or more separate worker processes. This command uses the same retrieval and LLM objects as Fast RAG while consuming persistent Deep jobs:
+The worker below is optional compatibility support for previously queued research
+jobs. Normal `POST /v1/chat` Deep requests do not enqueue jobs and do not require
+this process:
 
 ```bash
 python - <<'PY'
@@ -77,7 +90,7 @@ PY
 
 Terminate both processes gracefully during deployment. Running jobs are recovered after their lease expires; a stale worker cannot complete a job claimed under a newer lease token.
 
-Set `FAST_DEADLINE_SECONDS` to the synchronous end-to-end Fast RAG deadline. The deadline covers planning, all bounded retrieval rounds, generation, citation validation, and structured claim-support validation; timeout returns a limited response.
+Set `OPENROUTER_REQUEST_TIMEOUT_SECONDS` to the per-request LLM and embedding safety limit. Fast and Deep workflows do not impose an additional end-to-end deadline.
 
 ## RAG verification console
 
@@ -98,7 +111,11 @@ cd frontend
 RAG_API_TARGET=http://127.0.0.1:8010 npm run dev:rag
 ```
 
-The console exposes only explicit Fast and Deep choices. It does not use automatic routing or combine the two systems. Runtime counters that are not part of the API response are labeled `서버 미제공`; the UI does not estimate token or search usage. Requests, responses, `user_id`, and event payloads remain in React memory only and are not written to browser storage.
+The console exposes Auto plus explicit Fast and Deep choices. Auto selects one executor; it never merges Fast and Deep. The inspector shows server-provided execution status, stage, safe error code, retryability, actual search/evidence counts, duration, retrieval mode, nullable citation state, references, disclosures, and an ordered Nodes timeline. Node diagnostics contain only timing, counts, fallback state, and exception class. Requests, responses, `user_id`, and event payloads remain in React memory only and are not written to browser storage.
+
+Mongo conversation records are dual-read compatible. Existing `messages` remain readable; new writes also include bounded `turns`. Only successful history-eligible turns are projected into model context. Limited/failed turns are retained for diagnostics and excluded from model history. No OpenSearch reindex or embedding migration is required for this change.
+
+Corpus inspection uses `size: 0` owner-filtered aggregations on `MAIL_CHILD_INDEX`. Verify every request body contains the authenticated principal's `user_id`; the application still depends on the upstream gateway to bind it. Diagnostic and corpus-info chat routes are deterministic and do not require a separate worker.
 
 ## Health and recovery
 
@@ -233,7 +250,7 @@ Local unit tests and the synthetic evaluator do not establish production latency
 
 ### Verification record: 2026-08-01
 
-Live-service verification is **pending**. The verification environment had no configured `OPENSEARCH_HOST`, `OPENSEARCH_PASSWORD`, `MONGO_URI`, `OPENROUTER_API_KEY`, or `OPENROUTER_BASE_URL`, and the repository has no registered integration-test marker. No live OpenSearch, MongoDB, embedding, or LLM request was attempted. Production latency, retrieval quality, live index versions, and live corpus versions are therefore unverified.
+End-to-end live-service verification still requires reachable OpenSearch, MongoDB, and OpenRouter services. Production latency, retrieval quality, live index versions, and live corpus versions must be verified in the deployment environment.
 
 The deterministic evaluator contract was exercised with a strict oracle adapter generated from the committed gold expectations. This checks evaluator behavior, owner-leakage rejection, and exact fallback-disclosure enforcement; it is not application-output or live-quality evidence. Exact evaluator command:
 

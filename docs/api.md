@@ -26,11 +26,11 @@ Request body:
 }
 ```
 
-`response_mode` is `auto`, `fast`, or `deep`. `mail_type` is `weekly_report`, `daily_report`, `other`, or null. Fast RAG returns HTTP 200:
+`response_mode` is `auto`, `fast`, or `deep`. `mail_type` is `weekly_report`, `daily_report`, `other`, or null. Fast and Deep stay separate executors; `auto` only selects one route. The same synchronous endpoint returns the final result.
 
-The development RAG verification console always sends `fast` or `deep`; it never sends `auto`. It is available at the Vite frontend's `/rag` path and proxies API calls through `/api`. The console is a QA client, not an authentication or authorization layer.
+The development RAG verification console can send `auto`, `fast`, or `deep`. It is available at the Vite frontend's `/rag` path and proxies API calls through `/api`. The console is a QA client, not an authentication or authorization layer.
 
-Fast mode is bounded by `FAST_DEADLINE_SECONDS` end-to-end, including planning, retrieval, generation, citation validation, and claim-support validation. Deadline exhaustion returns a deterministic limited response rather than publishing an ungrounded answer.
+Fast and Deep have no workflow-wide deadline. Each OpenRouter LLM or embedding request has the configured `OPENROUTER_REQUEST_TIMEOUT_SECONDS` safety limit, which defaults to 150 seconds.
 
 ```json
 {
@@ -53,13 +53,45 @@ Fast mode is bounded by `FAST_DEADLINE_SECONDS` end-to-end, including planning, 
   },
   "disclosures": [],
   "trace_id": "opaque-trace-id",
+  "execution": {
+    "status": "succeeded",
+    "failure_stage": null,
+    "error_code": null,
+    "retryable": false,
+    "search_count": 2,
+    "evidence_count": 1,
+    "duration_ms": 842,
+    "include_in_llm_history": true,
+    "node_runs": [{
+      "sequence": 1,
+      "node_name": "router.route",
+      "status": "ok",
+      "started_ms": 0,
+      "duration_ms": 4180,
+      "attempt": 1,
+      "input": {"history_messages": 2},
+      "output": {"task_count": 1},
+      "error_class": null
+    }]
+  },
   "job_id": null,
   "status": null,
   "plan_summary": null
 }
 ```
 
-Deep routing returns HTTP 202. `mode` is `deep_research`; `job_id`, `status: "queued"`, and `plan_summary` are populated while `answer` and `quality` are null. Fast RAG and Deep Research are separate execution systems: Fast completes synchronously, while Deep persists a job for a worker process.
+Deep routing returns HTTP 200 after the bounded Deep workflow completes. `mode` is
+`deep_research`; `answer`, `references`, and `quality` are populated in the same
+response while `job_id`, `status`, and `plan_summary` remain null. General, Fast,
+and Deep therefore share one `POST /v1/chat` request-response contract.
+
+Automatic routing also has two deterministic system routes. Questions such as “왜 답변을 못했어?” use `diagnostic` and read the previous persisted execution state. Questions such as “뭐가 임베딩돼 있어?” use `corpus_info` and run exact-`user_id` OpenSearch aggregations for counts, teams, weeks, mail types, recent titles, and embedding-model metadata. Neither route asks the LLM to invent operational facts.
+
+`execution.status` is `succeeded`, `limited`, or `failed`. Completed execution failures still return HTTP 200 with `answer: null`; `failure_stage` and `error_code` explain the bounded failure. `quality.citation_valid` is null when citation validation did not run, and `retrieval_mode` is `not_started` when search never began. Embedding API failure continues with BM25 and includes the exact Korean fallback disclosure.
+
+`execution.node_runs` contains at most 64 request-correlated Router, Fast, Deep, embedding, and OpenSearch steps ordered by start sequence. It exposes timing, safe counts, retrieval mode, fallback state, attempt, and exception class only. It never contains raw questions, prompts, mail content, document IDs, credentials, exception messages, or reasoning.
+
+Conversation storage writes a bounded turn envelope and compatibility messages. Only successful turns with `include_in_llm_history=true` are sent back to Router/General/Fast/Deep models. Limited and failed turns remain available for deterministic diagnostics but cannot contaminate later model context. Verified evidence may be reused only after exact owner validation and deduplication.
 
 ## Research job endpoints
 

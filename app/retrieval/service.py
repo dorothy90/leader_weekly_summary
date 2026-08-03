@@ -22,6 +22,7 @@ from app.observability.tracing import (
     emit_trace,
     hash_trace_value,
 )
+from app.observability.node_runs import record_node
 
 
 class RetrievalResult(BaseModel):
@@ -50,6 +51,26 @@ class RetrievalService:
         self.trace_sink = trace_sink
 
     async def search(
+        self,
+        task: SearchTask,
+        policy: PolicyContext,
+    ) -> RetrievalResult:
+        async with record_node(
+            "retrieval.search",
+            input_metrics={"task_count": 1},
+        ) as run:
+            result = await self._search_with_trace(task, policy)
+            run.update(
+                output_metrics={
+                    "search_count": 1,
+                    "evidence_count": len(result.evidence),
+                    "retrieval_mode": result.mode,
+                    "fallback_used": result.mode == "bm25",
+                }
+            )
+            return result
+
+    async def _search_with_trace(
         self,
         task: SearchTask,
         policy: PolicyContext,
@@ -117,9 +138,15 @@ class RetrievalService:
         disclosures: list[str] = []
 
         try:
-            vector = await self.embeddings.embed(task.query)
+            async with record_node("retrieval.embedding") as embedding_run:
+                vector = await self.embeddings.embed(task.query)
+                embedding_run.update(
+                    output_metrics={"candidate_count": 1}
+                )
         except Exception as error:
-            bm25_response = await self.backend.search(index_name, bm25_body)
+            bm25_response = await self._backend_search(
+                "opensearch.bm25", index_name, bm25_body
+            )
             rankings = [self._rank(bm25_response)]
             mode: Literal["hybrid", "bm25"] = "bm25"
             embedding_error = "EMBEDDING_UNAVAILABLE"
@@ -128,10 +155,12 @@ class RetrievalService:
         else:
             vector_body = self._vector_body(task, policy, vector)
             vector_task = asyncio.create_task(
-                self.backend.search(index_name, vector_body)
+                self._backend_search("opensearch.vector", index_name, vector_body)
             )
             try:
-                bm25_response = await self.backend.search(index_name, bm25_body)
+                bm25_response = await self._backend_search(
+                    "opensearch.bm25", index_name, bm25_body
+                )
             except BaseException:
                 vector_task.cancel()
                 await asyncio.gather(vector_task, return_exceptions=True)
@@ -165,6 +194,21 @@ class RetrievalService:
             embedding_error_class=embedding_error_class,
             disclosures=disclosures,
         )
+
+    async def _backend_search(self, node_name: str, index: str, body: dict) -> dict:
+        async with record_node(
+            node_name,
+            input_metrics={"search_count": 1},
+        ) as run:
+            response = await self.backend.search(index, body)
+            candidates = len(response.get("hits", {}).get("hits", []))
+            run.update(
+                output_metrics={
+                    "search_count": 1,
+                    "candidate_count": candidates,
+                }
+            )
+            return response
 
     @staticmethod
     def _filters(policy: PolicyContext, facets: RetrievalFilters) -> list[dict]:
@@ -254,7 +298,9 @@ class RetrievalService:
             "size": min(100, len(parent_ids)),
             "query": {"bool": {"filter": filters}},
         }
-        response = await self.backend.search(self.parent_index, body)
+        response = await self._backend_search(
+            "opensearch.context", self.parent_index, body
+        )
 
         parents_by_id: dict[str, dict[str, Any]] = {}
         for hit in response.get("hits", {}).get("hits", []):
@@ -373,7 +419,9 @@ class RetrievalService:
                 }
             },
         }
-        response = await self.backend.search(self.child_index, body)
+        response = await self._backend_search(
+            "opensearch.context", self.child_index, body
+        )
 
         by_mail: dict[str, list[dict[str, Any]]] = {}
         for hit in response.get("hits", {}).get("hits", []):
@@ -498,7 +546,9 @@ class RetrievalService:
                 "by_mail_type": {"terms": {"field": "mail_type", "size": 10}},
             },
         }
-        response = await self.backend.search(self.child_index, body)
+        response = await self._backend_search(
+            "opensearch.statistics", self.child_index, body
+        )
         excerpt = json.dumps(
             response.get("aggregations", {}),
             ensure_ascii=False,

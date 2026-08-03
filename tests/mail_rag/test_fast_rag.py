@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 from time import perf_counter
 
 import langchain_core.globals as langchain_globals
@@ -7,6 +8,7 @@ import pytest
 from app.domain.chat import BM25_FALLBACK_DISCLOSURE, ChatRequest
 from app.domain.evidence import Evidence
 from app.domain.policy import PolicyContext
+from app.domain.errors import AppError, ErrorCode
 from app.graphs.fast_rag import (
     INCOMPLETE_ANSWER_PREFIX,
     MAX_EVIDENCE_TOKENS,
@@ -149,6 +151,199 @@ def test_general_identity_response_uses_product_identity_without_llm_claims():
     )
     assert result.quality.retrieval_mode == "not_used"
     assert llm.text_calls == []
+    assert [run.node_name for run in result.execution.node_runs] == [
+        "general.generate"
+    ]
+
+
+def test_general_response_uses_role_preserving_conversation_history():
+    class MessageLLM(ScriptedLLM):
+        def __init__(self):
+            super().__init__(tasks=[])
+            self.message_calls = []
+
+        async def complete_messages(self, system, messages):
+            self.message_calls.append((system, messages))
+            return "파랑입니다."
+
+    llm = MessageLLM()
+    workflow = FastRAGWorkflow(None, llm)
+    conversation = type(
+        "Memory",
+        (),
+        {
+            "messages": [
+                {"role": "user", "content": "내가 좋아하는 색은 파랑"},
+                {"role": "assistant", "content": "기억하겠습니다."},
+            ]
+        },
+    )()
+
+    result = asyncio.run(
+        workflow.respond_general(
+            ChatRequest(user_id="kim", message="내가 좋아하는 색이 뭐지?"), conversation
+        )
+    )
+
+    assert result.answer == "파랑입니다."
+    assert llm.message_calls[0][1] == [
+        {"role": "user", "content": "내가 좋아하는 색은 파랑"},
+        {"role": "assistant", "content": "기억하겠습니다."},
+        {"role": "user", "content": "내가 좋아하는 색이 뭐지?"},
+    ]
+
+
+def test_general_name_declaration_and_recall_do_not_depend_on_model_availability():
+    llm = ScriptedLLM(tasks=[])
+    workflow = FastRAGWorkflow(None, llm)
+    declaration = asyncio.run(
+        workflow.respond_general(ChatRequest(user_id="kim", message="내이름은대환"))
+    )
+    conversation = type(
+        "Memory",
+        (),
+        {"messages": [{"role": "user", "content": "내이름은대환"}]},
+    )()
+    recall = asyncio.run(
+        workflow.respond_general(
+            ChatRequest(user_id="kim", message="내 이름이 뭐라고?"), conversation
+        )
+    )
+
+    assert declaration.answer == "반갑습니다, 대환님. 이름을 기억하겠습니다."
+    assert recall.answer == "대환님이라고 하셨습니다."
+    assert llm.text_calls == []
+
+
+def test_general_model_timeout_returns_typed_failure():
+    class SlowGeneralLLM(ScriptedLLM):
+        async def complete_text(self, system, user):
+            await asyncio.sleep(0.02)
+            return "늦은 답변"
+
+    result = asyncio.run(
+        FastRAGWorkflow(
+            None,
+            SlowGeneralLLM(tasks=[]),
+            general_timeout_seconds=0.005,
+        ).respond_general(ChatRequest(user_id="kim", message="안녕하세요"))
+    )
+
+    assert result.execution.status == "failed"
+    assert result.execution.failure_stage == "generation"
+    assert result.execution.error_code == "LLM_TIMEOUT"
+    assert result.execution.include_in_llm_history is False
+
+
+def test_no_evidence_general_fallback_uses_safe_prompt_and_conversation_history():
+    class MessageLLM(ScriptedLLM):
+        def __init__(self):
+            super().__init__(tasks=[])
+            self.message_calls = []
+
+        async def complete_messages(self, system, messages):
+            self.message_calls.append((system, messages))
+            return "현재 지역 목록은 확인할 수 없지만 일반 선택 기준은 안내할 수 있습니다."
+
+    llm = MessageLLM()
+    workflow = FastRAGWorkflow(None, llm)
+    conversation = type(
+        "Memory",
+        (),
+        {
+            "messages": [
+                {"role": "user", "content": "장례식장 정보 알려줘"},
+                {"role": "assistant", "content": "메일에서 찾아보겠습니다."},
+            ]
+        },
+    )()
+
+    result = asyncio.run(
+        workflow.respond_without_evidence(
+            ChatRequest(user_id="kim", message="서울 지역으로"), conversation
+        )
+    )
+
+    system, messages = llm.message_calls[0]
+    assert "no relevant mail evidence" in system.casefold()
+    assert "venue names" in system.casefold()
+    assert "current, local, or private" in system.casefold()
+    assert [message["role"] for message in messages] == [
+        "user",
+        "assistant",
+        "user",
+    ]
+    assert result.execution.status == "succeeded"
+    assert [run.node_name for run in result.execution.node_runs] == [
+        "general.no_evidence_fallback"
+    ]
+    assert result.execution.node_runs[0].output.fallback_used is True
+
+
+def test_fast_contextualizer_uses_the_same_role_preserving_history_window():
+    class MessageLLM(ScriptedLLM):
+        def __init__(self):
+            super().__init__(tasks=[])
+            self.message_calls = []
+
+        async def complete_messages(self, system, messages):
+            self.message_calls.append((system, messages))
+            return "지난주 생산기술팀 메일 중 수율 이슈를 요약해줘"
+
+    llm = MessageLLM()
+    workflow = FastRAGWorkflow(None, llm)
+    conversation = type(
+        "Memory",
+        (),
+        {
+            "messages": [
+                {"role": "user", "content": "지난주 생산기술팀 메일 찾아줘"},
+                {"role": "assistant", "content": "검색했습니다."},
+            ]
+        },
+    )()
+
+    result = asyncio.run(
+        workflow._contextualize(
+            {
+                "request": ChatRequest(user_id="kim", message="수율만 요약해줘"),
+                "conversation": conversation,
+            }
+        )
+    )
+
+    assert result["standalone_question"] == (
+        "지난주 생산기술팀 메일 중 수율 이슈를 요약해줘"
+    )
+    assert [item["role"] for item in llm.message_calls[0][1]] == [
+        "user",
+        "assistant",
+        "user",
+    ]
+
+
+def test_fast_generation_uses_the_standalone_question():
+    llm = ScriptedLLM(tasks=[], texts=["강남역 인근 장례식장입니다. [S1]"])
+    workflow = FastRAGWorkflow(None, llm)
+
+    result = asyncio.run(
+        workflow._generate(
+            {
+                "request": ChatRequest(
+                    user_id="kim", message="그중 제일 가까운 데는?"
+                ),
+                "standalone_question": "강남역에서 가장 가까운 장례식장은?",
+                "evidence": [_evidence("mail-1")],
+                "sufficient": True,
+                "missing_information": [],
+            }
+        )
+    )
+
+    prompt = llm.text_calls[-1][1]
+    assert "Question: 강남역에서 가장 가까운 장례식장은?" in prompt
+    assert "Question: 그중 제일 가까운 데는?" not in prompt
+    assert result == {"answer": "강남역 인근 장례식장입니다. [S1]"}
 
 
 def test_fast_rag_rejects_request_policy_owner_mismatch_before_retrieval():
@@ -269,26 +464,167 @@ def test_fast_rag_runs_independent_planned_searches_concurrently():
     assert perf_counter() - started < 0.1
 
 
-def test_fast_rag_deadline_returns_safe_limited_response():
-    class HangingLLM(ScriptedLLM):
+def test_fast_rag_has_no_workflow_wide_deadline():
+    assert "deadline_seconds" not in inspect.signature(FastRAGWorkflow).parameters
+
+
+def test_fast_rag_planning_timeout_falls_back_to_standalone_search():
+    class SlowPlanLLM(ScriptedLLM):
         async def complete_model(self, system, user, schema):
-            await asyncio.sleep(0.05)
+            if schema.__name__ == "RetrievalPlan":
+                await asyncio.sleep(0.02)
             return await super().complete_model(system, user, schema)
 
+    retrieval = RecordingRetrieval(
+        lambda task, policy: RetrievalResult(
+            evidence=[_evidence("doc")], mode="hybrid"
+        )
+    )
     result = asyncio.run(
         FastRAGWorkflow(
-            RecordingRetrieval(lambda *_: RetrievalResult()),
-            HangingLLM(tasks=[{"query": "q", "source": "mail"}]),
-            deadline_seconds=0.01,
+            retrieval,
+            SlowPlanLLM(
+                tasks=[{"query": "모델 계획", "source": "mail"}],
+                sufficient=True,
+                texts=["확인 답변 [S1]"],
+            ),
+            model_step_timeout_seconds=0.005,
+        ).invoke(
+            ChatRequest(user_id="kim", message="최근 반도체 수율 이슈"),
+            PolicyContext.from_user_id("kim"),
+            None,
+        )
+    )
+
+    assert retrieval.calls[0][0].query == "최근 반도체 수율 이슈"
+    assert result.execution.status == "succeeded"
+    assert result.execution.search_count == 1
+    plan_run = next(
+        run for run in result.execution.node_runs if run.node_name == "llm.fast.plan"
+    )
+    assert plan_run.status == "error"
+    assert plan_run.error_class == "TimeoutError"
+
+
+def test_fast_rag_retrieval_app_error_is_preserved_as_typed_failure():
+    async def fail(*_args):
+        raise AppError(
+            ErrorCode.INDEX_UNAVAILABLE,
+            "검색 인덱스를 사용할 수 없습니다.",
+            retryable=True,
+        )
+
+    retrieval = RecordingRetrieval(lambda *_: RetrievalResult())
+    retrieval.search = fail
+    result = asyncio.run(
+        FastRAGWorkflow(
+            retrieval,
+            ScriptedLLM(tasks=[{"query": "q", "source": "mail"}]),
         ).invoke(
             ChatRequest(user_id="kim", message="질문"),
             PolicyContext.from_user_id("kim"),
             None,
         )
     )
-    assert result.quality.limited_answer is True
-    assert result.evidence == []
-    assert "시간" in result.answer
+
+    assert result.execution.status == "failed"
+    assert result.execution.failure_stage == "retrieval"
+    assert result.execution.error_code == "INDEX_UNAVAILABLE"
+    assert result.execution.retryable is True
+    assert result.quality.citation_valid is None
+
+
+def test_fast_no_evidence_skips_rewrite_and_preserves_embedding_disclosure():
+    llm = ScriptedLLM(tasks=[{"query": "q", "source": "mail"}], sufficient=False)
+    retrieval = RecordingRetrieval(
+        lambda *_: RetrievalResult(
+            evidence=[],
+            mode="bm25",
+            embedding_error="EMBEDDING_UNAVAILABLE",
+            disclosures=[BM25_FALLBACK_DISCLOSURE],
+        )
+    )
+    result = asyncio.run(
+        FastRAGWorkflow(
+            retrieval,
+            llm,
+        ).invoke(
+            ChatRequest(user_id="kim", message="질문"),
+            PolicyContext.from_user_id("kim"),
+            None,
+        )
+    )
+
+    assert result.execution.status == "limited"
+    assert result.execution.error_code == "NO_EVIDENCE"
+    assert result.quality.retrieval_mode == "bm25"
+    assert result.disclosures == [BM25_FALLBACK_DISCLOSURE]
+    assert llm.text_calls == []
+    assert [run.node_name for run in result.execution.node_runs] == [
+        "fast.contextualize",
+        "fast.plan",
+        "llm.fast.plan",
+        "fast.retrieve",
+        "fast.grade",
+        "fast.generate",
+        "fast.validate",
+    ]
+    retrieve = next(
+        run for run in result.execution.node_runs if run.node_name == "fast.retrieve"
+    )
+    assert retrieve.output.search_count == 1
+    assert retrieve.output.evidence_count == 0
+    assert retrieve.output.retrieval_mode == "bm25"
+    assert retrieve.output.fallback_used is True
+
+
+def test_fast_rag_no_evidence_is_limited_without_false_citation_failure():
+    result = asyncio.run(
+        FastRAGWorkflow(
+            RecordingRetrieval(lambda *_: RetrievalResult(evidence=[])),
+            ScriptedLLM(tasks=[{"query": "q", "source": "mail"}]),
+        ).invoke(
+            ChatRequest(user_id="kim", message="질문"),
+            PolicyContext.from_user_id("kim"),
+            None,
+        )
+    )
+
+    assert result.execution.status == "limited"
+    assert result.execution.error_code == "NO_EVIDENCE"
+    assert result.execution.failure_stage == "retrieval"
+    assert result.quality.citation_valid is None
+
+
+def test_fast_rag_unsupported_answer_has_distinct_execution_error():
+    class SupportLLM(ScriptedLLM):
+        async def complete_model(self, system, user, schema):
+            if schema.__name__ == "ClaimSupportDecision":
+                return schema.model_validate(
+                    {"supported": False, "unsupported_claims": ["임의 주장"]}
+                )
+            return await super().complete_model(system, user, schema)
+
+    result = asyncio.run(
+        FastRAGWorkflow(
+            RecordingRetrieval(
+                lambda *_: RetrievalResult(evidence=[_evidence("doc")])
+            ),
+            SupportLLM(
+                tasks=[{"query": "q", "source": "mail"}],
+                sufficient=True,
+                texts=["임의 주장 [S1]"],
+            ),
+        ).invoke(
+            ChatRequest(user_id="kim", message="질문"),
+            PolicyContext.from_user_id("kim"),
+            None,
+        )
+    )
+
+    assert result.execution.status == "limited"
+    assert result.execution.error_code == "UNSUPPORTED_ANSWER"
+    assert result.execution.failure_stage == "support_validation"
 
 
 def test_valid_citation_cannot_publish_arbitrary_unsupported_claim():
@@ -445,6 +781,31 @@ def test_missing_information_cannot_inject_unknown_citation_into_final_answer():
     assert result.answer.startswith(INCOMPLETE_ANSWER_PREFIX)
     assert result.answer.endswith("확인 범위 답변 [S1]")
     assert CitationValidator().validate(result.answer, result.evidence, policy).valid
+
+
+def test_fast_workflow_canonicalizes_known_model_citation_variant():
+    retrieval = RecordingRetrieval(
+        lambda task, policy: RetrievalResult(
+            evidence=[_evidence("owned")], mode="hybrid"
+        )
+    )
+    llm = ScriptedLLM(
+        tasks=[{"query": "수율", "source": "mail"}],
+        sufficient=True,
+        texts=["확인된 사실 (s1)"],
+    )
+
+    result = asyncio.run(
+        FastRAGWorkflow(retrieval, llm).invoke(
+            ChatRequest(user_id="kim", message="질문"),
+            PolicyContext.from_user_id("kim"),
+            None,
+        )
+    )
+
+    assert result.answer == "확인된 사실 [S1]"
+    assert result.quality.citation_valid is True
+    assert result.execution.status == "succeeded"
 
 
 def test_incomplete_evidence_limitation_is_preserved_during_revision():

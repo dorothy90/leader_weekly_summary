@@ -13,6 +13,7 @@ from app.api.routes.health import router as health_router
 from app.api.routes.research import router as research_router
 from app.domain.errors import AppError, ErrorCode
 from app.observability.tracing import TraceEvent, emit_trace, hash_trace_value
+from app.observability.node_runs import ensure_node_recorder
 
 _SAFE_MESSAGES = {
     ErrorCode.INVALID_USER_ID: "요청을 확인할 수 없습니다.",
@@ -23,6 +24,9 @@ _SAFE_MESSAGES = {
     ErrorCode.NO_EVIDENCE: "확인 가능한 근거가 없습니다.",
     ErrorCode.BUDGET_EXCEEDED: "요청 처리 한도를 초과했습니다.",
     ErrorCode.JOB_CANCELLED: "조사 작업이 취소되었습니다.",
+    ErrorCode.CONVERSATION_CONFLICT: (
+        "대화가 동시에 갱신되었습니다. 다시 시도해주세요."
+    ),
     ErrorCode.DEPENDENCY_UNAVAILABLE: "요청한 서비스를 현재 사용할 수 없습니다.",
 }
 _STATUS_CODES = {
@@ -34,6 +38,7 @@ _STATUS_CODES = {
     ErrorCode.NO_EVIDENCE: 404,
     ErrorCode.BUDGET_EXCEEDED: 429,
     ErrorCode.JOB_CANCELLED: 409,
+    ErrorCode.CONVERSATION_CONFLICT: 409,
     ErrorCode.DEPENDENCY_UNAVAILABLE: 503,
 }
 
@@ -75,7 +80,8 @@ def create_app(container) -> FastAPI:
         status = "ok"
         error_class = None
         try:
-            response = await call_next(request)
+            with ensure_node_recorder():
+                response = await call_next(request)
             if response.status_code >= 500:
                 status = "error"
             response.headers["x-trace-id"] = request.state.trace_id

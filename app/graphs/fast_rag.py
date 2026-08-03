@@ -1,4 +1,6 @@
 import asyncio
+from contextvars import ContextVar
+from dataclasses import dataclass
 import re
 from time import perf_counter
 from typing import Literal, TypedDict
@@ -10,22 +12,43 @@ from pydantic import BaseModel, Field
 from app.domain.chat import (
     BM25_FALLBACK_DISCLOSURE,
     ChatRequest,
+    ExecutionMetadata,
     FastRAGResult,
     QualityStatus,
 )
+from app.graphs.conversation import (
+    build_conversation_state,
+    contextualize_request,
+    eligible_prior_evidence,
+    message_dicts,
+    render_messages,
+)
 from app.domain.evidence import Evidence, SearchTask
+from app.domain.errors import AppError
 from app.domain.policy import PolicyContext
-from app.graphs.general_intents import IDENTITY_ANSWER, is_identity_question
+from app.graphs.general_intents import (
+    IDENTITY_ANSWER,
+    declared_name,
+    is_identity_question,
+    is_name_recall_question,
+    remembered_name,
+)
 from app.llm.prompts import (
     CONTEXTUALIZE_SYSTEM,
     GENERAL_SYSTEM,
     GENERATE_SYSTEM,
     GRADE_SYSTEM,
+    NO_EVIDENCE_GENERAL_SYSTEM,
     PLAN_SYSTEM,
     REVISE_SYSTEM,
     REWRITE_SYSTEM,
 )
 from app.observability.tracing import TraceEvent, emit_trace, hash_trace_value
+from app.observability.node_runs import (
+    ensure_node_recorder,
+    instrument_node,
+    record_node,
+)
 from app.security.citations import CitationValidator
 from app.security.redaction import opaque_identifier, sanitize_text
 
@@ -36,8 +59,37 @@ MAX_EVIDENCE = 8
 MAX_EVIDENCE_TOKENS = 16_000
 LIMITED_ANSWER = "확인 가능한 근거가 없어 답변할 수 없습니다."
 INVALID_ANSWER = "근거로 확인된 내용만으로는 답변을 제공할 수 없습니다."
-TIMEOUT_ANSWER = "답변 시간 한도를 초과해 확인된 답변을 제공할 수 없습니다."
 INCOMPLETE_ANSWER_PREFIX = "제공된 근거가 불완전하여 확인된 범위만 답변합니다."
+
+
+@dataclass
+class _ExecutionTracker:
+    stage: str = "contextualization"
+    search_count: int = 0
+    evidence_count: int = 0
+    retrieval_mode: str = "not_started"
+    embedding_fallback: bool = False
+
+
+_TRACKER: ContextVar[_ExecutionTracker | None] = ContextVar(
+    "fast_rag_execution_tracker", default=None
+)
+
+
+def _track(*, stage=None, searches=None, evidence=None, mode=None, fallback=None) -> None:
+    tracker = _TRACKER.get()
+    if tracker is None:
+        return
+    if stage is not None:
+        tracker.stage = stage
+    if searches is not None:
+        tracker.search_count = searches
+    if evidence is not None:
+        tracker.evidence_count = evidence
+    if mode is not None:
+        tracker.retrieval_mode = mode
+    if fallback is not None:
+        tracker.embedding_fallback = fallback
 
 
 class RetrievalPlan(BaseModel):
@@ -143,24 +195,37 @@ def _with_limitation(answer: str, state: FastState) -> str:
 
 
 class FastRAGWorkflow:
-    def __init__(self, retrieval, llm, trace_sink=None, deadline_seconds: float = 20):
+    def __init__(
+        self,
+        retrieval,
+        llm,
+        trace_sink=None,
+        model_step_timeout_seconds: float = 150,
+        general_timeout_seconds: float = 150,
+    ):
         self.retrieval = retrieval
         self.llm = llm
         self.validator = CitationValidator()
         self.trace_sink = trace_sink
-        self.deadline_seconds = max(0.001, float(deadline_seconds))
+        self.model_step_timeout_seconds = max(
+            0.001, float(model_step_timeout_seconds)
+        )
+        self.general_timeout_seconds = max(0.001, float(general_timeout_seconds))
         self.graph = self._build()
 
     def _build(self):
         graph = StateGraph(FastState)
-        graph.add_node("contextualize", self._contextualize)
-        graph.add_node("plan", self._plan)
-        graph.add_node("retrieve", self._retrieve)
-        graph.add_node("grade", self._grade)
-        graph.add_node("rewrite", self._rewrite)
-        graph.add_node("generate", self._generate)
-        graph.add_node("validate", self._validate)
-        graph.add_node("revise", self._revise)
+        graph.add_node(
+            "contextualize",
+            instrument_node("fast.contextualize", self._contextualize),
+        )
+        graph.add_node("plan", instrument_node("fast.plan", self._plan))
+        graph.add_node("retrieve", instrument_node("fast.retrieve", self._retrieve))
+        graph.add_node("grade", instrument_node("fast.grade", self._grade))
+        graph.add_node("rewrite", instrument_node("fast.rewrite", self._rewrite))
+        graph.add_node("generate", instrument_node("fast.generate", self._generate))
+        graph.add_node("validate", instrument_node("fast.validate", self._validate))
+        graph.add_node("revise", instrument_node("fast.revise", self._revise))
         graph.add_edge(START, "contextualize")
         graph.add_edge("contextualize", "plan")
         graph.add_edge("plan", "retrieve")
@@ -181,37 +246,35 @@ class FastRAGWorkflow:
         return graph.compile()
 
     async def _contextualize(self, state: FastState) -> dict:
+        _track(stage="contextualization")
         request = state["request"]
         memory = state.get("conversation")
-        messages = getattr(memory, "messages", None)
-        if not messages:
-            return {
-                "standalone_question": sanitize_text(request.message) or "메일 질문"
-            }
-        recent = "\n".join(
-            f"{sanitize_text(str(item.get('role', '')))}: "
-            f"{sanitize_text(str(item.get('content', '')))}"
-            for item in messages[-6:]
-            if isinstance(item, dict)
-        )
-        standalone = await self.llm.complete_text(
-            CONTEXTUALIZE_SYSTEM,
-            f"History:\n{recent}\nLatest:\n{sanitize_text(request.message)}",
-        )
+        try:
+            async with asyncio.timeout(self.model_step_timeout_seconds):
+                contextualized = await contextualize_request(
+                    self.llm,
+                    request,
+                    memory,
+                    system=CONTEXTUALIZE_SYSTEM,
+                )
+        except Exception:
+            contextualized = request
         return {
-            "standalone_question": sanitize_text(standalone)
-            or sanitize_text(request.message)
+            "standalone_question": sanitize_text(contextualized.message)
             or "메일 질문"
         }
 
     async def _plan(self, state: FastState) -> dict:
+        _track(stage="planning")
         request = state["request"]
         try:
-            plan = await self.llm.complete_model(
-                PLAN_SYSTEM,
-                state["standalone_question"],
-                RetrievalPlan,
-            )
+            async with record_node("llm.fast.plan"):
+                async with asyncio.timeout(self.model_step_timeout_seconds):
+                    plan = await self.llm.complete_model(
+                        PLAN_SYSTEM,
+                        state["standalone_question"],
+                        RetrievalPlan,
+                    )
             planned_tasks = plan.tasks[:MAX_SEARCHES]
         except Exception:
             planned_tasks = [SearchTask(query=state["standalone_question"])]
@@ -225,9 +288,16 @@ class FastRAGWorkflow:
             )
             for task in planned_tasks
         ]
+        prior = []
+        for item in eligible_prior_evidence(
+            state.get("conversation"), state["policy"], limit=MAX_EVIDENCE
+        ):
+            sanitized = _sanitize_evidence(item)
+            if sanitized:
+                prior.append(sanitized)
         return {
             "tasks": tasks,
-            "evidence": [],
+            "evidence": prior,
             "retrieval_mode": "hybrid",
             "searches": 0,
             "rewrites": 0,
@@ -236,8 +306,11 @@ class FastRAGWorkflow:
         }
 
     async def _retrieve(self, state: FastState) -> dict:
+        _track(stage="retrieval")
         remaining = max(0, MAX_SEARCHES - state["searches"])
         tasks = state["tasks"][:remaining]
+        reserved_searches = state["searches"] + len(tasks)
+        _track(searches=reserved_searches, mode="hybrid")
         results = await asyncio.gather(
             *(self.retrieval.search(task, state["policy"]) for task in tasks)
         )
@@ -270,14 +343,22 @@ class FastRAGWorkflow:
             item.model_copy(update={"evidence_id": f"S{index}"})
             for index, item in enumerate(list(unique.values())[:MAX_EVIDENCE], 1)
         ]
+        searches = reserved_searches
+        _track(
+            searches=searches,
+            evidence=len(evidence),
+            mode=mode,
+            fallback=BM25_FALLBACK_DISCLOSURE in disclosures,
+        )
         return {
             "evidence": evidence,
             "retrieval_mode": mode,
-            "searches": state["searches"] + len(tasks),
+            "searches": searches,
             "disclosures": disclosures,
         }
 
     async def _grade(self, state: FastState) -> dict:
+        _track(stage="grading")
         if not state["evidence"]:
             return {"sufficient": False, "missing_information": ["mail evidence"]}
         grade = await self.llm.complete_model(
@@ -293,7 +374,8 @@ class FastRAGWorkflow:
     @staticmethod
     def _after_grade(state: FastState) -> Literal["rewrite", "generate"]:
         if (
-            state["sufficient"]
+            not state["evidence"]
+            or state["sufficient"]
             or state["rewrites"] >= MAX_REWRITES
             or state["searches"] >= MAX_SEARCHES
         ):
@@ -301,6 +383,7 @@ class FastRAGWorkflow:
         return "rewrite"
 
     async def _rewrite(self, state: FastState) -> dict:
+        _track(stage="planning")
         query = await self.llm.complete_text(
             REWRITE_SYSTEM,
             (
@@ -318,6 +401,7 @@ class FastRAGWorkflow:
         return {"tasks": tasks, "rewrites": state["rewrites"] + 1}
 
     async def _generate(self, state: FastState) -> dict:
+        _track(stage="generation")
         if not state["evidence"]:
             return {"answer": LIMITED_ANSWER}
         status = "complete" if state.get("sufficient", False) else "incomplete"
@@ -327,7 +411,7 @@ class FastRAGWorkflow:
         answer = await self.llm.complete_text(
             GENERATE_SYSTEM,
             (
-                f"Question: {sanitize_text(state['request'].message)}\n"
+                f"Question: {sanitize_text(state['standalone_question'])}\n"
                 f"Evidence status: {status}\nMissing information: {missing}\n"
                 "Evidence:\n"
                 f"{_evidence_context(state['evidence'])}"
@@ -336,9 +420,11 @@ class FastRAGWorkflow:
         return {"answer": sanitize_text(answer)}
 
     def _validate(self, state: FastState) -> dict:
+        _track(stage="citation_validation")
         answer = _with_limitation(state["answer"], state)
         if not state["evidence"]:
             return {"answer": answer, "citation_valid": True}
+        answer = self.validator.normalize(answer, state["evidence"])
         validation = self.validator.validate(
             answer,
             state["evidence"],
@@ -353,6 +439,7 @@ class FastRAGWorkflow:
         return "revise"
 
     async def _revise(self, state: FastState) -> dict:
+        _track(stage="citation_validation")
         status = "complete" if state.get("sufficient", False) else "incomplete"
         missing = ", ".join(
             sanitize_text(str(item)) for item in state.get("missing_information", [])
@@ -376,18 +463,55 @@ class FastRAGWorkflow:
         policy: PolicyContext,
         conversation: object | None,
     ) -> FastRAGResult:
+        with ensure_node_recorder() as recorder:
+            result = await self._invoke_recorded(request, policy, conversation)
+            if result.execution is not None:
+                result = result.model_copy(
+                    update={
+                        "execution": result.execution.model_copy(
+                            update={"node_runs": recorder.snapshot()}
+                        )
+                    }
+                )
+            return result
+
+    async def _invoke_recorded(
+        self,
+        request: ChatRequest,
+        policy: PolicyContext,
+        conversation: object | None,
+    ) -> FastRAGResult:
         started = perf_counter()
+        tracker = _ExecutionTracker()
+        tracker_token = _TRACKER.set(tracker)
         try:
-            async with asyncio.timeout(self.deadline_seconds):
-                result = await self._invoke(request, policy, conversation)
-        except TimeoutError:
+            result = await self._invoke(request, policy, conversation)
+        except AppError as error:
             result = FastRAGResult(
-                answer=TIMEOUT_ANSWER,
+                answer="요청 실행에 실패했습니다.",
                 evidence=[],
                 quality=QualityStatus(
-                    citation_valid=False,
+                    citation_valid=None,
                     limited_answer=True,
-                    retrieval_mode="hybrid",
+                    retrieval_mode=(
+                        tracker.retrieval_mode
+                        if tracker.search_count
+                        else "not_started"
+                    ),
+                ),
+                execution=ExecutionMetadata(
+                    status="failed",
+                    failure_stage=tracker.stage,
+                    error_code=error.code.value,
+                    retryable=error.retryable,
+                    search_count=tracker.search_count,
+                    evidence_count=tracker.evidence_count,
+                    include_in_llm_history=False,
+                ),
+                disclosures=(
+                    [BM25_FALLBACK_DISCLOSURE]
+                    if tracker.embedding_fallback
+                    else []
                 ),
             )
         except Exception as error:
@@ -410,6 +534,17 @@ class FastRAGWorkflow:
                 ),
             )
             raise
+        finally:
+            _TRACKER.reset(tracker_token)
+        elapsed_ms = int((perf_counter() - started) * 1000)
+        if result.execution is not None:
+            result = result.model_copy(
+                update={
+                    "execution": result.execution.model_copy(
+                        update={"duration_ms": elapsed_ms}
+                    )
+                }
+            )
         emit_trace(
             self.trace_sink,
             TraceEvent(
@@ -440,25 +575,17 @@ class FastRAGWorkflow:
     ) -> FastRAGResult:
         if request.user_id != policy.user_id:
             raise ValueError("request owner and policy owner must match exactly")
-        try:
-            async with asyncio.timeout(self.deadline_seconds):
-                state = await self.graph.ainvoke(
-                    {
-                        "request": request,
-                        "policy": policy,
-                        "conversation": conversation,
-                    }
-                )
-        except TimeoutError:
-            return FastRAGResult(
-                answer=TIMEOUT_ANSWER,
-                evidence=[],
-                quality=QualityStatus(
-                    citation_valid=False, limited_answer=True, retrieval_mode="hybrid"
-                ),
-            )
+        state = await self.graph.ainvoke(
+            {
+                "request": request,
+                "policy": policy,
+                "conversation": conversation,
+            }
+        )
         evidence = state.get("evidence", [])
-        answer = sanitize_text(state["answer"])
+        answer = self.validator.normalize(
+            sanitize_text(state["answer"]), evidence
+        )
         disclosures = state.get("disclosures", [])
         if disclosures:
             answer = f"{answer}\n\n" + "\n".join(disclosures)
@@ -468,7 +595,9 @@ class FastRAGWorkflow:
             else True
         )
         support_valid = citation_valid
+        support_failed = False
         if evidence and citation_valid:
+            _track(stage="support_validation")
             try:
                 support = await self.llm.complete_model(
                     "Check each factual claim against the supplied evidence. "
@@ -481,6 +610,7 @@ class FastRAGWorkflow:
             except Exception:
                 support_valid = False
             if not support_valid:
+                support_failed = True
                 answer = _with_limitation(INVALID_ANSWER, state)
                 if disclosures:
                     answer = f"{answer}\n\n" + "\n".join(disclosures)
@@ -492,6 +622,44 @@ class FastRAGWorkflow:
             answer = _with_limitation(INVALID_ANSWER, state)
             if disclosures:
                 answer = f"{answer}\n\n" + "\n".join(disclosures)
+        if not evidence:
+            execution = ExecutionMetadata(
+                status="limited",
+                failure_stage="retrieval",
+                error_code="NO_EVIDENCE",
+                search_count=state.get("searches", 0),
+                evidence_count=0,
+                include_in_llm_history=False,
+            )
+            citation_valid = None
+        elif not citation_valid:
+            execution = ExecutionMetadata(
+                status="limited",
+                failure_stage=(
+                    "support_validation" if support_failed else "citation_validation"
+                ),
+                error_code=(
+                    "UNSUPPORTED_ANSWER" if support_failed else "CITATION_INVALID"
+                ),
+                search_count=state.get("searches", 0),
+                evidence_count=len(evidence),
+                include_in_llm_history=False,
+            )
+        elif not state.get("sufficient", False):
+            execution = ExecutionMetadata(
+                status="limited",
+                failure_stage="grading",
+                error_code="INSUFFICIENT_EVIDENCE",
+                search_count=state.get("searches", 0),
+                evidence_count=len(evidence),
+                include_in_llm_history=False,
+            )
+        else:
+            execution = ExecutionMetadata(
+                status="succeeded",
+                search_count=state.get("searches", 0),
+                evidence_count=len(evidence),
+            )
         return FastRAGResult(
             answer=answer,
             evidence=evidence,
@@ -501,18 +669,106 @@ class FastRAGWorkflow:
                 retrieval_mode=state.get("retrieval_mode", "hybrid"),
             ),
             disclosures=disclosures,
+            execution=execution,
         )
 
-    async def respond_general(self, request: ChatRequest) -> FastRAGResult:
+    async def contextualize_request(
+        self, request: ChatRequest, conversation: object | None = None
+    ) -> ChatRequest:
+        return await contextualize_request(
+            self.llm,
+            request,
+            conversation,
+            system=CONTEXTUALIZE_SYSTEM,
+        )
+
+    async def respond_general(
+        self, request: ChatRequest, conversation: object | None = None
+    ) -> FastRAGResult:
+        history = len(getattr(conversation, "messages", None) or [])
+        with ensure_node_recorder() as recorder:
+            async with record_node(
+                "general.generate",
+                input_metrics={"history_messages": min(20, history)},
+            ):
+                result = await self._respond_general_recorded(request, conversation)
+            if result.execution is not None:
+                result = result.model_copy(
+                    update={
+                        "execution": result.execution.model_copy(
+                            update={"node_runs": recorder.snapshot()}
+                        )
+                    }
+                )
+        return result
+
+    async def respond_without_evidence(
+        self, request: ChatRequest, conversation: object | None = None
+    ) -> FastRAGResult:
+        history = len(getattr(conversation, "messages", None) or [])
+        with ensure_node_recorder() as recorder:
+            async with record_node(
+                "general.no_evidence_fallback",
+                input_metrics={"history_messages": min(20, history)},
+            ) as run:
+                result = await self._respond_general_recorded(
+                    request,
+                    conversation,
+                    system=NO_EVIDENCE_GENERAL_SYSTEM,
+                    deterministic_intents=False,
+                    trace_node_name="fast_rag.no_evidence_fallback",
+                    prompt_version="no-evidence-general-v1",
+                )
+                run.update(output_metrics={"fallback_used": True})
+            if result.execution is not None:
+                result = result.model_copy(
+                    update={
+                        "execution": result.execution.model_copy(
+                            update={"node_runs": recorder.snapshot()}
+                        )
+                    }
+                )
+            return result
+
+    async def _respond_general_recorded(
+        self,
+        request: ChatRequest,
+        conversation: object | None = None,
+        *,
+        system: str = GENERAL_SYSTEM,
+        deterministic_intents: bool = True,
+        trace_node_name: str = "fast_rag.general",
+        prompt_version: str = "general-v1",
+    ) -> FastRAGResult:
         started = perf_counter()
         try:
-            if is_identity_question(request.message):
+            if deterministic_intents and is_identity_question(request.message):
                 answer = IDENTITY_ANSWER
+            elif deterministic_intents and (name := declared_name(request.message)):
+                answer = f"반갑습니다, {name}님. 이름을 기억하겠습니다."
+            elif deterministic_intents and is_name_recall_question(request.message) and (
+                name := remembered_name(conversation)
+            ):
+                answer = f"{name}님이라고 하셨습니다."
             else:
-                answer = await self.llm.complete_text(
-                    GENERAL_SYSTEM,
-                    sanitize_text(request.message),
+                messages = message_dicts(
+                    build_conversation_state(request, conversation)
                 )
+                if conversation is not None and hasattr(
+                    self.llm, "complete_messages"
+                ):
+                    async with asyncio.timeout(self.general_timeout_seconds):
+                        answer = await self.llm.complete_messages(
+                            system, messages
+                        )
+                else:
+                    user = (
+                        render_messages(messages)
+                        if conversation is not None
+                        else sanitize_text(request.message)
+                    )
+                    async with asyncio.timeout(self.general_timeout_seconds):
+                        answer = await self.llm.complete_text(system, user)
             result = FastRAGResult(
                 answer=sanitize_text(answer),
                 evidence=[],
@@ -521,17 +777,21 @@ class FastRAGWorkflow:
                     limited_answer=False,
                     retrieval_mode="not_used",
                 ),
+                execution=ExecutionMetadata(
+                    status="succeeded",
+                    duration_ms=int((perf_counter() - started) * 1000),
+                ),
             )
         except Exception as error:
             emit_trace(
                 self.trace_sink,
                 TraceEvent(
                     trace_id=uuid.uuid4().hex,
-                    node_name="fast_rag.general",
+                    node_name=trace_node_name,
                     duration_ms=int((perf_counter() - started) * 1000),
                     status="error",
                     index_version_hash=hash_trace_value("none"),
-                    prompt_version_hash=hash_trace_value("general-v1"),
+                    prompt_version_hash=hash_trace_value(prompt_version),
                     model_hash=hash_trace_value(
                         str(getattr(self.llm, "model", "none"))
                     ),
@@ -541,16 +801,35 @@ class FastRAGWorkflow:
                     error_class=type(error).__name__,
                 ),
             )
-            raise
+            return FastRAGResult(
+                answer="일반 응답 모델을 현재 사용할 수 없습니다.",
+                evidence=[],
+                quality=QualityStatus(
+                    citation_valid=None,
+                    limited_answer=True,
+                    retrieval_mode="not_started",
+                ),
+                execution=ExecutionMetadata(
+                    status="failed",
+                    failure_stage="generation",
+                    error_code=(
+                        "LLM_TIMEOUT" if isinstance(error, TimeoutError)
+                        else "LLM_UNAVAILABLE"
+                    ),
+                    retryable=True,
+                    duration_ms=int((perf_counter() - started) * 1000),
+                    include_in_llm_history=False,
+                ),
+            )
         emit_trace(
             self.trace_sink,
             TraceEvent(
                 trace_id=uuid.uuid4().hex,
-                node_name="fast_rag.general",
+                node_name=trace_node_name,
                 duration_ms=int((perf_counter() - started) * 1000),
                 status="ok",
                 index_version_hash=hash_trace_value("none"),
-                prompt_version_hash=hash_trace_value("general-v1"),
+                prompt_version_hash=hash_trace_value(prompt_version),
                 model_hash=hash_trace_value(str(getattr(self.llm, "model", "none"))),
                 owner_hash=hash_trace_value(request.user_id),
                 query_hash=hash_trace_value(request.message),

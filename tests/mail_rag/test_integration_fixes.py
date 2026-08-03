@@ -14,7 +14,11 @@ assert tuple(map(int, motor.version.split('.')[:2])) >= (3, 7)
 assert tuple(map(int, pymongo.version.split('.')[:2])) == (4, 15)
 from app.api.dependencies import build_container
 from app.config.settings import Settings
-container = build_container(Settings(mongo_uri='mongodb://127.0.0.1:1'))
+from pydantic import SecretStr
+container = build_container(Settings(
+    mongo_uri='mongodb://127.0.0.1:1',
+    openrouter_api_key=SecretStr('test-openrouter-key'),
+))
 assert container.fast is not None and container.jobs is not None
 """
     result = subprocess.run(

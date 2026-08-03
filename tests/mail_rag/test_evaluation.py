@@ -500,7 +500,7 @@ def test_documentation_covers_security_architecture_budgets_and_runbooks():
         "two rounds",
         "four concurrent searches",
         "32 evidence objects",
-        "120 seconds",
+        "150-second",
         "backfill_user_id.py",
         "--apply",
         "backfill_parent_child.py",

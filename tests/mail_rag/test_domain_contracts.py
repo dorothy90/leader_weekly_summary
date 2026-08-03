@@ -4,7 +4,12 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from app.domain.chat import ChatRequest, QualityStatus, RoutingDiagnostics
+from app.domain.chat import (
+    ChatRequest,
+    ExecutionMetadata,
+    QualityStatus,
+    RoutingDiagnostics,
+)
 from app.domain.evidence import Evidence
 from app.domain.policy import PolicyContext
 from app.domain.research import ResearchJob, ResearchStatus
@@ -48,6 +53,29 @@ def test_routing_diagnostics_and_not_used_retrieval_are_bounded():
 
     assert routing.route == "general"
     assert quality.retrieval_mode == "not_used"
+
+
+def test_execution_metadata_distinguishes_unstarted_timeout_from_citation_failure():
+    execution = ExecutionMetadata(
+        status="failed",
+        failure_stage="planning",
+        error_code="LLM_TIMEOUT",
+        retryable=True,
+        search_count=0,
+        evidence_count=0,
+        duration_ms=20_003,
+        include_in_llm_history=False,
+    )
+    quality = QualityStatus(
+        citation_valid=None,
+        limited_answer=False,
+        retrieval_mode="not_started",
+    )
+
+    assert execution.error_code == "LLM_TIMEOUT"
+    assert execution.failure_stage == "planning"
+    assert quality.citation_valid is None
+    assert quality.retrieval_mode == "not_started"
 
 
 @pytest.mark.parametrize("week", ["26-8", "20260-8", "2026-008"])

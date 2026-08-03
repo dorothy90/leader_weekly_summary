@@ -12,6 +12,7 @@ class ServiceContainer:
     mail_content: Any = None
     traces: Any = None
     readiness: Any = None
+    corpus_info: Any = None
 
 
 class DependencyReadiness:
@@ -74,14 +75,21 @@ def build_ai_gateways(settings):
     from app.llm.gateway import OpenAILLMGateway
     from app.retrieval.embedding import OpenAIEmbeddingGateway
 
-    provider = settings.resolve_ai_provider()
-    ai = AsyncOpenAI(
-        api_key=provider.api_key.get_secret_value(),
-        base_url=provider.base_url or None,
+    llm_endpoint = settings.resolve_llm_endpoint()
+    embedding_endpoint = settings.resolve_embedding_endpoint()
+    llm_client = AsyncOpenAI(
+        api_key=llm_endpoint.api_key.get_secret_value(),
+        base_url=llm_endpoint.base_url,
+        timeout=llm_endpoint.timeout_seconds,
+    )
+    embedding_client = AsyncOpenAI(
+        api_key=embedding_endpoint.api_key.get_secret_value(),
+        base_url=embedding_endpoint.base_url,
+        timeout=embedding_endpoint.timeout_seconds,
     )
     return (
-        OpenAILLMGateway(ai, provider.llm_model),
-        OpenAIEmbeddingGateway(ai, provider.embedding_model),
+        OpenAILLMGateway(llm_client, llm_endpoint.model),
+        OpenAIEmbeddingGateway(embedding_client, embedding_endpoint.model),
     )
 
 
@@ -90,14 +98,17 @@ def build_container(settings=None, trace_sink=None) -> ServiceContainer:
     from motor.motor_asyncio import AsyncIOMotorClient
 
     from app.config.settings import get_settings
-    from app.graphs.fast_rag import FastRAGWorkflow
     from app.content.mail import MailContentStore
-    from app.graphs.deep_research import DeepCoordinator
+    from app.graphs.conversation import contextualize_request
+    from app.graphs.deep_research import DeepResearchWorkflow
+    from app.graphs.fast_rag import FastRAGWorkflow
     from app.graphs.router import route_request
+    from app.observability.tracing import NoOpTraceSink
+    from app.observability.node_runs import record_node
     from app.persistence.conversations import MongoConversationStore
     from app.persistence.research_jobs import MongoResearchJobStore
-    from app.observability.tracing import NoOpTraceSink
     from app.retrieval.opensearch import AsyncOpenSearchGateway
+    from app.retrieval.corpus_info import CorpusInfoService
     from app.retrieval.service import RetrievalService
 
     current = settings or get_settings()
@@ -118,8 +129,21 @@ def build_container(settings=None, trace_sink=None) -> ServiceContainer:
     jobs = MongoResearchJobStore(database.research_jobs)
 
     class RouterService:
-        async def route(self, request):
-            return await route_request(request, llm)
+        async def route(self, request, conversation=None):
+            return await route_request(
+                request,
+                llm,
+                conversation,
+                timeout_seconds=current.openrouter_request_timeout_seconds,
+            )
+
+        async def contextualize_request(self, request, conversation=None):
+            history = len(getattr(conversation, "messages", None) or [])
+            async with record_node(
+                "router.contextualize",
+                input_metrics={"history_messages": min(20, history)},
+            ):
+                return await contextualize_request(llm, request, conversation)
 
     return ServiceContainer(
         router=RouterService(),
@@ -127,9 +151,14 @@ def build_container(settings=None, trace_sink=None) -> ServiceContainer:
             retrieval,
             llm,
             trace_sink=traces,
-            deadline_seconds=current.fast_deadline_seconds,
+            model_step_timeout_seconds=current.openrouter_request_timeout_seconds,
+            general_timeout_seconds=current.openrouter_request_timeout_seconds,
         ),
-        deep=DeepCoordinator(jobs),
+        deep=DeepResearchWorkflow(
+            retrieval,
+            llm,
+            trace_sink=traces,
+        ),
         conversations=MongoConversationStore(database.conversations),
         jobs=jobs,
         mail_content=MailContentStore(current.mail_content_root),
@@ -139,4 +168,5 @@ def build_container(settings=None, trace_sink=None) -> ServiceContainer:
             mongo_client,
             [current.mail_child_index, current.mail_parent_index, current.wiki_index],
         ),
+        corpus_info=CorpusInfoService(search, current.mail_child_index),
     )

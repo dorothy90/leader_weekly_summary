@@ -19,11 +19,41 @@ class CitationValidation(BaseModel):
 class CitationValidator:
     """Validate citation targets without judging semantic entailment.
 
-    A citation target must use ``[S<digits>]`` syntax, exist exactly once in
-    the supplied evidence, and have a ``user_id`` exactly equal to the policy
-    owner. Grounded synthesis and whether evidence supports an answer's claims
-    are responsibilities of later pipeline stages.
+    A citation target is normalized to ``[S<digits>]``, must exist exactly once
+    in the supplied evidence, and must have a ``user_id`` exactly equal to the
+    policy owner. Grounded synthesis and whether evidence supports an answer's
+    claims are responsibilities of later pipeline stages.
     """
+
+    _MODEL_LABEL_PATTERNS = (
+        re.compile(r"\[\s*[sS](\d+)\s*\]"),
+        re.compile(r"\[\s*(\d+)\s*\]"),
+        re.compile(r"【\s*[sS](\d+)\s*】"),
+        re.compile(r"\(\s*[sS](\d+)\s*\)"),
+    )
+
+    def normalize(self, answer: str, evidence: list[Evidence]) -> str:
+        """Canonicalize model citation variants only for known evidence IDs."""
+        allowed_ids = {item.evidence_id for item in evidence}
+
+        def replace(match: re.Match[str]) -> str:
+            evidence_id = f"S{match.group(1)}"
+            return f"[{evidence_id}]" if evidence_id in allowed_ids else match.group(0)
+
+        normalized = answer
+        for pattern in self._MODEL_LABEL_PATTERNS:
+            normalized = pattern.sub(replace, normalized)
+        return normalized
+
+    def _extract_ids(self, answer: str) -> list[str]:
+        matches: list[tuple[int, str]] = []
+        for pattern in self._MODEL_LABEL_PATTERNS:
+            matches.extend(
+                (match.start(), f"S{match.group(1)}")
+                for match in pattern.finditer(answer)
+            )
+        matches.sort(key=lambda item: item[0])
+        return list(dict.fromkeys(evidence_id for _, evidence_id in matches))
 
     def validate(
         self,
@@ -31,7 +61,7 @@ class CitationValidator:
         evidence: list[Evidence],
         policy: PolicyContext,
     ) -> CitationValidation:
-        cited_ids = list(dict.fromkeys(re.findall(r"\[(S\d+)\]", answer)))
+        cited_ids = self._extract_ids(answer)
         evidence_by_id: dict[str, list[Evidence]] = {}
         for item in evidence:
             evidence_by_id.setdefault(item.evidence_id, []).append(item)

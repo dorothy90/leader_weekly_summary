@@ -52,8 +52,12 @@ class TraceEvent(BaseModel):
     )
     job_hash: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     evidence_count: int = Field(default=0, ge=0, le=32)
-    retrieval_mode: Literal["hybrid", "bm25"] | None = None
-    route: Literal["fast", "deep", "clarify", "general"] | None = None
+    retrieval_mode: Literal[
+        "hybrid", "bm25", "not_used", "not_started"
+    ] | None = None
+    route: Literal[
+        "fast", "deep", "clarify", "general", "diagnostic", "corpus_info"
+    ] | None = None
     attempt: int = Field(default=0, ge=0, le=100)
     error_class: str | None = Field(
         default=None,

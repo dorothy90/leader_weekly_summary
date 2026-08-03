@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from app.domain.chat import (
     BM25_FALLBACK_DISCLOSURE,
     ChatRequest,
+    ExecutionMetadata,
     normalize_bm25_fallback,
 )
 from app.domain.evidence import Evidence, RetrievalFilters, SearchTask
@@ -17,6 +18,7 @@ from app.domain.policy import PolicyContext
 from app.domain.research import MAX_RESEARCH_REPORT_BYTES, RESEARCH_ABSTENTION
 from app.persistence.conversations import sanitize_evidence_for_memory
 from app.observability.tracing import TraceEvent, emit_trace, hash_trace_value
+from app.observability.node_runs import ensure_node_recorder, instrument_node
 from app.security.citations import CitationValidator
 from app.security.redaction import sanitize_text
 
@@ -30,8 +32,6 @@ MAX_MODEL_INPUT_BYTES = 32_000
 MAX_CONTEXT_TOKENS = MAX_MODEL_INPUT_BYTES
 MAX_REPORT_BYTES = MAX_RESEARCH_REPORT_BYTES
 MAX_REPORT_REVISIONS = 1
-MAX_ELAPSED_SECONDS = 120
-
 INVALID_REPORT = "조사 근거의 인용을 검증하지 못해 보고서를 제공할 수 없습니다."
 
 
@@ -66,6 +66,7 @@ class DeepResearchResult(BaseModel):
     rounds: int = Field(ge=0, le=MAX_ROUNDS)
     disclosures: list[str] = Field(default_factory=list, max_length=4)
     citation_valid: bool = False
+    execution: ExecutionMetadata | None = None
 
 
 class DeepState(TypedDict, total=False):
@@ -126,7 +127,12 @@ def _bounded_model_input(system: str, sections: list[str]) -> str:
 class DeepResearchWorkflow:
     """Finite Deep-only research graph using the shared retrieval service."""
 
-    def __init__(self, retrieval, llm, trace_sink=None):
+    def __init__(
+        self,
+        retrieval,
+        llm,
+        trace_sink=None,
+    ):
         self.retrieval = retrieval
         self.llm = llm
         self.validator = CitationValidator()
@@ -135,10 +141,13 @@ class DeepResearchWorkflow:
 
     def _build(self):
         graph = StateGraph(DeepState)
-        graph.add_node("plan", self._plan)
-        graph.add_node("research", self._research)
-        graph.add_node("gap", self._gap)
-        graph.add_node("synthesize", self._synthesize)
+        graph.add_node("plan", instrument_node("deep.plan", self._plan))
+        graph.add_node("research", instrument_node("deep.research", self._research))
+        graph.add_node("gap", instrument_node("deep.gap", self._gap))
+        graph.add_node(
+            "synthesize",
+            instrument_node("deep.synthesize", self._synthesize),
+        )
         graph.add_edge(START, "plan")
         graph.add_edge("plan", "research")
         graph.add_edge("research", "gap")
@@ -431,6 +440,7 @@ class DeepResearchWorkflow:
                 sanitize_text(await self.llm.complete_text(instruction, prompt)),
                 MAX_REPORT_BYTES,
             )
+            report = self.validator.normalize(report, evidence)
             validation = self.validator.validate(report, evidence, state["policy"])
             if validation.valid:
                 break
@@ -490,6 +500,32 @@ class DeepResearchWorkflow:
         checkpoint: dict | None = None,
         progress_callback=None,
     ) -> DeepResearchResult:
+        with ensure_node_recorder() as recorder:
+            result = await self._invoke_recorded(
+                question,
+                policy,
+                filters,
+                checkpoint,
+                progress_callback,
+            )
+            if result.execution is not None:
+                result = result.model_copy(
+                    update={
+                        "execution": result.execution.model_copy(
+                            update={"node_runs": recorder.snapshot()}
+                        )
+                    }
+                )
+            return result
+
+    async def _invoke_recorded(
+        self,
+        question: str,
+        policy: PolicyContext,
+        filters: RetrievalFilters | None = None,
+        checkpoint: dict | None = None,
+        progress_callback=None,
+    ) -> DeepResearchResult:
         started = perf_counter()
         try:
             result = await self._invoke(
@@ -515,6 +551,15 @@ class DeepResearchWorkflow:
                 ),
             )
             raise
+        elapsed_ms = int((perf_counter() - started) * 1000)
+        if result.execution is not None:
+            result = result.model_copy(
+                update={
+                    "execution": result.execution.model_copy(
+                        update={"duration_ms": elapsed_ms}
+                    )
+                }
+            )
         emit_trace(
             self.trace_sink,
             TraceEvent(
@@ -553,31 +598,51 @@ class DeepResearchWorkflow:
             raise AppError(
                 ErrorCode.UNAUTHORIZED_RESOURCE, "조사 소유자를 확인할 수 없습니다."
             )
-        try:
-            async with asyncio.timeout(MAX_ELAPSED_SECONDS):
-                state = await self.graph.ainvoke(
-                    {
-                        "question": _truncate_utf8(sanitize_text(question), 4000),
-                        "policy": policy,
-                        "filters": filters or RetrievalFilters(),
-                        "checkpoint": checkpoint or {},
-                        "progress_callback": progress_callback,
-                    }
-                )
-        except TimeoutError:
-            raise AppError(
-                ErrorCode.BUDGET_EXCEEDED,
-                "조사 시간 한도를 초과했습니다.",
-            ) from None
+        state = await self.graph.ainvoke(
+            {
+                "question": _truncate_utf8(sanitize_text(question), 4000),
+                "policy": policy,
+                "filters": filters or RetrievalFilters(),
+                "checkpoint": checkpoint or {},
+                "progress_callback": progress_callback,
+            }
+        )
+        evidence = state.get("evidence", [])
+        citation_valid = state.get("citation_valid", False)
+        if not evidence:
+            execution = ExecutionMetadata(
+                status="limited",
+                failure_stage="retrieval",
+                error_code="NO_EVIDENCE",
+                search_count=state.get("searches", 0),
+                evidence_count=0,
+                include_in_llm_history=False,
+            )
+        elif not citation_valid:
+            execution = ExecutionMetadata(
+                status="limited",
+                failure_stage="citation_validation",
+                error_code="CITATION_INVALID",
+                search_count=state.get("searches", 0),
+                evidence_count=len(evidence),
+                include_in_llm_history=False,
+            )
+        else:
+            execution = ExecutionMetadata(
+                status="succeeded",
+                search_count=state.get("searches", 0),
+                evidence_count=len(evidence),
+            )
         return DeepResearchResult(
             report=state["report"],
-            evidence=state.get("evidence", []),
+            evidence=evidence,
             completed_sub_questions=sum(
                 not item.failed for item in state.get("branch_results", [])
             ),
             rounds=state["rounds"],
             disclosures=state.get("disclosures", []),
-            citation_valid=state.get("citation_valid", False),
+            citation_valid=citation_valid,
+            execution=execution,
         )
 
 

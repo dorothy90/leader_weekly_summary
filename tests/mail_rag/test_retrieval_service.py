@@ -8,6 +8,7 @@ from app.domain.evidence import RetrievalFilters, SearchTask
 from app.domain.errors import AppError, ErrorCode
 from app.domain.policy import PolicyContext
 from app.retrieval.service import RetrievalService
+from app.observability.node_runs import NodeRunRecorder, use_node_recorder
 
 
 def _hit(
@@ -208,12 +209,14 @@ def test_embedding_failure_runs_bm25_only_and_propagates_exact_disclosure():
     backend = FakeSearch()
     service = RetrievalService(backend, BrokenEmbedding(), child_index="weekly_mail")
 
-    result = asyncio.run(
-        service.search(
-            SearchTask(query="수율"),
-            PolicyContext.from_user_id("kim"),
+    recorder = NodeRunRecorder()
+    with use_node_recorder(recorder):
+        result = asyncio.run(
+            service.search(
+                SearchTask(query="수율"),
+                PolicyContext.from_user_id("kim"),
+            )
         )
-    )
 
     assert result.mode == "bm25"
     assert result.embedding_error == "EMBEDDING_UNAVAILABLE"
@@ -224,6 +227,13 @@ def test_embedding_failure_runs_bm25_only_and_propagates_exact_disclosure():
         _owner_filter(body) == {"term": {"user_id": "kim"}} for _, body in backend.calls
     )
     assert not any("knn" in str(body) for _, body in backend.calls)
+    runs = recorder.snapshot()
+    embedding = next(run for run in runs if run.node_name == "retrieval.embedding")
+    assert embedding.status == "error"
+    assert embedding.error_class == "TimeoutError"
+    bm25 = next(run for run in runs if run.node_name == "opensearch.bm25")
+    assert bm25.status == "ok"
+    assert bm25.output.candidate_count == 1
 
 
 def test_final_legacy_materialization_rechecks_owner_and_hides_raw_paths():

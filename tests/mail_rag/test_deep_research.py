@@ -1,5 +1,6 @@
 import asyncio
 from functools import wraps
+import inspect
 
 import pytest
 
@@ -111,8 +112,38 @@ async def test_deep_graph_finishes_bounded_parallel_plan():
 
     assert result.completed_sub_questions == 2
     assert result.rounds <= MAX_ROUNDS
+    assert result.execution.status == "succeeded"
+    assert result.execution.search_count == 2
+    assert result.execution.evidence_count == len(result.evidence)
     assert 1 < retrieval.max_active <= MAX_CONCURRENCY
     assert all(call[1].user_id == "kim" for call in retrieval.calls)
+    names = [run.node_name for run in result.execution.node_runs]
+    assert names[0] == "deep.plan"
+    assert "deep.research" in names
+    assert "deep.gap" in names
+    assert names[-1] == "deep.synthesize"
+    research = next(run for run in result.execution.node_runs if run.node_name == "deep.research")
+    assert research.output.search_count == 2
+    assert research.output.evidence_count == 2
+
+
+@async_test
+async def test_deep_workflow_canonicalizes_known_model_citation_variant():
+    result = await DeepResearchWorkflow(
+        DeepRetrieval(),
+        DeepLLM(sub_questions=["수율"], reports=["종합 결과 【s1】"]),
+    ).invoke("수율 조사", PolicyContext.from_user_id("kim"))
+
+    assert result.report == "종합 결과 [S1]"
+    assert result.citation_valid is True
+    assert [item.evidence_id for item in result.evidence] == ["S1"]
+
+
+@async_test
+async def test_deep_has_no_workflow_wide_deadline():
+    assert "deadline_seconds" not in inspect.signature(
+        DeepResearchWorkflow
+    ).parameters
 
 
 @async_test
@@ -260,18 +291,6 @@ def test_deep_context_budget_is_a_hard_conservative_token_bound():
 
 
 @async_test
-async def test_deep_graph_enforces_elapsed_time_budget(monkeypatch):
-    monkeypatch.setattr("app.graphs.deep_research.MAX_ELAPSED_SECONDS", 0)
-
-    with pytest.raises(AppError) as error:
-        await DeepResearchWorkflow(DeepRetrieval(), DeepLLM()).invoke(
-            "질문", PolicyContext.from_user_id("kim")
-        )
-
-    assert error.value.code == ErrorCode.BUDGET_EXCEEDED
-
-
-@async_test
 async def test_deep_total_branch_outage_fails_transiently():
     retrieval = DeepRetrieval()
 
@@ -300,6 +319,8 @@ async def test_deep_support_checker_failure_fails_closed():
     )
     assert result.citation_valid is False
     assert result.evidence == []
+    assert result.execution.status == "limited"
+    assert result.execution.include_in_llm_history is False
 
 
 @async_test
