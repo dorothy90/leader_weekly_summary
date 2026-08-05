@@ -338,3 +338,18 @@ def test_deep_invalid_result_keeps_sections_through_completion_and_status():
     assert public.result_markdown is not None
     assert len(public.result_markdown.encode("utf-8")) <= 8_000
     assert_section_contract(public.result_markdown)
+
+
+def test_deep_queued_status_without_result_is_safe():
+    async def create_queued_job():
+        policy = PolicyContext.from_user_id("user-1")
+        store = InMemoryResearchJobStore()
+        job = await store.create(policy, "trace-1", "질문", "조사 계획")
+        return policy, job
+
+    policy, job = asyncio.run(create_queued_job())
+
+    public = _response(job, policy)
+
+    assert public.result_markdown is None
+    assert public.references == []

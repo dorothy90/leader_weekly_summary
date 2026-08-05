@@ -58,7 +58,7 @@ def _response(job, policy: PolicyContext) -> ResearchJobResponse:
         _, disclosures = normalize_bm25_fallback(
             "", disclosures, max_bytes=MAX_RESEARCH_REPORT_BYTES
         )
-    validation = CitationValidator().validate(report, job.result_evidence, policy)
+    validation = CitationValidator().validate(report or "", job.result_evidence, policy)
     safe_result = bool(job.result_evidence) and validation.valid
     if job.result_markdown is not None and not safe_result:
         report, disclosures = ensure_rag_answer_with_bm25_disclosure(
