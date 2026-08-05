@@ -128,6 +128,56 @@ def test_fast_rag_returns_citation_valid_answer_without_support_model_call():
     assert_section_contract(result.answer)
 
 
+def test_fast_rag_keeps_citation_validation_as_the_final_gate():
+    policy = PolicyContext.from_user_id("user-1")
+    llm = RejectingSupportLLM()
+    workflow = FastRAGWorkflow(retrieval=None, llm=llm)
+    workflow.graph = StaticGraph(
+        {
+            "answer": "존재하지 않는 근거입니다 [S2]",
+            "evidence": [make_evidence(policy)],
+            "sufficient": True,
+            "searches": 1,
+            "retrieval_mode": "hybrid",
+            "disclosures": [],
+        }
+    )
+    request = ChatRequest(user_id=policy.user_id, message="사실을 알려줘")
+
+    result = asyncio.run(workflow._invoke(request, policy, None))
+
+    assert result.execution is not None
+    assert result.execution.status == "limited"
+    assert result.execution.error_code == "CITATION_INVALID"
+    assert result.quality.citation_valid is False
+    assert llm.complete_model_calls == 0
+    assert_section_contract(result.answer)
+
+
+def test_fast_rag_no_evidence_answer_uses_section_contract():
+    policy = PolicyContext.from_user_id("user-1")
+    workflow = FastRAGWorkflow(retrieval=None, llm=RejectingSupportLLM())
+    workflow.graph = StaticGraph(
+        {
+            "answer": "확인 가능한 근거가 없습니다.",
+            "evidence": [],
+            "sufficient": False,
+            "missing_information": ["mail evidence"],
+            "searches": 1,
+            "retrieval_mode": "hybrid",
+            "disclosures": [],
+        }
+    )
+    request = ChatRequest(user_id=policy.user_id, message="사실을 알려줘")
+
+    result = asyncio.run(workflow._invoke(request, policy, None))
+
+    assert result.execution is not None
+    assert result.execution.error_code == "NO_EVIDENCE"
+    assert result.quality.citation_valid is None
+    assert_section_contract(result.answer)
+
+
 def test_deep_rag_returns_citation_valid_report_without_support_model_call():
     policy = PolicyContext.from_user_id("user-1")
     evidence = make_evidence(policy)
@@ -175,4 +225,23 @@ def test_deep_rag_preserves_sections_when_bm25_report_hits_byte_limit():
     )
 
     assert len(result["report"].encode("utf-8")) <= 8_000
+    assert_section_contract(result["report"])
+
+
+def test_deep_rag_no_evidence_report_uses_section_contract():
+    policy = PolicyContext.from_user_id("user-1")
+    workflow = DeepResearchWorkflow(retrieval=None, llm=DeepAnswerLLM())
+
+    result = asyncio.run(
+        workflow._synthesize(
+            {
+                "question": "사실을 알려줘",
+                "policy": policy,
+                "branch_results": [],
+            }
+        )
+    )
+
+    assert result["citation_valid"] is True
+    assert result["evidence"] == []
     assert_section_contract(result["report"])
