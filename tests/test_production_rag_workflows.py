@@ -3,6 +3,7 @@ import asyncio
 from app.domain.chat import ChatRequest
 from app.domain.evidence import Evidence
 from app.domain.policy import PolicyContext
+from app.graphs.deep_research import BranchResult, DeepResearchWorkflow
 from app.graphs.fast_rag import FastRAGWorkflow
 from app.llm.answer_format import (
     ensure_rag_answer_structure,
@@ -50,6 +51,11 @@ class RejectingSupportLLM:
     async def complete_model(self, *_args, **_kwargs):
         self.complete_model_calls += 1
         raise AssertionError("claim-support model must not be called")
+
+
+class DeepAnswerLLM(RejectingSupportLLM):
+    async def complete_text(self, *_args, **_kwargs):
+        return "확인된 사실입니다 [S1]"
 
 
 def test_formatter_preserves_valid_three_section_answer():
@@ -104,3 +110,28 @@ def test_fast_rag_returns_citation_valid_answer_without_support_model_call():
     assert llm.complete_model_calls == 0
     assert "[S1]" in result.answer
     assert_section_contract(result.answer)
+
+
+def test_deep_rag_returns_citation_valid_report_without_support_model_call():
+    policy = PolicyContext.from_user_id("user-1")
+    evidence = make_evidence(policy)
+    llm = DeepAnswerLLM()
+    workflow = DeepResearchWorkflow(retrieval=None, llm=llm)
+
+    result = asyncio.run(
+        workflow._synthesize(
+            {
+                "question": "사실을 알려줘",
+                "policy": policy,
+                "branch_results": [
+                    BranchResult(question="사실", evidence=[evidence])
+                ],
+            }
+        )
+    )
+
+    assert result["citation_valid"] is True
+    assert result["evidence"]
+    assert llm.complete_model_calls == 0
+    assert "[S1]" in result["report"]
+    assert_section_contract(result["report"])

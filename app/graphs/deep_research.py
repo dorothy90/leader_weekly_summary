@@ -16,6 +16,10 @@ from app.domain.evidence import Evidence, RetrievalFilters, SearchTask
 from app.domain.errors import AppError, ErrorCode
 from app.domain.policy import PolicyContext
 from app.domain.research import MAX_RESEARCH_REPORT_BYTES, RESEARCH_ABSTENTION
+from app.llm.answer_format import (
+    RAG_ANSWER_STRUCTURE_INSTRUCTION,
+    ensure_rag_answer_structure,
+)
 from app.persistence.conversations import sanitize_evidence_for_memory
 from app.observability.tracing import TraceEvent, emit_trace, hash_trace_value
 from app.security.citations import CitationValidator
@@ -45,11 +49,6 @@ class ResearchPlan(BaseModel):
 class GapDecision(BaseModel):
     complete: bool
     follow_up_questions: list[str] = Field(default_factory=list, max_length=24)
-
-
-class ClaimSupportDecision(BaseModel):
-    supported: bool
-    unsupported_claims: list[str] = Field(default_factory=list, max_length=16)
 
 
 class BranchResult(BaseModel):
@@ -408,7 +407,7 @@ class DeepResearchWorkflow:
         disclosures = [BM25_FALLBACK_DISCLOSURE] if fallback else []
         if not evidence:
             report, disclosures = normalize_bm25_fallback(
-                RESEARCH_ABSTENTION,
+                ensure_rag_answer_structure(RESEARCH_ABSTENTION),
                 disclosures,
                 max_bytes=MAX_REPORT_BYTES,
             )
@@ -428,6 +427,7 @@ class DeepResearchWorkflow:
                 if revision == 0
                 else "Revise the draft so every claim uses only the supplied [S#] evidence."
             )
+            instruction = f"{instruction}\n\n{RAG_ANSWER_STRUCTURE_INSTRUCTION}"
             prompt = _bounded_model_input(
                 instruction,
                 (
@@ -436,40 +436,20 @@ class DeepResearchWorkflow:
                     else [f"Draft: {report}\n", "Evidence:\n", context]
                 ),
             )
-            report = _truncate_utf8(
-                sanitize_text(await self.llm.complete_text(instruction, prompt)),
-                MAX_REPORT_BYTES,
+            report = ensure_rag_answer_structure(
+                _truncate_utf8(
+                    sanitize_text(await self.llm.complete_text(instruction, prompt)),
+                    MAX_REPORT_BYTES,
+                )
             )
             validation = self.validator.validate(report, evidence, state["policy"])
             if validation.valid:
                 break
         if validation is None or not validation.valid:
             report, disclosures = normalize_bm25_fallback(
-                INVALID_REPORT,
+                ensure_rag_answer_structure(INVALID_REPORT),
                 disclosures,
                 max_bytes=MAX_REPORT_BYTES,
-            )
-            return {
-                "report": report,
-                "evidence": [],
-                "disclosures": disclosures,
-                "citation_valid": False,
-            }
-        try:
-            support = await self.llm.complete_model(
-                "Check every factual claim against the supplied evidence. "
-                "A syntactically valid citation is not sufficient support.",
-                _bounded_model_input(
-                    "claim-support",
-                    [f"Draft:\n{report}\n", "Evidence:\n", context],
-                ),
-                ClaimSupportDecision,
-            )
-        except Exception:
-            support = ClaimSupportDecision(supported=False)
-        if not support.supported:
-            report, disclosures = normalize_bm25_fallback(
-                INVALID_REPORT, disclosures, max_bytes=MAX_REPORT_BYTES
             )
             return {
                 "report": report,
