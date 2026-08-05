@@ -405,9 +405,15 @@ class DeepResearchWorkflow:
         evidence = self._safe_evidence(state)
         fallback = any(item.embedding_fallback for item in state["branch_results"])
         disclosures = [BM25_FALLBACK_DISCLOSURE] if fallback else []
+        report_limit = MAX_REPORT_BYTES
+        if fallback:
+            report_limit -= len(f"\n\n{BM25_FALLBACK_DISCLOSURE}".encode("utf-8"))
         if not evidence:
             report, disclosures = normalize_bm25_fallback(
-                ensure_rag_answer_structure(RESEARCH_ABSTENTION),
+                ensure_rag_answer_structure(
+                    RESEARCH_ABSTENTION,
+                    max_bytes=report_limit,
+                ),
                 disclosures,
                 max_bytes=MAX_REPORT_BYTES,
             )
@@ -439,15 +445,19 @@ class DeepResearchWorkflow:
             report = ensure_rag_answer_structure(
                 _truncate_utf8(
                     sanitize_text(await self.llm.complete_text(instruction, prompt)),
-                    MAX_REPORT_BYTES,
-                )
+                    report_limit,
+                ),
+                max_bytes=report_limit,
             )
             validation = self.validator.validate(report, evidence, state["policy"])
             if validation.valid:
                 break
         if validation is None or not validation.valid:
             report, disclosures = normalize_bm25_fallback(
-                ensure_rag_answer_structure(INVALID_REPORT),
+                ensure_rag_answer_structure(
+                    INVALID_REPORT,
+                    max_bytes=report_limit,
+                ),
                 disclosures,
                 max_bytes=MAX_REPORT_BYTES,
             )

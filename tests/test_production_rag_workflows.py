@@ -58,6 +58,11 @@ class DeepAnswerLLM(RejectingSupportLLM):
         return "확인된 사실입니다 [S1]"
 
 
+class LongDeepAnswerLLM(RejectingSupportLLM):
+    async def complete_text(self, *_args, **_kwargs):
+        return "확인된 사실입니다 [S1] " + ("가" * 9_000)
+
+
 def test_formatter_preserves_valid_three_section_answer():
     answer = (
         "### 요약\n요약\n\n"
@@ -145,4 +150,29 @@ def test_deep_rag_returns_citation_valid_report_without_support_model_call():
     assert result["evidence"]
     assert llm.complete_model_calls == 0
     assert "[S1]" in result["report"]
+    assert_section_contract(result["report"])
+
+
+def test_deep_rag_preserves_sections_when_bm25_report_hits_byte_limit():
+    policy = PolicyContext.from_user_id("user-1")
+    evidence = make_evidence(policy)
+    workflow = DeepResearchWorkflow(retrieval=None, llm=LongDeepAnswerLLM())
+
+    result = asyncio.run(
+        workflow._synthesize(
+            {
+                "question": "사실을 알려줘",
+                "policy": policy,
+                "branch_results": [
+                    BranchResult(
+                        question="사실",
+                        evidence=[evidence],
+                        embedding_fallback=True,
+                    )
+                ],
+            }
+        )
+    )
+
+    assert len(result["report"].encode("utf-8")) <= 8_000
     assert_section_contract(result["report"])

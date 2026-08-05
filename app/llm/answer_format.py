@@ -14,7 +14,15 @@ State the most important supported conclusion and any evidence limitations.
 Do not add any other sections."""
 
 
-def ensure_rag_answer_structure(answer: str) -> str:
+def _truncate_utf8(text: str, byte_limit: int) -> str:
+    return text.encode("utf-8")[:byte_limit].decode("utf-8", errors="ignore")
+
+
+def ensure_rag_answer_structure(
+    answer: str,
+    *,
+    max_bytes: int | None = None,
+) -> str:
     text = answer.strip()
     positions = [text.find(heading) for heading in RAG_SECTION_HEADINGS]
     valid = (
@@ -22,15 +30,22 @@ def ensure_rag_answer_structure(answer: str) -> str:
         and all(text.count(heading) == 1 for heading in RAG_SECTION_HEADINGS)
         and positions == sorted(positions)
     )
-    if valid:
+    if valid and (max_bytes is None or len(text.encode("utf-8")) <= max_bytes):
         return text
 
     detail = text or "확인 가능한 내용이 없습니다."
-    return (
-        "### 요약\n요청 결과를 아래와 같이 정리합니다.\n\n"
-        f"### 상세설명\n{detail}\n\n"
-        "### 핵심결론\n상세설명에 제시된 확인 범위를 참고해주세요."
+    for heading in RAG_SECTION_HEADINGS:
+        detail = detail.replace(heading, heading.removeprefix("### "))
+    prefix = (
+        "### 요약\n요청 결과를 아래와 같이 정리합니다.\n\n### 상세설명\n"
     )
+    suffix = "\n\n### 핵심결론\n상세설명에 제시된 확인 범위를 참고해주세요."
+    if max_bytes is not None:
+        available = max_bytes - len(f"{prefix}{suffix}".encode("utf-8"))
+        if available < 0:
+            raise ValueError("max_bytes is too small for the RAG answer structure")
+        detail = _truncate_utf8(detail, available).strip()
+    return f"{prefix}{detail}{suffix}"
 
 
 def prepend_summary_notice(answer: str, notice: str) -> str:
