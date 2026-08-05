@@ -2,7 +2,6 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
-from app.domain.chat import normalize_bm25_fallback
 from app.domain.evidence import RetrievalFilters
 from app.domain.errors import AppError, ErrorCode
 from app.domain.policy import PolicyContext
@@ -12,6 +11,7 @@ from app.domain.research import (
     ResearchJob,
     ResearchStatus,
 )
+from app.llm.answer_format import ensure_rag_answer_with_bm25_disclosure
 from app.persistence.conversations import (
     sanitize_evidence_for_memory,
     sanitize_filters_for_memory,
@@ -74,7 +74,7 @@ def _safe_result(result, policy: PolicyContext):
         safe = sanitize_text(value)
         if safe and safe not in disclosures:
             disclosures.append(safe)
-    report, disclosures = normalize_bm25_fallback(
+    report, disclosures = ensure_rag_answer_with_bm25_disclosure(
         report, disclosures, max_bytes=MAX_RESEARCH_REPORT_BYTES
     )
     supplied = list(result.evidence)
@@ -83,7 +83,7 @@ def _safe_result(result, policy: PolicyContext):
         or not supplied
         or any(item.user_id != policy.user_id for item in supplied)
     ):
-        report, disclosures = normalize_bm25_fallback(
+        report, disclosures = ensure_rag_answer_with_bm25_disclosure(
             RESEARCH_ABSTENTION,
             disclosures,
             max_bytes=MAX_RESEARCH_REPORT_BYTES,
@@ -94,7 +94,7 @@ def _safe_result(result, policy: PolicyContext):
     ]
     validation = CitationValidator().validate(report, safe_evidence, policy)
     if not validation.valid:
-        report, disclosures = normalize_bm25_fallback(
+        report, disclosures = ensure_rag_answer_with_bm25_disclosure(
             RESEARCH_ABSTENTION,
             disclosures,
             max_bytes=MAX_RESEARCH_REPORT_BYTES,

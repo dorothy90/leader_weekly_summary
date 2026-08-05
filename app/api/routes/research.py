@@ -5,8 +5,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from app.domain.chat import ChatReference
-from app.domain.chat import normalize_bm25_fallback
+from app.domain.chat import ChatReference, normalize_bm25_fallback
 from app.domain.errors import AppError, ErrorCode
 from app.domain.policy import PolicyContext
 from app.domain.research import (
@@ -14,6 +13,7 @@ from app.domain.research import (
     RESEARCH_ABSTENTION,
     ResearchStatus,
 )
+from app.llm.answer_format import ensure_rag_answer_with_bm25_disclosure
 from app.security.citations import CitationValidator
 from app.security.redaction import opaque_identifier, sanitize_text
 
@@ -50,13 +50,18 @@ def _response(job, policy: PolicyContext) -> ResearchJobResponse:
         raise AppError(ErrorCode.UNAUTHORIZED_RESOURCE, "조사 작업을 찾을 수 없습니다.")
     report = sanitize_text(job.result_markdown) if job.result_markdown else None
     disclosures = [safe for item in job.disclosures if (safe := sanitize_text(item))]
-    report, disclosures = normalize_bm25_fallback(
-        report or "", disclosures, max_bytes=MAX_RESEARCH_REPORT_BYTES
-    )
+    if report is not None:
+        report, disclosures = ensure_rag_answer_with_bm25_disclosure(
+            report, disclosures, max_bytes=MAX_RESEARCH_REPORT_BYTES
+        )
+    else:
+        _, disclosures = normalize_bm25_fallback(
+            "", disclosures, max_bytes=MAX_RESEARCH_REPORT_BYTES
+        )
     validation = CitationValidator().validate(report, job.result_evidence, policy)
     safe_result = bool(job.result_evidence) and validation.valid
     if job.result_markdown is not None and not safe_result:
-        report, disclosures = normalize_bm25_fallback(
+        report, disclosures = ensure_rag_answer_with_bm25_disclosure(
             RESEARCH_ABSTENTION,
             disclosures,
             max_bytes=MAX_RESEARCH_REPORT_BYTES,

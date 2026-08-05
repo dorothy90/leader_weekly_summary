@@ -17,6 +17,7 @@ from app.domain.chat import (
 from app.domain.errors import AppError, ErrorCode
 from app.domain.policy import PolicyContext
 from app.graphs.conversation import build_conversation_state
+from app.llm.answer_format import ensure_rag_answer_structure
 from app.persistence.conversations import (
     ConversationMemory,
     TurnRecord,
@@ -118,7 +119,7 @@ def _safe_fast_result(result, policy: PolicyContext):
             ]
             references = [_safe_reference(item) for item in safe_evidence]
         else:
-            answer = _INVALID_CITATIONS
+            answer = ensure_rag_answer_structure(_INVALID_CITATIONS)
             safe_evidence = []
     else:
         safe_evidence = []

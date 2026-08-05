@@ -1,3 +1,6 @@
+from app.domain.chat import BM25_FALLBACK_DISCLOSURE, normalize_bm25_fallback
+
+
 RAG_SECTION_HEADINGS = ("### 요약", "### 상세설명", "### 핵심결론")
 
 RAG_ANSWER_STRUCTURE_INSTRUCTION = """Return exactly these Markdown sections in this order:
@@ -24,18 +27,18 @@ def ensure_rag_answer_structure(
     max_bytes: int | None = None,
 ) -> str:
     text = answer.strip()
-    positions = [text.find(heading) for heading in RAG_SECTION_HEADINGS]
-    valid = (
-        text.startswith(RAG_SECTION_HEADINGS[0])
-        and all(text.count(heading) == 1 for heading in RAG_SECTION_HEADINGS)
-        and positions == sorted(positions)
+    h3_headings = tuple(
+        line for line in text.splitlines() if line.startswith("### ")
     )
+    valid = h3_headings == RAG_SECTION_HEADINGS
     if valid and (max_bytes is None or len(text.encode("utf-8")) <= max_bytes):
         return text
 
     detail = text or "확인 가능한 내용이 없습니다."
-    for heading in RAG_SECTION_HEADINGS:
-        detail = detail.replace(heading, heading.removeprefix("### "))
+    detail = "\n".join(
+        line.removeprefix("### ") if line.startswith("### ") else line
+        for line in detail.splitlines()
+    )
     prefix = (
         "### 요약\n요청 결과를 아래와 같이 정리합니다.\n\n### 상세설명\n"
     )
@@ -48,13 +51,38 @@ def ensure_rag_answer_structure(
     return f"{prefix}{detail}{suffix}"
 
 
+def ensure_rag_answer_with_bm25_disclosure(
+    answer: str,
+    disclosures: list[str],
+    *,
+    max_bytes: int,
+) -> tuple[str, list[str]]:
+    fallback = BM25_FALLBACK_DISCLOSURE in answer or any(
+        BM25_FALLBACK_DISCLOSURE in item for item in disclosures
+    )
+    base = answer.replace(BM25_FALLBACK_DISCLOSURE, "").strip()
+    suffix_bytes = (
+        len(f"\n\n{BM25_FALLBACK_DISCLOSURE}".encode("utf-8")) if fallback else 0
+    )
+    structured = ensure_rag_answer_structure(
+        base,
+        max_bytes=max_bytes - suffix_bytes,
+    )
+    return normalize_bm25_fallback(
+        structured,
+        disclosures,
+        max_bytes=max_bytes,
+    )
+
+
 def prepend_summary_notice(answer: str, notice: str) -> str:
     formatted = ensure_rag_answer_structure(answer)
     safe_notice = notice.strip()
     if not safe_notice:
         return formatted
     summary = formatted.split("### 상세설명", 1)[0]
-    if safe_notice in summary:
+    notice_key = safe_notice.splitlines()[0].strip()
+    if notice_key and notice_key in summary:
         return formatted
     return formatted.replace(
         "### 요약\n",
