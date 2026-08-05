@@ -38,6 +38,9 @@ def prepend_summary_notice(answer: str, notice: str) -> str:
     safe_notice = notice.strip()
     if not safe_notice:
         return formatted
+    summary = formatted.split("### 상세설명", 1)[0]
+    if safe_notice in summary:
+        return formatted
     return formatted.replace(
         "### 요약\n",
         f"### 요약\n{safe_notice}\n\n",

@@ -85,6 +85,17 @@ def test_summary_notice_stays_inside_summary_section():
     assert answer.index("확인 범위가 제한적입니다.") < answer.index("### 상세설명")
 
 
+def test_summary_notice_is_not_duplicated_during_revalidation():
+    once = prepend_summary_notice(
+        "근거가 부족합니다.",
+        "확인 범위가 제한적입니다.",
+    )
+
+    twice = prepend_summary_notice(once, "확인 범위가 제한적입니다.")
+
+    assert twice == once
+
+
 def test_fast_rag_returns_citation_valid_answer_without_support_model_call():
     policy = PolicyContext.from_user_id("user-1")
     evidence = make_evidence(policy)
