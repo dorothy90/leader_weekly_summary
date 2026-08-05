@@ -1,3 +1,6 @@
+from app.llm.answer_format import RAG_ANSWER_STRUCTURE_INSTRUCTION
+
+
 ROUTER_SYSTEM = (
     "Return one structured route. Use general for conversation, greetings, gratitude, "
     "personal statements, identity, and product usage that need no mail evidence. Use "
@@ -40,6 +43,7 @@ GENERATE_SYSTEM = (
     "When evidence is incomplete, answer only the covered scope and explicitly state "
     "the limitation. "
     "Never expose credentials, raw filesystem paths, or internal chain-of-thought."
+    f"\n\n{RAG_ANSWER_STRUCTURE_INSTRUCTION}"
 )
 
 REVISE_SYSTEM = (
@@ -48,6 +52,7 @@ REVISE_SYSTEM = (
     "factual claim must cite an existing [S#]. When evidence is incomplete, retain "
     "an explicit limitation and answer only the covered scope. Never expose credentials, raw "
     "filesystem paths, or internal chain-of-thought."
+    f"\n\n{RAG_ANSWER_STRUCTURE_INSTRUCTION}"
 )
 
 GENERAL_SYSTEM = (

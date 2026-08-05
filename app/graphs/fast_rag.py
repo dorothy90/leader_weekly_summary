@@ -33,6 +33,10 @@ from app.graphs.general_intents import (
     is_name_recall_question,
     remembered_name,
 )
+from app.llm.answer_format import (
+    ensure_rag_answer_structure,
+    prepend_summary_notice,
+)
 from app.llm.prompts import (
     CONTEXTUALIZE_SYSTEM,
     GENERAL_SYSTEM,
@@ -94,11 +98,6 @@ class RetrievalPlan(BaseModel):
 class EvidenceGrade(BaseModel):
     sufficient: bool
     missing_information: list[str] = Field(default_factory=list, max_length=6)
-
-
-class ClaimSupportDecision(BaseModel):
-    supported: bool
-    unsupported_claims: list[str] = Field(default_factory=list, max_length=8)
 
 
 class FastState(TypedDict, total=False):
@@ -176,17 +175,14 @@ def _safe_missing_information(state: FastState) -> list[str]:
 
 
 def _with_limitation(answer: str, state: FastState) -> str:
+    formatted = ensure_rag_answer_structure(answer)
     if state.get("sufficient", False):
-        return answer
-    if answer.startswith(INCOMPLETE_ANSWER_PREFIX):
-        _, separator, answer = answer.partition("\n\n")
-        if not separator:
-            answer = ""
+        return formatted
     limitation = INCOMPLETE_ANSWER_PREFIX
     missing = _safe_missing_information(state)
     if missing:
         limitation = f"{limitation}\n미확인 정보: {', '.join(missing)}"
-    return f"{limitation}\n\n{answer}".rstrip()
+    return prepend_summary_notice(formatted, limitation)
 
 
 class FastRAGWorkflow:
@@ -407,7 +403,7 @@ class FastRAGWorkflow:
     async def _generate(self, state: FastState) -> dict:
         _track(stage="generation")
         if not state["evidence"]:
-            return {"answer": LIMITED_ANSWER}
+            return {"answer": ensure_rag_answer_structure(LIMITED_ANSWER)}
         status = "complete" if state.get("sufficient", False) else "incomplete"
         missing = ", ".join(
             sanitize_text(str(item)) for item in state.get("missing_information", [])
@@ -421,7 +417,7 @@ class FastRAGWorkflow:
                 f"{_evidence_context(state['evidence'])}"
             ),
         )
-        return {"answer": sanitize_text(answer)}
+        return {"answer": ensure_rag_answer_structure(sanitize_text(answer))}
 
     def _validate(self, state: FastState) -> dict:
         _track(stage="citation_validation")
@@ -456,7 +452,7 @@ class FastRAGWorkflow:
             ),
         )
         return {
-            "answer": sanitize_text(answer),
+            "answer": ensure_rag_answer_structure(sanitize_text(answer)),
             "revisions": state["revisions"] + 1,
         }
 
@@ -474,7 +470,7 @@ class FastRAGWorkflow:
                 result = await self._invoke(request, policy, conversation)
         except TimeoutError:
             result = FastRAGResult(
-                answer=TIMEOUT_ANSWER,
+                answer=ensure_rag_answer_structure(TIMEOUT_ANSWER),
                 evidence=[],
                 quality=QualityStatus(
                     citation_valid=None,
@@ -502,7 +498,7 @@ class FastRAGWorkflow:
             )
         except AppError as error:
             result = FastRAGResult(
-                answer="요청 실행에 실패했습니다.",
+                answer=ensure_rag_answer_structure("요청 실행에 실패했습니다."),
                 evidence=[],
                 quality=QualityStatus(
                     citation_valid=None,
@@ -597,7 +593,7 @@ class FastRAGWorkflow:
             }
         )
         evidence = state.get("evidence", [])
-        answer = sanitize_text(state["answer"])
+        answer = ensure_rag_answer_structure(sanitize_text(state["answer"]))
         disclosures = state.get("disclosures", [])
         if disclosures:
             answer = f"{answer}\n\n" + "\n".join(disclosures)
@@ -606,27 +602,6 @@ class FastRAGWorkflow:
             if evidence
             else True
         )
-        support_valid = citation_valid
-        support_failed = False
-        if evidence and citation_valid:
-            _track(stage="support_validation")
-            try:
-                support = await self.llm.complete_model(
-                    "Check each factual claim against the supplied evidence. "
-                    "Citations alone are not proof. Return supported=false for any "
-                    "claim not entailed by the evidence.",
-                    f"Draft:\n{answer}\nEvidence:\n{_evidence_context(evidence)}",
-                    ClaimSupportDecision,
-                )
-                support_valid = support.supported
-            except Exception:
-                support_valid = False
-            if not support_valid:
-                support_failed = True
-                answer = _with_limitation(INVALID_ANSWER, state)
-                if disclosures:
-                    answer = f"{answer}\n\n" + "\n".join(disclosures)
-                citation_valid = False
         limited = (
             not evidence or not citation_valid or not state.get("sufficient", False)
         )
@@ -647,12 +622,8 @@ class FastRAGWorkflow:
         elif not citation_valid:
             execution = ExecutionMetadata(
                 status="limited",
-                failure_stage=(
-                    "support_validation" if support_failed else "citation_validation"
-                ),
-                error_code=(
-                    "UNSUPPORTED_ANSWER" if support_failed else "CITATION_INVALID"
-                ),
+                failure_stage="citation_validation",
+                error_code="CITATION_INVALID",
                 search_count=state.get("searches", 0),
                 evidence_count=len(evidence),
                 include_in_llm_history=False,
