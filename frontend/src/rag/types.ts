@@ -74,7 +74,7 @@ export interface RoutingDiagnostics {
 
 export interface ChatReference {
   evidence_id: string
-  source_type: 'mail' | 'wiki' | 'statistic'
+  source_type: 'mail' | 'wiki' | 'statistic' | 'domain_knowledge' | 'calendar'
   document_id: string
   title: string
   excerpt: string

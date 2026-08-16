@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 
-import type { ConversationTurn, ResearchJobResponse } from './types'
+import type { ChatReference, ConversationTurn, ResearchJobResponse } from './types'
 
 interface ConversationPanelProps {
   turns: ConversationTurn[]
@@ -19,6 +19,13 @@ const modeLabels = {
   fast: 'Fast 강제',
   deep: 'Deep 강제',
 } as const
+const SOURCE_LABELS: Record<ChatReference['source_type'], string> = {
+  mail: '메일',
+  wiki: 'Wiki',
+  statistic: '통계',
+  domain_knowledge: '도메인 지식',
+  calendar: '일정/회의',
+}
 
 function TurnResult({ turn }: { turn: ConversationTurn }) {
   const { chat, job, error } = turn
@@ -115,10 +122,10 @@ function TurnResult({ turn }: { turn: ConversationTurn }) {
             <article className="reference-card" key={reference.evidence_id}>
               <div className="reference-id">{reference.evidence_id}</div>
               <div>
-                <strong>{reference.title || reference.source_type}</strong>
+                <strong>{reference.title || SOURCE_LABELS[reference.source_type]}</strong>
                 <p>{reference.excerpt}</p>
                 <small>
-                  {[reference.source_type, reference.team, reference.week]
+                  {[SOURCE_LABELS[reference.source_type], reference.team, reference.week]
                     .filter(Boolean)
                     .join(' · ')}
                 </small>

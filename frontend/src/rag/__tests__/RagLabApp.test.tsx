@@ -129,10 +129,56 @@ describe('RagLabApp', () => {
     expect(screen.getByText(FALLBACK)).toBeInTheDocument()
     expect(screen.getByText('S1')).toBeInTheDocument()
     expect(screen.getByText('주간 수율 메일')).toBeInTheDocument()
+    expect(screen.getByText('메일 · YIELD · 2026-31')).toBeInTheDocument()
     expect(screen.getByText('인용 유효')).toBeInTheDocument()
     expect(screen.getAllByText('bm25')).toHaveLength(2)
     expect(screen.getByText('trace-1')).toBeInTheDocument()
     expect(screen.getByText('200')).toBeInTheDocument()
+  })
+
+  it('shows accessible labels for calendar and domain knowledge references', async () => {
+    const user = userEvent.setup()
+    const service = baseService()
+    vi.mocked(service.sendChat).mockResolvedValue(
+      exchange<ChatResponse>({
+        conversation_id: 'conversation-multi-source',
+        mode: 'fast_rag',
+        answer: '회의와 도메인 근거입니다 [S1] [S2]',
+        references: [
+          {
+            evidence_id: 'S1',
+            source_type: 'calendar',
+            document_id: 'event-kim-1',
+            title: 'NAND Yield Review',
+            excerpt: 'FDC 로그를 확인한다.',
+          },
+          {
+            evidence_id: 'S2',
+            source_type: 'domain_knowledge',
+            document_id: 'domain-cell-leakage',
+            title: 'Cell Leakage',
+            excerpt: '저장 전하 누설 현상이다.',
+          },
+        ],
+        quality: {
+          citation_valid: true,
+          limited_answer: false,
+          retrieval_mode: 'hybrid',
+        },
+        disclosures: [],
+        trace_id: 'trace-multi-source',
+        routing: fastRouting(),
+      }),
+    )
+
+    render(<RagLabApp service={service} />)
+    await submitQuestion(user, 'Fast 강제')
+
+    const referenceList = await screen.findByRole('region', { name: '검증된 인용 근거' })
+    expect(within(referenceList).getByText('일정/회의')).toBeInTheDocument()
+    expect(within(referenceList).getByText('도메인 지식')).toBeInTheDocument()
+    expect(within(referenceList).queryByText('calendar')).not.toBeInTheDocument()
+    expect(within(referenceList).queryByText('domain_knowledge')).not.toBeInTheDocument()
   })
 
   it('shows authoritative general routing without retrieval quality badges', async () => {

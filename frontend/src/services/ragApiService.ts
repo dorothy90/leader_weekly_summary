@@ -34,7 +34,9 @@ const isStringArray = (value: unknown): value is string[] =>
 const isReference = (value: unknown) =>
   isRecord(value) &&
   typeof value.evidence_id === 'string' &&
-  ['mail', 'wiki', 'statistic'].includes(String(value.source_type)) &&
+  ['mail', 'wiki', 'statistic', 'domain_knowledge', 'calendar'].includes(
+    String(value.source_type),
+  ) &&
   typeof value.document_id === 'string' &&
   typeof value.title === 'string' &&
   typeof value.excerpt === 'string' &&

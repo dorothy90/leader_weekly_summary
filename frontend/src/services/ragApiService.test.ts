@@ -130,6 +130,61 @@ describe('RagApiService', () => {
     expect(exchange.response?.quality?.retrieval_mode).toBe('not_used')
   })
 
+  it('accepts calendar and domain knowledge references', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        conversation_id: 'c-multi-source',
+        mode: 'fast_rag',
+        answer: '확인된 답변입니다 [S1] [S2]',
+        references: [
+          {
+            evidence_id: 'S1',
+            source_type: 'calendar',
+            document_id: 'event-kim-1',
+            title: 'NAND Yield Review',
+            excerpt: 'FDC 로그를 확인한다.',
+          },
+          {
+            evidence_id: 'S2',
+            source_type: 'domain_knowledge',
+            document_id: 'domain-cell-leakage',
+            title: 'Cell Leakage',
+            excerpt: '저장 전하 누설 현상이다.',
+          },
+        ],
+        quality: {
+          citation_valid: true,
+          limited_answer: false,
+          retrieval_mode: 'hybrid',
+        },
+        routing: {
+          requested_mode: 'fast',
+          route: 'fast',
+          executed_system: 'fast_rag',
+          reason_code: 'explicit_mode',
+          confidence: 1,
+          estimated_searches: 1,
+        },
+        disclosures: [],
+        trace_id: 'trace-multi-source',
+      }),
+    )
+
+    const exchange = await new RagApiService('/api').sendChat({
+      user_id: 'kim',
+      message: '회의와 도메인 지식을 알려줘',
+      response_mode: 'fast',
+      filters: { teams: [], weeks: [] },
+    })
+
+    expect(exchange.error).toBeUndefined()
+    expect(exchange.response?.references).toHaveLength(2)
+    expect(exchange.response?.references.map((reference) => reference.source_type)).toEqual([
+      'calendar',
+      'domain_knowledge',
+    ])
+  })
+
   it('accepts typed failed execution with unrun citation and search', async () => {
     fetchMock.mockResolvedValue(
       jsonResponse({
