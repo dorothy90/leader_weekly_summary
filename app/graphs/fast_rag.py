@@ -202,9 +202,11 @@ class FastRAGWorkflow:
         trace_sink=None,
         model_step_timeout_seconds: float = 150,
         general_timeout_seconds: float = 150,
+        agentic=None,
     ):
         self.retrieval = retrieval
         self.llm = llm
+        self.agentic = agentic
         self.validator = CitationValidator()
         self.trace_sink = trace_sink
         self.model_step_timeout_seconds = max(
@@ -463,6 +465,8 @@ class FastRAGWorkflow:
         policy: PolicyContext,
         conversation: object | None,
     ) -> FastRAGResult:
+        if self.agentic is not None:
+            return await self.agentic.invoke(request, policy, conversation)
         with ensure_node_recorder() as recorder:
             result = await self._invoke_recorded(request, policy, conversation)
             if result.execution is not None:
