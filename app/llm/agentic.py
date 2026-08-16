@@ -1,9 +1,6 @@
 import asyncio
 import json
-import re
 from typing import Protocol
-
-from pydantic import BaseModel
 
 from app.domain.agentic import (
     JudgeDecision,
@@ -30,10 +27,17 @@ NEED_FOR_SOURCE = {
     "domain_knowledge": "기술적 의미",
 }
 TIME_EXPRESSIONS = ("지난주", "어제", "이번주", "지난달")
-
-
-class _AnswerSupportDecision(BaseModel):
-    supported: bool
+SAME_EVENT_REFERENCES = (
+    "그 회의",
+    "해당 회의",
+    "이 회의",
+    "그 미팅",
+    "해당 미팅",
+    "이 미팅",
+    "그 일정",
+    "해당 일정",
+    "이 일정",
+)
 
 
 class AgentModel(Protocol):
@@ -61,6 +65,27 @@ def _time_expression(question: str) -> str | None:
     return next((item for item in TIME_EXPRESSIONS if item in question), None)
 
 
+def _saved_event_action(question, analysis, observations, memory):
+    previous = getattr(memory, "previous_event_reference", None)
+    refers_to_saved_event = any(
+        phrase in question for phrase in SAME_EVENT_REFERENCES
+    )
+    if (
+        previous is not None
+        and not observations
+        and (
+            refers_to_saved_event
+            or analysis.question_type == "follow_up"
+        )
+    ):
+        return ToolAction(
+            tool="expand_calendar_event",
+            event_id=previous.event_id,
+            reason="이전 대화의 동일 사용자 회의 참조 우선 확장",
+        )
+    return None
+
+
 class RuleBasedAgentModel:
     def __init__(self, *, now=None):
         self.now = now
@@ -76,7 +101,14 @@ class RuleBasedAgentModel:
 
     @staticmethod
     def _required_sources(analysis):
-        sources = []
+        source_for_question_type = {
+            "mail_search": "mail",
+            "calendar_search": "calendar",
+            "follow_up": "calendar",
+            "domain_knowledge": "domain_knowledge",
+        }
+        required = source_for_question_type.get(analysis.question_type)
+        sources = [required] if required else []
         for need in analysis.information_needs:
             if "메일" in need and "mail" not in sources:
                 sources.append("mail")
@@ -92,6 +124,33 @@ class RuleBasedAgentModel:
                 sources.append("domain_knowledge")
         return sources
 
+    @classmethod
+    def deterministic_missing(cls, analysis, documents, question=""):
+        found = {item.source_type for item in documents}
+        required = cls._required_sources(analysis)
+        missing_sources = [source for source in required if source not in found]
+        detail_terms = ("action", "액션", "결정", "내용", "첨부")
+        needs_calendar_detail = any(
+            any(term in need.casefold() for term in detail_terms)
+            for need in [*analysis.information_needs, question]
+        )
+        has_calendar_detail = any(
+            item.source_type == "calendar"
+            and any(
+                term in f"{item.title} {item.text}".casefold()
+                for term in ("action", "액션", "결정")
+            )
+            for item in documents
+        )
+        if (
+            "calendar" in required
+            and needs_calendar_detail
+            and not has_calendar_detail
+            and "calendar" not in missing_sources
+        ):
+            missing_sources.append("calendar")
+        return [NEED_FOR_SOURCE[source] for source in missing_sources]
+
     async def analyze(self, question, memory, timezone_name):
         text = question.casefold()
         entities = dict(getattr(memory, "entities", {}) or {})
@@ -104,7 +163,7 @@ class RuleBasedAgentModel:
         if "김oo" in text:
             entities["person"] = "김OO"
 
-        follow_up = "그 회의" in question
+        follow_up = any(phrase in question for phrase in SAME_EVENT_REFERENCES)
         wants_mail = "메일" in question
         wants_calendar = any(
             term in question for term in ("회의", "일정", "Action", "액션")
@@ -171,13 +230,11 @@ class RuleBasedAgentModel:
         )
 
     async def plan(self, question, analysis, observations, memory):
-        previous = getattr(memory, "previous_event_reference", None)
-        if analysis.question_type == "follow_up" and previous and not observations:
-            return ToolAction(
-                tool="expand_calendar_event",
-                event_id=previous.event_id,
-                reason="이전 대화의 동일 사용자 회의 참조 우선 확장",
-            )
+        saved_event_action = _saved_event_action(
+            question, analysis, observations, memory
+        )
+        if saved_event_action is not None:
+            return saved_event_action
         used = {
             SOURCE_FOR_TOOL[item.action.tool]
             for item in observations
@@ -195,32 +252,12 @@ class RuleBasedAgentModel:
 
     async def judge(self, state):
         documents = state.get("documents", [])
-        found = {item.source_type for item in documents}
-        required = self._required_sources(state["analysis"])
-        missing_sources = [source for source in required if source not in found]
-        needs_calendar_detail = any(
-            any(
-                term in need
-                for term in ("Action", "액션", "결정", "내용", "첨부")
-            )
-            for need in state["analysis"].information_needs
+        request = state.get("request")
+        missing = self.deterministic_missing(
+            state["analysis"],
+            documents,
+            getattr(request, "message", ""),
         )
-        has_calendar_detail = any(
-            item.source_type == "calendar"
-            and any(
-                term in f"{item.title} {item.text}"
-                for term in ("Action", "액션", "결정")
-            )
-            for item in documents
-        )
-        if (
-            "calendar" in required
-            and needs_calendar_detail
-            and not has_calendar_detail
-            and "calendar" not in missing_sources
-        ):
-            missing_sources.append("calendar")
-        missing = [NEED_FOR_SOURCE[source] for source in missing_sources]
         action = None
         if missing and state.get("iteration_count", 0) < 4:
             action = await self.replan(state)
@@ -314,17 +351,11 @@ class StructuredAgentModel:
         )
 
     async def plan(self, question, analysis, observations, memory):
-        previous = getattr(memory, "previous_event_reference", None)
-        if (
-            analysis.question_type == "follow_up"
-            and previous is not None
-            and not observations
-        ):
-            return ToolAction(
-                tool="expand_calendar_event",
-                event_id=previous.event_id,
-                reason="이전 대화의 동일 사용자 회의 참조 우선 확장",
-            )
+        saved_event_action = _saved_event_action(
+            question, analysis, observations, memory
+        )
+        if saved_event_action is not None:
+            return saved_event_action
         fallback = lambda: self.fallback.plan(
             question, analysis, observations, memory
         )
@@ -367,45 +398,6 @@ class StructuredAgentModel:
         return await self.fallback.replan(state)
 
     async def answer(self, question, analysis, documents, missing):
-        allowed = {f"S{index}" for index in range(1, len(documents[:8]) + 1)}
-        context = [
-            {"id": f"S{index}", "source": item.source_type, "text": item.text}
-            for index, item in enumerate(documents[:8], 1)
-        ]
-        try:
-            answer = await asyncio.wait_for(
-                self.llm.complete_text(
-                    (
-                        "제공된 근거 ID만 인용하고 근거 없는 "
-                        "사실을 만들지 마세요."
-                    ),
-                    json.dumps(
-                        {"question": question, "evidence": context},
-                        ensure_ascii=False,
-                    ),
-                ),
-                timeout=self.timeout_seconds,
-            )
-            cited = set(re.findall(r"\[(S\d+)\]", answer))
-            if cited and cited <= allowed:
-                async def unsupported():
-                    return _AnswerSupportDecision(supported=False)
-
-                support = await self._structured(
-                    _AnswerSupportDecision,
-                    (
-                        "초안의 모든 사실 주장이 제공된 근거에서 "
-                        "도출되는지 판단하세요. 인용 표시만으로는 "
-                        "지지된 주장이 아닙니다."
-                    ),
-                    json.dumps(
-                        {"draft": answer, "evidence": context},
-                        ensure_ascii=False,
-                    ),
-                    unsupported,
-                )
-                if support.supported:
-                    return answer
-        except Exception:
-            pass
+        # A model cannot independently verify its own factual claims. Keep the
+        # final answer extractive until an external verifier is available.
         return await self.fallback.answer(question, analysis, documents, missing)

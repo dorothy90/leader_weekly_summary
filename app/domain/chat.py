@@ -104,7 +104,7 @@ class QualityStatus(BaseModel):
     citation_valid: bool | None
     limited_answer: bool = False
     retrieval_mode: Literal[
-        "hybrid", "bm25", "not_used", "not_started"
+        "hybrid", "bm25", "deterministic", "not_used", "not_started"
     ] = "hybrid"
 
 

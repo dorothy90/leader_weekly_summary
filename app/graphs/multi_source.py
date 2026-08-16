@@ -57,7 +57,7 @@ class MultiSourceState(TypedDict, total=False):
     limited_answer: bool
     memory_update: AgentMemoryUpdate
     disclosures: list[str]
-    retrieval_mode: Literal["hybrid", "bm25"]
+    retrieval_mode: Literal["hybrid", "bm25", "deterministic"]
     trace: AgentTrace
     execution: ExecutionMetadata
 
@@ -77,6 +77,14 @@ class MultiSourceAgenticWorkflow:
         )
         self.validator = CitationValidator()
         self.graph = self._build()
+
+    @staticmethod
+    def _combine_retrieval_modes(*modes: str) -> str:
+        if "hybrid" in modes:
+            return "hybrid"
+        if "bm25" in modes:
+            return "bm25"
+        return "deterministic"
 
     def _build(self):
         graph = StateGraph(MultiSourceState)
@@ -221,11 +229,9 @@ class MultiSourceAgenticWorkflow:
                                 [*result.disclosures, *expanded.disclosures]
                             )
                         )[:4],
-                        "retrieval_mode": (
-                            "bm25"
-                            if "bm25"
-                            in {result.retrieval_mode, expanded.retrieval_mode}
-                            else result.retrieval_mode
+                        "retrieval_mode": self._combine_retrieval_modes(
+                            result.retrieval_mode,
+                            expanded.retrieval_mode,
                         ),
                     }
                 )
@@ -264,16 +270,45 @@ class MultiSourceAgenticWorkflow:
             "observations": [*state.get("observations", []), observation],
             "documents": documents,
             "disclosures": disclosures[:4],
-            "retrieval_mode": (
-                "bm25"
-                if "bm25"
-                in {state.get("retrieval_mode", "hybrid"), result.retrieval_mode}
-                else "hybrid"
+            "retrieval_mode": self._combine_retrieval_modes(
+                state.get("retrieval_mode", "deterministic"),
+                result.retrieval_mode,
             ),
         }
 
     async def _judge(self, state: MultiSourceState) -> dict:
-        decision = JudgeDecision.model_validate(await self.model.judge(state))
+        model_decision = JudgeDecision.model_validate(
+            await self.model.judge(state)
+        )
+        deterministic = JudgeDecision.model_validate(
+            await RuleBasedAgentModel().judge(state)
+        )
+        sufficient = model_decision.sufficient and deterministic.sufficient
+        if deterministic.sufficient:
+            recommended_action = (
+                None
+                if model_decision.sufficient
+                else model_decision.recommended_action
+            )
+        else:
+            recommended_action = (
+                deterministic.recommended_action
+                if model_decision.sufficient
+                else (
+                    model_decision.recommended_action
+                    or deterministic.recommended_action
+                )
+            )
+        decision = JudgeDecision(
+            sufficient=sufficient,
+            reason=(
+                deterministic.reason
+                if not deterministic.sufficient or model_decision.sufficient
+                else "모델이 추가 근거를 요청함"
+            ),
+            missing_information=deterministic.missing_information,
+            recommended_action=recommended_action,
+        )
         trace = AgentTrace.model_validate(state.get("trace") or {})
         safe_reason = sanitize_text(decision.reason)[:500] or "judge_result_redacted"
         return {
@@ -350,8 +385,10 @@ class MultiSourceAgenticWorkflow:
         )
         disclosures = list(state.get("disclosures", []))
         if limited:
-            if LIMIT_DISCLOSURE not in disclosures:
-                disclosures.append(LIMIT_DISCLOSURE)
+            disclosures = [
+                item for item in disclosures if item != LIMIT_DISCLOSURE
+            ][:3]
+            disclosures.append(LIMIT_DISCLOSURE)
             if LIMIT_DISCLOSURE not in answer:
                 answer = f"{answer}\n\n{LIMIT_DISCLOSURE}".strip()
 
@@ -400,15 +437,35 @@ class MultiSourceAgenticWorkflow:
 
     async def _save_memory(self, state: MultiSourceState) -> dict:
         analysis = state["analysis"]
-        documents = state.get("documents", [])
+        documents = self._deduplicate_documents(state.get("documents", []))
         event_reference = self._event_reference(documents)
+        evidence_text = "\n".join(
+            f"{item.title} {item.text}" for item in documents
+        ).casefold()
         safe_entities = {}
         for raw_key, raw_value in list(analysis.entities.items())[:16]:
             key = sanitize_text(str(raw_key))[:100]
             value = sanitize_text(str(raw_value))[:500]
-            if key and value:
+            if key and value and value.casefold() in evidence_text:
                 safe_entities[key] = value
-        topic = " ".join(dict.fromkeys(safe_entities.values()))[:500] or None
+        topic = next(
+            (
+                sanitize_text(item.title)[:500]
+                for item in documents
+                if sanitize_text(item.title)
+            ),
+            None,
+        )
+        deterministic_missing = self._safe_missing_information(
+            RuleBasedAgentModel.deterministic_missing(
+                analysis,
+                documents,
+                state["request"].message,
+            )
+        )
+        unresolved = deterministic_missing or list(
+            state["conversation"].unresolved_information
+        )
         trace = AgentTrace.model_validate(state.get("trace") or {})
         update = AgentMemoryUpdate(
             entities=safe_entities,
@@ -416,9 +473,7 @@ class MultiSourceAgenticWorkflow:
             search_history=trace.tool_calls,
             previous_event_reference=event_reference,
             retrieved_source_refs=[item.document_id for item in documents[:16]],
-            unresolved_information=self._safe_missing_information(
-                state["judge_result"].missing_information
-            ),
+            unresolved_information=unresolved,
         )
         return {"memory_update": update}
 
@@ -561,7 +616,7 @@ class MultiSourceAgenticWorkflow:
                 "iteration_count": 0,
                 "force_finish": False,
                 "disclosures": [],
-                "retrieval_mode": "hybrid",
+                "retrieval_mode": "deterministic",
                 "trace": AgentTrace(),
             }
         )

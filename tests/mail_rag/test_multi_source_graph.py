@@ -6,6 +6,7 @@ from pathlib import Path
 from app.config.settings import Settings
 from app.domain.agentic import (
     JudgeDecision,
+    QueryAnalysis,
     SearchDocument,
     SearchResult,
     ToolAction,
@@ -13,9 +14,16 @@ from app.domain.agentic import (
 from app.domain.chat import ChatRequest, ChatResponse
 from app.domain.policy import PolicyContext
 from app.graphs.fast_rag import FastRAGWorkflow
-from app.graphs.multi_source import MAX_ITERATIONS, MultiSourceAgenticWorkflow
+from app.graphs.multi_source import (
+    LIMIT_DISCLOSURE,
+    MAX_ITERATIONS,
+    MultiSourceAgenticWorkflow,
+)
 from app.llm.agentic import RuleBasedAgentModel, StructuredAgentModel
-from app.persistence.conversations import ConversationMemory
+from app.persistence.conversations import (
+    ConversationMemory,
+    apply_agent_memory_update,
+)
 from app.retrieval.dates import resolve_time_range
 from app.retrieval.multi_source import InMemoryMultiSourceSearch
 from app.retrieval.source_registry import SourceRegistry
@@ -141,6 +149,44 @@ def test_structured_planner_cannot_override_saved_event_id_for_follow_up():
     assert llm.calls == 0
 
 
+def test_raw_same_event_reference_overrides_misclassified_structured_analysis():
+    class FuzzyCalendarLLM:
+        def __init__(self):
+            self.calls = 0
+
+        async def complete_model(self, system, user, schema):
+            self.calls += 1
+            return {
+                "tool": "search_calendar",
+                "query": "NAND Yield Review",
+                "reason": "fuzzy search",
+            }
+
+    memory = ConversationMemory.model_validate(
+        {
+            "previous_event_reference": {
+                "event_id": "event-kim-1",
+                "subject": "NAND Yield Review",
+            }
+        }
+    )
+    analysis = QueryAnalysis(
+        intent="knowledge_query",
+        question_type="calendar_search",
+        information_needs=["관련 회의"],
+    )
+    llm = FuzzyCalendarLLM()
+    model = StructuredAgentModel(llm, fallback=RuleBasedAgentModel(now=NOW))
+
+    action = asyncio.run(
+        model.plan("해당 회의 Action이 뭐였어?", analysis, [], memory)
+    )
+
+    assert action.tool == "expand_calendar_event"
+    assert action.event_id == "event-kim-1"
+    assert llm.calls == 0
+
+
 def test_calendar_event_without_requested_action_is_not_judged_sufficient():
     class EventOnlySearch:
         def __init__(self):
@@ -178,6 +224,93 @@ def test_calendar_event_without_requested_action_is_not_judged_sufficient():
     ]
     assert result.quality.limited_answer is True
     assert "확인하지 못한 항목" in result.answer
+
+
+def test_model_sufficiency_cannot_override_a_missing_required_source():
+    class EmptySearch:
+        def __init__(self):
+            self.calls = []
+
+        async def execute(self, action, policy, analysis):
+            self.calls.append(action)
+            return SearchResult(
+                tool=action.tool,
+                query=action.query,
+                retrieval_mode="deterministic",
+            )
+
+    class SelfApprovingJudge(RuleBasedAgentModel):
+        async def judge(self, state):
+            return JudgeDecision(
+                sufficient=True,
+                reason="model says complete",
+                missing_information=[],
+                recommended_action=None,
+            )
+
+    search = EmptySearch()
+    workflow = MultiSourceAgenticWorkflow(search, SelfApprovingJudge())
+
+    result = invoke(workflow, "NAND 메일 찾아줘")
+
+    assert [action.tool for action in search.calls] == ["search_mail"]
+    assert "duplicate_search_blocked" in result.agent_trace.judge_decisions
+    assert result.agent_memory.unresolved_information == ["관련 메일"]
+    assert result.quality.limited_answer is True
+
+
+def test_question_type_requires_its_source_when_model_omits_information_needs():
+    analysis = QueryAnalysis(
+        intent="knowledge_query",
+        question_type="mail_search",
+        information_needs=[],
+    )
+
+    missing = RuleBasedAgentModel.deterministic_missing(analysis, [])
+
+    assert missing == ["관련 메일"]
+
+
+def test_model_sufficiency_cannot_override_missing_calendar_action_detail():
+    class EventOnlySearch:
+        async def execute(self, action, policy, analysis):
+            return SearchResult(
+                tool=action.tool,
+                query=action.query,
+                documents=[
+                    SearchDocument(
+                        source_type="calendar",
+                        document_id="event-kim-no-action",
+                        source_id="event-kim-no-action",
+                        parent_event_id="event-kim-no-action",
+                        content_kind="event",
+                        title="NAND Review",
+                        text="NAND 수율 검토 회의",
+                        score=1.0,
+                    )
+                ],
+                total_hits=1,
+                retrieval_mode="deterministic",
+            )
+
+    class SelfApprovingJudge(RuleBasedAgentModel):
+        async def judge(self, state):
+            return JudgeDecision(
+                sufficient=True,
+                reason="model says complete",
+                missing_information=[],
+                recommended_action=None,
+            )
+
+    workflow = MultiSourceAgenticWorkflow(
+        EventOnlySearch(), SelfApprovingJudge()
+    )
+
+    result = invoke(workflow, "NAND 회의에서 Action 뭐였어?")
+
+    assert result.agent_memory.unresolved_information == ["관련 회의와 Action"]
+    assert result.quality.limited_answer is True
+    assert result.execution.status == "limited"
 
 
 def test_duplicate_search_is_blocked_without_a_duplicate_backend_call():
@@ -347,6 +480,57 @@ def test_structured_answer_falls_back_when_cited_claim_is_unsupported():
     assert "[S1]" in answer
 
 
+def test_structured_answer_cannot_self_approve_a_fabricated_cited_claim():
+    class SelfApprovingLLM:
+        def __init__(self):
+            self.support_calls = 0
+
+        async def complete_model(self, system, user, schema):
+            if schema.__name__ == "QueryAnalysis":
+                return {
+                    "intent": "knowledge_query",
+                    "question_type": "mail_search",
+                    "entities": {"product": "NAND"},
+                    "information_needs": ["관련 메일"],
+                }
+            if schema.__name__ == "ToolAction":
+                return {
+                    "tool": "search_mail",
+                    "query": "NAND",
+                    "reason": "mail evidence",
+                }
+            if schema.__name__ == "JudgeDecision":
+                return {
+                    "sufficient": True,
+                    "reason": "self approved",
+                    "missing_information": [],
+                    "recommended_action": None,
+                }
+            self.support_calls += 1
+            return {"supported": True}
+
+        async def complete_text(self, system, user):
+            return "NAND 수율은 99.9%로 확정됐습니다. [S1]"
+
+    llm = SelfApprovingLLM()
+    search = InMemoryMultiSourceSearch.from_path(
+        Path("fixtures/multi_source_demo/corpus.json"),
+        SourceRegistry.from_settings(Settings()),
+    )
+    workflow = MultiSourceAgenticWorkflow(
+        search,
+        StructuredAgentModel(llm, fallback=RuleBasedAgentModel(now=NOW), now=NOW),
+    )
+
+    result = invoke(workflow, "NAND 메일 찾아줘")
+
+    assert "99.9%" not in result.answer
+    assert "Cell Leakage" in result.answer
+    assert result.quality.citation_valid is True
+    assert result.execution.status == "succeeded"
+    assert llm.support_calls == 0
+
+
 def test_model_authored_utc_is_replaced_by_deterministic_resolution():
     class MisleadingStructuredLLM:
         async def complete_model(self, system, user, schema):
@@ -431,6 +615,35 @@ def test_agentic_result_preserves_bm25_retrieval_mode():
     assert result.disclosures == ["embedding unavailable"]
 
 
+def test_agentic_result_preserves_deterministic_retrieval_mode():
+    workflow, _search = build()
+
+    result = invoke(workflow, "NAND 관련 메일 찾아줘")
+
+    assert result.quality.retrieval_mode == "deterministic"
+
+
+def test_limited_answer_reserves_a_disclosure_slot_for_the_limit_message():
+    class FourDisclosureSearch:
+        async def execute(self, action, policy, analysis):
+            return SearchResult(
+                tool=action.tool,
+                query=action.query,
+                retrieval_mode="deterministic",
+                disclosures=["one", "two", "three", "four"],
+            )
+
+    workflow = MultiSourceAgenticWorkflow(
+        FourDisclosureSearch(), RuleBasedAgentModel()
+    )
+
+    result = invoke(workflow, "NAND 관련 메일 찾아줘")
+
+    assert result.quality.limited_answer is True
+    assert len(result.disclosures) == 4
+    assert LIMIT_DISCLOSURE in result.disclosures
+
+
 def test_hostile_judge_output_is_sanitized_from_answer_trace_and_memory():
     class HostileJudgeModel(RuleBasedAgentModel):
         async def judge(self, state):
@@ -458,7 +671,62 @@ def test_hostile_judge_output_is_sanitized_from_answer_trace_and_memory():
     assert "trace secret" not in serialized
     assert "answer secret" not in serialized
     assert "/srv/private/password.txt" not in serialized
-    assert "[REDACTED_PATH]" in result.answer
+    assert "[REDACTED_PATH]" not in result.answer
+    assert result.agent_memory.unresolved_information == []
+
+
+def test_no_evidence_cannot_persist_model_authored_memory_fields():
+    class EmptySearch:
+        async def execute(self, action, policy, analysis):
+            return SearchResult(
+                tool=action.tool,
+                query=action.query,
+                retrieval_mode="deterministic",
+            )
+
+    class HostileMemoryModel(RuleBasedAgentModel):
+        async def analyze(self, question, memory, timezone_name):
+            return QueryAnalysis(
+                intent="knowledge_query",
+                question_type="mail_search",
+                entities={
+                    "product": "TOP_SECRET",
+                    "issue": "MODEL_INVENTED",
+                },
+                information_needs=["관련 메일"],
+            )
+
+        async def judge(self, state):
+            return JudgeDecision(
+                sufficient=True,
+                reason="hostile complete",
+                missing_information=["HOSTILE_MISSING"],
+                recommended_action=None,
+            )
+
+    trusted = ConversationMemory(
+        entities={"product": "TRUSTED_NAND"},
+        current_topic="Trusted topic",
+        unresolved_information=["Trusted gap"],
+    )
+    policy = PolicyContext.from_user_id("kim")
+    workflow = MultiSourceAgenticWorkflow(EmptySearch(), HostileMemoryModel())
+
+    result = asyncio.run(
+        workflow.invoke(
+            ChatRequest(user_id="kim", message="NAND 메일 찾아줘"),
+            policy,
+            trusted,
+        )
+    )
+    persisted = apply_agent_memory_update(trusted, result.agent_memory, policy)
+
+    assert result.agent_memory.entities == {}
+    assert result.agent_memory.current_topic is None
+    assert result.agent_memory.unresolved_information == ["관련 메일"]
+    assert "HOSTILE_MISSING" not in result.model_dump_json()
+    assert persisted.entities == {"product": "TRUSTED_NAND"}
+    assert persisted.current_topic == "Trusted topic"
 
 
 def test_fast_rag_facade_delegates_without_entering_legacy_graph():

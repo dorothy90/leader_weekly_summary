@@ -55,6 +55,15 @@ def test_routing_diagnostics_and_not_used_retrieval_are_bounded():
     assert quality.retrieval_mode == "not_used"
 
 
+def test_quality_status_accepts_deterministic_retrieval_mode():
+    quality = QualityStatus(
+        citation_valid=True,
+        retrieval_mode="deterministic",
+    )
+
+    assert quality.retrieval_mode == "deterministic"
+
+
 def test_execution_metadata_distinguishes_unstarted_timeout_from_citation_failure():
     execution = ExecutionMetadata(
         status="failed",
