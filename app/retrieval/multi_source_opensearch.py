@@ -1,4 +1,5 @@
 import asyncio
+import json
 import math
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -46,6 +47,16 @@ SOURCE_FIELDS = [
     "text",
     *sorted(SAFE_METADATA),
 ]
+
+MAX_DOCUMENT_ID_LENGTH = 256
+MAX_TITLE_LENGTH = 500
+MAX_TEXT_LENGTH = 8000
+MAX_METADATA_KEYS = 12
+MAX_METADATA_STRING_LENGTH = 512
+MAX_METADATA_LIST_LENGTH = 20
+MAX_METADATA_LIST_ITEM_LENGTH = 320
+MAX_METADATA_SERIALIZED_BYTES = 4096
+MAX_METADATA_NUMBER_MAGNITUDE = 2**63 - 1
 
 
 class OpenSearchMultiSourceSearch:
@@ -212,20 +223,99 @@ class OpenSearchMultiSourceSearch:
                 if not isinstance(raw_hit, Mapping):
                     continue
                 document_id = raw_hit.get("_id")
-                if document_id is None:
+                if not OpenSearchMultiSourceSearch._valid_document_id(document_id):
                     continue
-                normalized_id = str(document_id)
-                if normalized_id in seen:
+                if document_id in seen:
                     continue
-                seen.add(normalized_id)
-                ranking.append(
-                    RankedHit(normalized_id, len(ranking) + 1, dict(raw_hit))
-                )
+                seen.add(document_id)
+                ranking.append(RankedHit(document_id, len(ranking) + 1, dict(raw_hit)))
             rankings.append(ranking)
         return [
             {**item.raw, "_rrf_score": item.score}
             for item in reciprocal_rank_fusion(rankings)
         ]
+
+    @staticmethod
+    def _valid_document_id(value: object) -> bool:
+        return (
+            isinstance(value, str)
+            and bool(value.strip())
+            and len(value.strip()) <= MAX_DOCUMENT_ID_LENGTH
+        )
+
+    @staticmethod
+    def _optional_id(source: Mapping, key: str) -> tuple[str | None, bool]:
+        value = source.get(key)
+        if value is None:
+            return None, True
+        if not OpenSearchMultiSourceSearch._valid_document_id(value):
+            return None, False
+        return value.strip(), True
+
+    @staticmethod
+    def _title(source: Mapping) -> tuple[str, bool]:
+        for key in ("subject", "title"):
+            value = source.get(key)
+            if value is None:
+                continue
+            if not isinstance(value, str):
+                return "", False
+            normalized = value.strip()
+            if not normalized:
+                continue
+            if len(normalized) > MAX_TITLE_LENGTH:
+                return "", False
+            return normalized, True
+        return "", True
+
+    @staticmethod
+    def _metadata_value(value: object) -> object:
+        if value is None or isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            if len(value) > MAX_METADATA_STRING_LENGTH:
+                raise ValueError("metadata string exceeds limit")
+            return value
+        if isinstance(value, int):
+            if abs(value) > MAX_METADATA_NUMBER_MAGNITUDE:
+                raise ValueError("metadata integer exceeds limit")
+            return value
+        if isinstance(value, float):
+            if not math.isfinite(value) or abs(value) > MAX_METADATA_NUMBER_MAGNITUDE:
+                raise ValueError("metadata float exceeds limit")
+            return value
+        if isinstance(value, list):
+            if len(value) > MAX_METADATA_LIST_LENGTH:
+                raise ValueError("metadata list exceeds limit")
+            result = []
+            for item in value:
+                if not isinstance(item, str):
+                    raise ValueError("metadata lists must contain strings")
+                if len(item) > MAX_METADATA_LIST_ITEM_LENGTH:
+                    raise ValueError("metadata list item exceeds limit")
+                result.append(item)
+            return result
+        raise ValueError("unsupported metadata value")
+
+    @classmethod
+    def _safe_metadata(cls, source: Mapping) -> dict[str, object] | None:
+        keys = sorted(key for key in SAFE_METADATA if key in source)
+        if len(keys) > MAX_METADATA_KEYS:
+            return None
+        try:
+            metadata = {key: cls._metadata_value(source[key]) for key in keys}
+            serialized = json.dumps(
+                metadata,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+        except (TypeError, ValueError):
+            return None
+        if len(serialized) > MAX_METADATA_SERIALIZED_BYTES:
+            return None
+        return metadata
 
     def _normalize_hits(
         self,
@@ -257,12 +347,28 @@ class OpenSearchMultiSourceSearch:
                 attachment_name = str(source.get("attachment_name") or "")
                 if action.attachment_name.casefold() not in attachment_name.casefold():
                     continue
-            text = str(source.get("text") or "").strip()
-            if not text or hit.get("_id") is None:
+            document_id = hit.get("_id")
+            if not self._valid_document_id(document_id):
                 continue
-            metadata = {
-                key: source[key] for key in sorted(SAFE_METADATA) if key in source
-            }
+            text_value = source.get("text")
+            if not isinstance(text_value, str):
+                continue
+            text = text_value.strip()
+            if not text or len(text) > MAX_TEXT_LENGTH:
+                continue
+            source_id, source_id_valid = self._optional_id(source, "source_id")
+            parent_event_id, parent_event_id_valid = self._optional_id(
+                source, "parent_event_id"
+            )
+            title, title_valid = self._title(source)
+            metadata = self._safe_metadata(source)
+            if not (
+                source_id_valid
+                and parent_event_id_valid
+                and title_valid
+                and metadata is not None
+            ):
+                continue
             raw_score = hit.get("_rrf_score") or hit.get("_score") or 0
             try:
                 score = float(raw_score)
@@ -270,20 +376,12 @@ class OpenSearchMultiSourceSearch:
                     continue
                 document = SearchDocument(
                     source_type=source_type,
-                    document_id=str(hit["_id"]),
-                    source_id=(
-                        str(source["source_id"])
-                        if source.get("source_id") is not None
-                        else None
-                    ),
-                    parent_event_id=(
-                        str(source["parent_event_id"])
-                        if source.get("parent_event_id") is not None
-                        else None
-                    ),
+                    document_id=document_id.strip(),
+                    source_id=source_id,
+                    parent_event_id=parent_event_id,
                     content_kind=source.get("content_kind"),
-                    title=str(source.get("subject") or source.get("title") or "")[:500],
-                    text=text[:8000],
+                    title=title,
+                    text=text,
                     score=score,
                     metadata=metadata,
                 )

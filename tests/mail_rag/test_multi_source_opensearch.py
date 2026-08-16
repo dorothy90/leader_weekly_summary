@@ -2,6 +2,8 @@ import asyncio
 from copy import deepcopy
 from datetime import UTC, datetime
 
+import pytest
+
 from app.config.settings import Settings
 from app.domain.agentic import QueryAnalysis, SearchDocument, ToolAction
 from app.domain.chat import BM25_FALLBACK_DISCLOSURE
@@ -639,3 +641,142 @@ def test_production_mail_reconstruction_sorts_and_deduplicates_chunks():
 
     assert result[0].document_id == "p1"
     assert result[0].text == "first\n\nsecond"
+
+
+def normalize_mail_hit(*, document_id="doc-1", **source):
+    payload = {
+        "employee_id": "kim",
+        "is_active": True,
+        "content_kind": "body",
+        "text": "bounded text",
+        **source,
+    }
+    action = ToolAction(tool="search_mail", query="NAND", reason="normalize")
+    return workflow(RecordingBackend())._normalize_hits(
+        [{"_id": document_id, "_rrf_score": 1, "_source": payload}],
+        action,
+        PolicyContext.from_user_id("kim"),
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("text", ["private", "content"]),
+        ("text", {"private": "content"}),
+        ("subject", ["private", "title"]),
+        ("title", {"private": "title"}),
+        ("source_id", ["mail-1"]),
+        ("source_id", {"id": "mail-1"}),
+        ("parent_event_id", ["event-1"]),
+        ("parent_event_id", {"id": "event-1"}),
+    ],
+)
+def test_normalization_never_stringifies_structured_source_values(field, value):
+    assert normalize_mail_hit(**{field: value}) == []
+
+
+@pytest.mark.parametrize(
+    "document_id",
+    [123, ["doc-1"], {"id": "doc-1"}],
+)
+def test_normalization_requires_string_document_ids(document_id):
+    assert normalize_mail_hit(document_id=document_id) == []
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("document_id", "d" * 257),
+        ("source_id", "s" * 257),
+        ("parent_event_id", "p" * 257),
+        ("subject", "t" * 501),
+        ("text", "x" * 8001),
+    ],
+)
+def test_normalization_rejects_overlong_structured_fields(field, value):
+    if field == "document_id":
+        documents = normalize_mail_hit(document_id=value)
+    else:
+        documents = normalize_mail_hit(**{field: value})
+    assert documents == []
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"timezone": "x" * 513},
+        {"attendee_emails": ["user@example.com"] * 21},
+        {"attendee_emails": ["x" * 321]},
+        {"timezone": {"secret": "nested"}},
+        {"attendee_emails": [["nested@example.com"]]},
+    ],
+)
+def test_normalization_rejects_oversized_or_nested_metadata_values(metadata):
+    assert normalize_mail_hit(**metadata) == []
+
+
+def test_normalization_rejects_too_many_safe_metadata_keys():
+    metadata = {
+        "attachment_id": "a",
+        "attachment_name": "b",
+        "attendee_emails": ["kim@example.com"],
+        "calendar_item_id": "c",
+        "chunk_index": 1,
+        "end_at_utc": "2026-08-09T15:00:00+00:00",
+        "modified_at": "2026-08-09T15:00:00+00:00",
+        "occurrence_id": "o",
+        "organizer_email": "lead@example.com",
+        "received_at": "2026-08-09T15:00:00+00:00",
+        "sent_at": "2026-08-09T15:00:00+00:00",
+        "series_master_id": "s",
+        "start_at_utc": "2026-08-02T15:00:00+00:00",
+    }
+
+    assert normalize_mail_hit(**metadata) == []
+
+
+def test_normalization_rejects_metadata_over_aggregate_serialized_limit():
+    metadata = {
+        "attachment_id": "a" * 500,
+        "attachment_name": "b" * 500,
+        "calendar_item_id": "c" * 500,
+        "end_at_utc": "d" * 500,
+        "modified_at": "e" * 500,
+        "occurrence_id": "f" * 500,
+        "organizer_email": "g" * 500,
+        "received_at": "h" * 500,
+        "sent_at": "i" * 500,
+    }
+
+    assert normalize_mail_hit(**metadata) == []
+
+
+def test_normalization_preserves_valid_bounded_metadata_without_aliasing_lists():
+    attendees = ["kim@example.com", "lead@example.com"]
+
+    documents = normalize_mail_hit(
+        source_id="mail-1",
+        title="NAND Review",
+        received_at="2026-08-09T15:00:00+00:00",
+        timezone="Asia/Seoul",
+        attendee_emails=attendees,
+        attachment_name="action.pdf",
+        chunk_index=3,
+        modified_at=None,
+    )
+    attendees.append("late-mutation@example.com")
+
+    assert len(documents) == 1
+    assert documents[0].document_id == "doc-1"
+    assert documents[0].source_id == "mail-1"
+    assert documents[0].title == "NAND Review"
+    assert documents[0].text == "bounded text"
+    assert documents[0].metadata == {
+        "attachment_name": "action.pdf",
+        "attendee_emails": ["kim@example.com", "lead@example.com"],
+        "chunk_index": 3,
+        "modified_at": None,
+        "received_at": "2026-08-09T15:00:00+00:00",
+        "timezone": "Asia/Seoul",
+    }
