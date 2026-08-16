@@ -22,6 +22,11 @@ OPENSEARCH_VERIFY_CERTS
 MAIL_CHILD_INDEX
 MAIL_PARENT_INDEX
 WIKI_INDEX
+DOMAIN_KNOWLEDGE_INDEX
+MAIL_INDEX_ALIAS
+CALENDAR_INDEX_ALIAS
+DEFAULT_USER_TIMEZONE
+MULTI_SOURCE_DEMO
 OPENROUTER_API_KEY
 OPENROUTER_BASE_URL
 OPENROUTER_LLM_MODEL
@@ -31,6 +36,22 @@ MONGO_URI
 MONGO_DB
 MAIL_CONTENT_ROOT
 ```
+
+The multi-source defaults are:
+
+```dotenv
+DOMAIN_KNOWLEDGE_INDEX=syld_gpt
+MAIL_INDEX_ALIAS=ews-mail-active
+CALENDAR_INDEX_ALIAS=ews-calendar-active
+DEFAULT_USER_TIMEZONE=Asia/Seoul
+MULTI_SOURCE_DEMO=false
+```
+
+`MAIL_INDEX_ALIAS` and `CALENDAR_INDEX_ALIAS` must be read aliases, not
+physical versioned index names. Agent/model output cannot select an index,
+owner, or raw OpenSearch DSL. Backend code always injects
+`employee_id == policy.user_id` and `is_active == true` for Mail; Calendar
+search and expansion also inject `is_cancelled == false`.
 
 `OPENROUTER_API_KEY`, a reachable `MONGO_URI`, and reachable OpenRouter and OpenSearch endpoints are required for normal service operation. The default AI endpoint, models, and per-request timeout are:
 
@@ -60,6 +81,16 @@ from app.api.main import create_app
 uvicorn.run(create_app(build_container()), host="127.0.0.1", port=8000)
 PY
 ```
+
+For the local multi-source demo, no OpenSearch, MongoDB, embedding service, LLM
+credential, or `.env` file is required:
+
+```bash
+MULTI_SOURCE_DEMO=true uvicorn app.api.main:app --host 127.0.0.1 --port 8000
+```
+
+The CLI and alternate-question commands are documented in
+[`multi_source_demo.md`](multi_source_demo.md).
 
 The worker below is optional compatibility support for previously queued research
 jobs. Normal `POST /v1/chat` Deep requests do not enqueue jobs and do not require
@@ -126,7 +157,14 @@ curl --fail --silent http://127.0.0.1:8000/health
 curl --fail --silent http://127.0.0.1:8000/ready
 ```
 
-`/health` returns `{"status":"ok"}` and is liveness only. `/ready` returns success only after MongoDB ping, OpenSearch cluster health, and configured alias checks pass. Before cutover, also verify one controlled embedding and LLM request without logging inputs or outputs.
+`/health` returns `{"status":"ok"}` and is liveness only. In production,
+`/ready` returns success only after MongoDB ping, OpenSearch cluster health,
+and configured alias checks pass, including `MAIL_INDEX_ALIAS` and
+`CALENDAR_INDEX_ALIAS`. With `MULTI_SOURCE_DEMO=true`, readiness instead
+reports the in-memory OpenSearch, Mongo, alias, and rule-based agent
+dependencies as ready without external probes. Before production cutover,
+also verify one controlled embedding and LLM request without logging inputs or
+outputs.
 
 For a failed or cancelled job, call `POST /v1/research/{job_id}/retry` with the verified owner in the body. For a stuck running job, first confirm that no worker still owns its lease; the worker will reclaim it after expiry. Do not edit lease tokens or job owners manually. Cancellation is requested through the API so queued/running transitions remain consistent.
 
@@ -183,6 +221,13 @@ python scripts/shadow_retrieval.py \
 Review zero owner leakage, collisions, missing-owner quarantine, retrieval overlap, fallback rate, and latency before alias changes.
 
 ## Alias cutover
+
+Multi-source Mail and Calendar tools resolve their targets from
+`MAIL_INDEX_ALIAS` and `CALENDAR_INDEX_ALIAS` on every service construction.
+An atomic alias cutover therefore requires no agent code change. Update an
+alias only after owner isolation, lifecycle filtering, event-expansion, and
+citation smoke tests pass; then restart the service if its configured alias
+name changed.
 
 Set explicit names and perform one atomic Alias cutover through the configured client. Never point both owner-filtered reads and unowned legacy reads at the same alias.
 

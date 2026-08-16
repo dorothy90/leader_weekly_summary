@@ -360,15 +360,27 @@ class OpenSearchMultiSourceSearch:
             parent_event_id, parent_event_id_valid = self._optional_id(
                 source, "parent_event_id"
             )
+            calendar_item_id, calendar_item_id_valid = self._optional_id(
+                source, "calendar_item_id"
+            )
             title, title_valid = self._title(source)
             metadata = self._safe_metadata(source)
             if not (
                 source_id_valid
                 and parent_event_id_valid
+                and calendar_item_id_valid
                 and title_valid
                 and metadata is not None
             ):
                 continue
+            normalized_document_id = document_id.strip()
+            if (
+                source_type == "calendar"
+                and source.get("content_kind") == "event"
+                and calendar_item_id is not None
+            ):
+                normalized_document_id = calendar_item_id
+                parent_event_id = calendar_item_id
             raw_score = hit.get("_rrf_score") or hit.get("_score") or 0
             try:
                 score = float(raw_score)
@@ -376,7 +388,7 @@ class OpenSearchMultiSourceSearch:
                     continue
                 document = SearchDocument(
                     source_type=source_type,
-                    document_id=document_id.strip(),
+                    document_id=normalized_document_id,
                     source_id=source_id,
                     parent_event_id=parent_event_id,
                     content_kind=source.get("content_kind"),

@@ -6,8 +6,14 @@ import pytest
 
 from app.config.settings import Settings
 from app.domain.agentic import QueryAnalysis, SearchDocument, ToolAction
-from app.domain.chat import BM25_FALLBACK_DISCLOSURE
+from app.domain.chat import BM25_FALLBACK_DISCLOSURE, ChatRequest
 from app.domain.policy import PolicyContext
+from app.graphs.multi_source import MultiSourceAgenticWorkflow
+from app.llm.agentic import RuleBasedAgentModel
+from app.persistence.conversations import (
+    ConversationMemory,
+    apply_agent_memory_update,
+)
 from app.retrieval.multi_source_opensearch import OpenSearchMultiSourceSearch
 from app.retrieval.source_registry import SourceRegistry
 
@@ -274,6 +280,103 @@ def test_calendar_search_does_not_auto_expand_events():
     assert not any(
         "parent_event_id" in repr(filters_from(body)) for _, body in backend.calls
     )
+
+
+def test_production_calendar_uses_stable_event_id_for_memory_and_follow_up():
+    event_hit = hit(
+        "doc-42",
+        employee_id="kim",
+        is_active=True,
+        is_cancelled=False,
+        calendar_item_id="event-42",
+        content_kind="event",
+        subject="NAND Yield Review",
+        text="NAND review meeting",
+    )
+    bundle = {
+        "hits": {
+            "hits": [
+                event_hit,
+                hit(
+                    "doc-attachment-42",
+                    employee_id="kim",
+                    is_active=True,
+                    is_cancelled=False,
+                    parent_event_id="event-42",
+                    content_kind="attachment",
+                    attachment_name="action.pdf",
+                    text="Action: inspect the FDC log",
+                ),
+            ]
+        }
+    }
+
+    class ProductionShapedBackend(RecordingBackend):
+        async def search(self, index, body):
+            self.calls.append((index, deepcopy(body)))
+            relation = next(
+                (
+                    item
+                    for item in filters_from(body)
+                    if "bool" in item and "should" in item["bool"]
+                ),
+                None,
+            )
+            if relation is not None:
+                return deepcopy(bundle)
+            return {"hits": {"hits": [deepcopy(event_hit)]}}
+
+    backend = ProductionShapedBackend()
+    search = workflow(backend)
+    agent = MultiSourceAgenticWorkflow(search, RuleBasedAgentModel())
+    policy = PolicyContext.from_user_id("kim")
+
+    first = asyncio.run(
+        agent.invoke(
+            ChatRequest(
+                user_id="kim",
+                message="NAND Yield Review 회의에서 Action 뭐였어?",
+            ),
+            policy,
+            ConversationMemory(),
+        )
+    )
+    memory = apply_agent_memory_update(
+        ConversationMemory(), first.agent_memory, policy
+    )
+
+    assert "event-42" in {item.document_id for item in first.evidence}
+    assert "doc-42" not in {item.document_id for item in first.evidence}
+    assert memory.previous_event_reference.event_id == "event-42"
+
+    follow_up = asyncio.run(
+        agent.invoke(
+            ChatRequest(
+                user_id="kim",
+                message="그 회의에서 Action 뭐였어?",
+            ),
+            policy,
+            memory,
+        )
+    )
+
+    relation_calls = [
+        body
+        for _index, body in backend.calls
+        if any(
+            "bool" in item and "should" in item["bool"]
+            for item in filters_from(body)
+        )
+    ]
+    assert len(relation_calls) == 2
+    assert follow_up.agent_memory.previous_event_reference.event_id == "event-42"
+    for body in relation_calls:
+        serialized = repr(filters_from(body))
+        assert "event-42" in serialized
+        assert "doc-42" not in serialized
+        assert {"term": {"employee_id": "kim"}} in filters_from(body)
+        assert {"term": {"is_active": True}} in filters_from(body)
+        assert {"term": {"is_cancelled": False}} in filters_from(body)
 
 
 def test_hybrid_searches_start_concurrently_after_embedding_finishes():

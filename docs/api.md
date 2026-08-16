@@ -10,6 +10,11 @@ All JSON requests reject undeclared fields. `user_id` is 1–128 characters afte
 
 ## POST /v1/chat
 
+Multi-source Agentic RAG does not add or rename any request field. The request
+remains `ChatRequest`, and existing clients can continue sending the same
+`user_id`, `message`, optional `conversation_id`, `filters`, and
+`response_mode` fields shown below.
+
 Request body:
 
 ```json
@@ -84,6 +89,12 @@ Deep routing returns HTTP 200 after the bounded Deep workflow completes. `mode` 
 `deep_research`; `answer`, `references`, and `quality` are populated in the same
 response while `job_id`, `status`, and `plan_summary` remain null. General, Fast,
 and Deep therefore share one `POST /v1/chat` request-response contract.
+
+`references[].source_type` now also accepts `domain_knowledge` and `calendar`,
+in addition to the existing `mail`, `wiki`, and `statistic` values. Both new
+sources use the unchanged public reference shape. Calendar identifiers are
+opaque stable event/document identifiers; storage index names, raw query DSL,
+employee IDs, and private agent state are never included in the response.
 
 Automatic routing also has two deterministic system routes. Questions such as “왜 답변을 못했어?” use `diagnostic` and read the previous persisted execution state. Questions such as “뭐가 임베딩돼 있어?” use `corpus_info` and run exact-`user_id` OpenSearch aggregations for counts, teams, weeks, mail types, recent titles, and embedding-model metadata. Neither route asks the LLM to invent operational facts.
 

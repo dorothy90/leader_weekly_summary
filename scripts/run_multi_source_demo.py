@@ -45,16 +45,17 @@ async def run(question: str, user_id: str) -> int:
     if result.agent_trace:
         print("Tool calls:", " -> ".join(tool_calls))
         print("Iterations:", result.agent_trace.iteration_count)
-    required = {"mail", "calendar", "domain_knowledge"}
-    actual = {item.source_type for item in result.evidence}
     complete = bool(
-        required <= actual
+        result.evidence
         and result.quality.citation_valid
         and not result.quality.limited_answer
         and result.execution is not None
         and result.execution.status == "succeeded"
-        and tool_calls == CANONICAL_TOOLS
     )
+    if question == DEFAULT_QUESTION:
+        required = {"mail", "calendar", "domain_knowledge"}
+        actual = {item.source_type for item in result.evidence}
+        complete = complete and required <= actual and tool_calls == CANONICAL_TOOLS
     return 0 if complete else 1
 
 

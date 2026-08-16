@@ -1,6 +1,7 @@
 import asyncio
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 
@@ -28,6 +29,49 @@ async def post(app, payload):
     transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
     async with httpx.AsyncClient(transport=transport, base_url="http://demo") as client:
         return await client.post("/v1/chat", json=payload)
+
+
+def canonical_demo_response():
+    app = create_app(build_demo_container())
+    response = asyncio.run(
+        post(
+            app,
+            {
+                "user_id": "kim",
+                "message": CANONICAL_QUESTION,
+                "response_mode": "fast",
+            },
+        )
+    )
+    assert response.status_code == 200
+    return response.json()
+
+
+def test_application_search_code_contains_no_physical_ews_index_names():
+    roots = [ROOT / "app", ROOT / "scripts"]
+    text = "\n".join(
+        path.read_text(encoding="utf-8", errors="ignore")
+        for root in roots
+        for path in root.rglob("*.py")
+    )
+    assert "ews-mail-v1" not in text
+    assert "ews-calendar-v1" not in text
+
+
+def test_demo_response_never_contains_decoy_content():
+    body = canonical_demo_response()
+    serialized = str(body)
+    assert "다른 사용자의" not in serialized
+    assert "비활성 문서" not in serialized
+    assert "취소된 회의" not in serialized
+
+
+def test_every_answer_citation_exists_in_same_response_references():
+    body = canonical_demo_response()
+    evidence_ids = {item["evidence_id"] for item in body["references"]}
+    cited = set(re.findall(r"\[(S\d+)\]", body["answer"]))
+    assert cited
+    assert cited <= evidence_ids
 
 
 def test_demo_container_uses_only_in_memory_and_rule_based_dependencies(monkeypatch):
@@ -264,6 +308,26 @@ def test_demo_cli_runs_canonical_scenario_without_external_services():
         "expand_calendar_event -> search_domain_knowledge"
     ) in result.stdout
     assert "Traceback" not in result.stdout + result.stderr
+
+
+def test_demo_cli_custom_calendar_question_succeeds_without_canonical_tool_path():
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/run_multi_source_demo.py",
+            "지난주 NAND 회의에서 Action 뭐였어?",
+        ],
+        cwd=ROOT,
+        env={**os.environ, "OPENROUTER_API_KEY": ""},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "FDC" in result.stdout
+    assert "Sources: calendar" in result.stdout
+    assert "Tool calls: search_calendar -> expand_calendar_event" in result.stdout
 
 
 def test_demo_cli_reports_invalid_input_without_traceback_or_raw_state():

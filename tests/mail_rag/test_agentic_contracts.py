@@ -5,6 +5,10 @@ from pydantic import ValidationError
 
 from app.config.settings import Settings
 from app.domain.agentic import (
+    AgentMemoryUpdate,
+    AgentTrace,
+    JudgeDecision,
+    Observation,
     QueryAnalysis,
     ResolvedTimeRange,
     SearchDocument,
@@ -108,3 +112,103 @@ def test_query_analysis_rejects_non_utc_range():
             start_at_utc=datetime(2026, 8, 3, tzinfo=seoul),
             end_at_utc=datetime(2026, 8, 10, tzinfo=seoul),
         )
+
+
+def _contract_action():
+    return ToolAction(tool="search_mail", query="NAND", reason="mail evidence")
+
+
+def _contract_document(index: int = 0):
+    return SearchDocument(
+        source_type="mail",
+        document_id=f"mail-{index}",
+        text="NAND evidence",
+        score=1.0,
+    )
+
+
+def _contract_result(document_count: int = 1):
+    return SearchResult(
+        tool="search_mail",
+        query="NAND",
+        documents=[_contract_document(index) for index in range(document_count)],
+        total_hits=document_count,
+    )
+
+
+def test_agent_output_contracts_accept_representative_values_at_bounds():
+    observation = Observation(
+        action=_contract_action(),
+        result=_contract_result(20),
+        extracted_entities={"product": "NAND"},
+    )
+    decision = JudgeDecision(
+        sufficient=False,
+        reason="additional evidence is required",
+        missing_information=[f"need-{index}" for index in range(8)],
+        recommended_action=_contract_action(),
+    )
+    memory = AgentMemoryUpdate(
+        entities={"product": "NAND"},
+        current_topic="NAND",
+        search_history=[f"search-{index}" for index in range(16)],
+        retrieved_source_refs=[f"mail-{index}" for index in range(16)],
+        unresolved_information=[f"need-{index}" for index in range(8)],
+    )
+    trace = AgentTrace(
+        tool_calls=[f"tool-{index}" for index in range(8)],
+        judge_decisions=[f"decision-{index}" for index in range(8)],
+        iteration_count=4,
+    )
+
+    assert len(observation.result.documents) == 20
+    assert len(decision.missing_information) == 8
+    assert len(memory.search_history) == 16
+    assert trace.iteration_count == 4
+
+
+@pytest.mark.parametrize(
+    "factory",
+    [
+        lambda: Observation(
+            action=_contract_action(),
+            result=_contract_result(),
+            unexpected="private",
+        ),
+        lambda: JudgeDecision(
+            sufficient=True,
+            reason="complete",
+            unexpected="private",
+        ),
+        lambda: AgentMemoryUpdate(unexpected="private"),
+        lambda: AgentTrace(unexpected="private"),
+    ],
+    ids=["observation", "judge-decision", "agent-memory", "agent-trace"],
+)
+def test_agent_output_contracts_reject_extra_fields(factory):
+    with pytest.raises(ValidationError):
+        factory()
+
+
+@pytest.mark.parametrize(
+    "factory",
+    [
+        lambda: Observation(
+            action=_contract_action(),
+            result=_contract_result(21),
+        ),
+        lambda: JudgeDecision(
+            sufficient=False,
+            reason="missing",
+            missing_information=[f"need-{index}" for index in range(9)],
+        ),
+        lambda: AgentMemoryUpdate(
+            search_history=[f"search-{index}" for index in range(17)]
+        ),
+        lambda: AgentTrace(iteration_count=5),
+    ],
+    ids=["observation", "judge-decision", "agent-memory", "agent-trace"],
+)
+def test_agent_output_contracts_reject_values_beyond_bounds(factory):
+    with pytest.raises(ValidationError):
+        factory()

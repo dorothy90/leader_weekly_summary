@@ -15,6 +15,13 @@ def test_last_week_uses_seoul_calendar_and_half_open_utc_range():
     assert resolved.end_at_utc == datetime(2026, 8, 9, 15, tzinfo=UTC)
 
 
+def test_this_week_uses_seoul_monday_and_half_open_utc_range():
+    resolved = resolve_time_range("이번주", now=NOW, timezone_name="Asia/Seoul")
+    assert resolved.expression == "이번주"
+    assert resolved.start_at_utc == datetime(2026, 8, 9, 15, tzinfo=UTC)
+    assert resolved.end_at_utc == datetime(2026, 8, 16, 15, tzinfo=UTC)
+
+
 def test_yesterday_and_last_month_are_deterministic():
     yesterday = resolve_time_range("어제", now=NOW)
     last_month = resolve_time_range("지난달", now=NOW)
