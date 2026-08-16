@@ -340,8 +340,7 @@ def test_demo_cli_custom_calendar_question_succeeds_without_canonical_tool_path(
         if item.strip()
     ]
     assert tools == ["search_calendar", "expand_calendar_event"]
-    assert sources
-    assert set(sources) == {"calendar"}
+    assert sources == ["calendar", "calendar"]
 
 
 def test_demo_cli_reports_invalid_input_without_traceback_or_raw_state():

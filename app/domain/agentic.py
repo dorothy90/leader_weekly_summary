@@ -1,11 +1,15 @@
 from datetime import UTC, datetime, timedelta
+import json
 import re
 from typing import Annotated, Literal
 
 from pydantic import (
+    AfterValidator,
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
+    StrictBool,
     StringConstraints,
     field_validator,
     model_validator,
@@ -22,6 +26,13 @@ ToolName = Literal[
 MAX_EVENT_ID_LENGTH = 256
 STABLE_EVENT_ID_PATTERN = r"^[A-Za-z0-9_.:@+-]+$"
 _STABLE_EVENT_ID = re.compile(STABLE_EVENT_ID_PATTERN)
+MAX_METADATA_KEYS = 12
+MAX_METADATA_KEY_LENGTH = 64
+MAX_METADATA_STRING_LENGTH = 512
+MAX_METADATA_LIST_LENGTH = 20
+MAX_METADATA_LIST_ITEM_LENGTH = 320
+MAX_METADATA_SERIALIZED_BYTES = 4096
+MAX_METADATA_NUMBER_MAGNITUDE = 2**63 - 1
 
 EntityKey = Annotated[
     str,
@@ -76,6 +87,85 @@ StableEventId = Annotated[
         max_length=MAX_EVENT_ID_LENGTH,
         pattern=STABLE_EVENT_ID_PATTERN,
     ),
+]
+MetadataKey = Annotated[
+    str,
+    StringConstraints(
+        strict=True,
+        min_length=1,
+        max_length=MAX_METADATA_KEY_LENGTH,
+    ),
+]
+MetadataString = Annotated[
+    str,
+    StringConstraints(strict=True, max_length=MAX_METADATA_STRING_LENGTH),
+]
+MetadataListItem = Annotated[
+    str,
+    StringConstraints(strict=True, max_length=MAX_METADATA_LIST_ITEM_LENGTH),
+]
+MetadataStringList = Annotated[
+    list[MetadataListItem],
+    Field(strict=True, max_length=MAX_METADATA_LIST_LENGTH),
+]
+MetadataInteger = Annotated[
+    int,
+    Field(
+        strict=True,
+        ge=-MAX_METADATA_NUMBER_MAGNITUDE,
+        le=MAX_METADATA_NUMBER_MAGNITUDE,
+    ),
+]
+
+
+def _require_metadata_float(value: object) -> object:
+    if type(value) is not float:
+        raise ValueError("metadata float must be a float")
+    return value
+
+
+MetadataFloat = Annotated[
+    float,
+    BeforeValidator(_require_metadata_float),
+    Field(
+        strict=True,
+        allow_inf_nan=False,
+        ge=-MAX_METADATA_NUMBER_MAGNITUDE,
+        le=MAX_METADATA_NUMBER_MAGNITUDE,
+    ),
+]
+MetadataValue = (
+    MetadataString
+    | MetadataInteger
+    | MetadataFloat
+    | StrictBool
+    | MetadataStringList
+    | None
+)
+
+
+def _validate_metadata_aggregate(
+    value: dict[MetadataKey, MetadataValue],
+) -> dict[MetadataKey, MetadataValue]:
+    try:
+        serialized = json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise ValueError("metadata must be safely JSON serializable") from exc
+    if len(serialized) > MAX_METADATA_SERIALIZED_BYTES:
+        raise ValueError("metadata exceeds serialized size limit")
+    return value
+
+
+SearchMetadata = Annotated[
+    dict[MetadataKey, MetadataValue],
+    Field(strict=True, max_length=MAX_METADATA_KEYS),
+    AfterValidator(_validate_metadata_aggregate),
 ]
 
 
@@ -217,9 +307,7 @@ class SearchDocument(BaseModel):
     title: str = Field(default="", max_length=500)
     text: str = Field(min_length=1, max_length=8000)
     score: float
-    metadata: dict[str, str | int | float | bool | list[str] | None] = Field(
-        default_factory=dict
-    )
+    metadata: SearchMetadata = Field(default_factory=dict)
 
 
 def search_document_identity(

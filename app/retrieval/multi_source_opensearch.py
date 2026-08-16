@@ -7,6 +7,13 @@ from typing import Any
 from pydantic import ValidationError
 
 from app.domain.agentic import (
+    MAX_METADATA_KEY_LENGTH,
+    MAX_METADATA_KEYS,
+    MAX_METADATA_LIST_ITEM_LENGTH,
+    MAX_METADATA_LIST_LENGTH,
+    MAX_METADATA_NUMBER_MAGNITUDE,
+    MAX_METADATA_SERIALIZED_BYTES,
+    MAX_METADATA_STRING_LENGTH,
     QueryAnalysis,
     SearchDocument,
     SearchResult,
@@ -53,14 +60,6 @@ SOURCE_FIELDS = [
 MAX_DOCUMENT_ID_LENGTH = 256
 MAX_TITLE_LENGTH = 500
 MAX_TEXT_LENGTH = 8000
-MAX_METADATA_KEYS = 12
-MAX_METADATA_STRING_LENGTH = 512
-MAX_METADATA_LIST_LENGTH = 20
-MAX_METADATA_LIST_ITEM_LENGTH = 320
-MAX_METADATA_SERIALIZED_BYTES = 4096
-MAX_METADATA_NUMBER_MAGNITUDE = 2**63 - 1
-
-
 class OpenSearchMultiSourceSearch:
     def __init__(self, backend, embeddings, registry: SourceRegistry):
         self.backend = backend
@@ -302,7 +301,9 @@ class OpenSearchMultiSourceSearch:
     @classmethod
     def _safe_metadata(cls, source: Mapping) -> dict[str, object] | None:
         keys = sorted(key for key in SAFE_METADATA if key in source)
-        if len(keys) > MAX_METADATA_KEYS:
+        if len(keys) > MAX_METADATA_KEYS or any(
+            len(key) > MAX_METADATA_KEY_LENGTH for key in keys
+        ):
             return None
         try:
             metadata = {key: cls._metadata_value(source[key]) for key in keys}

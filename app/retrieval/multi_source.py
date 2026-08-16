@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.domain.agentic import (
     QueryAnalysis,
     SearchDocument,
+    SearchMetadata,
     SearchResult,
     ToolAction,
     normalize_stable_event_id,
@@ -43,7 +44,7 @@ class StoredDocument(BaseModel):
     title: str = ""
     text: str = Field(min_length=1, max_length=8000)
     occurred_at: str | None = None
-    metadata: dict = Field(default_factory=dict)
+    metadata: SearchMetadata = Field(default_factory=dict)
 
 
 def _tokens(text: str) -> set[str]:

@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta, timezone
+import json
 
 import pytest
 from pydantic import ValidationError
@@ -119,12 +120,13 @@ def _contract_action():
     return ToolAction(tool="search_mail", query="NAND", reason="mail evidence")
 
 
-def _contract_document(index: int = 0):
+def _contract_document(index: int = 0, metadata=None):
     return SearchDocument(
         source_type="mail",
         document_id=f"mail-{index}",
         text="NAND evidence",
         score=1.0,
+        metadata=metadata or {},
     )
 
 
@@ -213,6 +215,128 @@ def test_agent_output_contracts_reject_extra_fields(factory):
 def test_agent_output_contracts_reject_values_beyond_bounds(factory):
     with pytest.raises(ValidationError):
         factory()
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {f"key-{index}": "value" for index in range(12)},
+        {"k" * 64: "value"},
+        {"value": "v" * 512},
+        {"items": ["item" for _index in range(20)]},
+        {"items": ["i" * 320]},
+        {"number": 2**63 - 1},
+        {"number": -(2**63 - 1)},
+        {"number": 1.5},
+    ],
+    ids=[
+        "key-count",
+        "key-length",
+        "scalar-string",
+        "list-length",
+        "list-item-length",
+        "positive-number",
+        "negative-number",
+        "finite-float",
+    ],
+)
+def test_search_document_metadata_accepts_each_exact_bound(metadata):
+    assert _contract_document(metadata=metadata).metadata == metadata
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {f"key-{index}": "value" for index in range(13)},
+        {"k" * 65: "value"},
+        {"value": "v" * 513},
+        {"items": ["item" for _index in range(21)]},
+        {"items": ["i" * 321]},
+        {"nested": {"unsafe": True}},
+        {"nested": [["unsafe"]]},
+        {"number": float("nan")},
+        {"number": float("inf")},
+        {"number": -(2**63)},
+        {"object": object()},
+    ],
+    ids=[
+        "key-count",
+        "key-length",
+        "scalar-string",
+        "list-length",
+        "list-item-length",
+        "nested-dict",
+        "nested-list",
+        "nan",
+        "infinity",
+        "number-magnitude",
+        "arbitrary-object",
+    ],
+)
+def test_search_document_metadata_rejects_values_beyond_shared_bounds(metadata):
+    with pytest.raises(ValidationError):
+        _contract_document(metadata=metadata)
+
+
+def _metadata_with_aggregate_size(last_value_length: int):
+    metadata = {f"k{index}": "v" * 512 for index in range(7)}
+    metadata["k7"] = "v" * last_value_length
+    return metadata
+
+
+def test_search_document_metadata_accepts_exact_serialized_utf8_bound():
+    metadata = _metadata_with_aggregate_size(447)
+
+    assert len(
+        json.dumps(
+            metadata,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ) == 4096
+    assert _contract_document(metadata=metadata).metadata == metadata
+
+
+def test_search_document_metadata_rejects_beyond_serialized_utf8_bound():
+    metadata = _metadata_with_aggregate_size(448)
+
+    assert len(
+        json.dumps(
+            metadata,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ) == 4097
+    with pytest.raises(ValidationError):
+        _contract_document(metadata=metadata)
+
+
+def test_observation_serializes_only_bounded_document_metadata_for_context():
+    metadata = {
+        "subject": "NAND Yield Review",
+        "attendee_emails": ["kim.oo@example.com"],
+        "chunk_index": 0,
+        "active": True,
+        "optional": None,
+    }
+    observation = Observation(
+        action=_contract_action(),
+        result=SearchResult(
+            tool="search_mail",
+            query="NAND",
+            documents=[_contract_document(metadata=metadata)],
+            total_hits=1,
+        ),
+    )
+
+    context = observation.model_dump(mode="json")
+
+    assert context["result"]["documents"][0]["metadata"] == metadata
+    assert json.loads(observation.model_dump_json())["result"]["documents"][0][
+        "metadata"
+    ] == metadata
 
 
 def _bounded_entities():
