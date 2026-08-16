@@ -4,6 +4,7 @@ from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.domain.agentic import AgentMemoryUpdate, EventReference
 from app.domain.chat import ExecutionMetadata, QualityStatus
 from app.domain.evidence import Evidence, RetrievalFilters
 from app.domain.errors import AppError, ErrorCode
@@ -107,6 +108,42 @@ def _sanitize_memory(
                 }
             )
         )
+    entities = {
+        sanitize_text(str(key))[:100]: sanitize_text(str(value))[:500]
+        for key, value in validated.entities.items()
+        if sanitize_text(str(key)) and sanitize_text(str(value))
+    }
+    event = validated.previous_event_reference
+    safe_event = (
+        event.model_copy(
+            update={
+                "event_id": event.event_id,
+                "subject": sanitize_text(event.subject)[:500],
+            }
+        )
+        if event is not None
+        else None
+    )
+    structured_update = {
+        "entities": dict(list(entities.items())[:16]),
+        "current_topic": (
+            sanitize_text(validated.current_topic)[:500]
+            if validated.current_topic
+            else None
+        ),
+        "search_history": [
+            opaque_identifier(item) for item in validated.search_history[:16]
+        ],
+        "previous_event_reference": safe_event,
+        "retrieved_source_refs": [
+            opaque_identifier(item) for item in validated.retrieved_source_refs[:16]
+        ],
+        "unresolved_information": [
+            sanitize_text(item)[:500]
+            for item in validated.unresolved_information[:8]
+            if sanitize_text(item)
+        ],
+    }
     return ConversationMemory(
         revision=validated.revision,
         messages=messages,
@@ -116,6 +153,7 @@ def _sanitize_memory(
             sanitize_evidence_for_memory(item, policy)
             for item in validated.cited_evidence
         ],
+        **structured_update,
     )
 
 
@@ -142,6 +180,12 @@ class ConversationMemory(BaseModel):
     turns: list[TurnRecord] = Field(default_factory=list, max_length=20)
     filters: RetrievalFilters = Field(default_factory=RetrievalFilters)
     cited_evidence: list[Evidence] = Field(default_factory=list, max_length=8)
+    entities: dict[str, str] = Field(default_factory=dict)
+    current_topic: str | None = Field(default=None, max_length=500)
+    search_history: list[str] = Field(default_factory=list, max_length=16)
+    previous_event_reference: EventReference | None = None
+    retrieved_source_refs: list[str] = Field(default_factory=list, max_length=16)
+    unresolved_information: list[str] = Field(default_factory=list, max_length=8)
 
     @field_validator("messages")
     @classmethod
@@ -154,6 +198,33 @@ class ConversationMemory(BaseModel):
             if not message["content"] or len(message["content"]) > 8000:
                 raise ValueError("invalid message content")
         return messages
+
+
+def apply_agent_memory_update(
+    memory: ConversationMemory,
+    update: AgentMemoryUpdate,
+    policy: PolicyContext,
+) -> ConversationMemory:
+    merged_entities = {**memory.entities, **update.entities}
+    candidate = memory.model_copy(
+        update={
+            "entities": dict(list(merged_entities.items())[-16:]),
+            "current_topic": update.current_topic or memory.current_topic,
+            "search_history": list(
+                dict.fromkeys([*memory.search_history, *update.search_history])
+            )[-16:],
+            "previous_event_reference": (
+                update.previous_event_reference or memory.previous_event_reference
+            ),
+            "retrieved_source_refs": list(
+                dict.fromkeys(
+                    [*memory.retrieved_source_refs, *update.retrieved_source_refs]
+                )
+            )[-16:],
+            "unresolved_information": update.unresolved_information[:8],
+        }
+    )
+    return _sanitize_memory(candidate, policy)
 
 
 class ConversationStore(Protocol):
