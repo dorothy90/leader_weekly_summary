@@ -50,7 +50,9 @@ const isQuality = (value: unknown) =>
   isRecord(value) &&
   (typeof value.citation_valid === 'boolean' || value.citation_valid === null) &&
   typeof value.limited_answer === 'boolean' &&
-  ['hybrid', 'bm25', 'not_used', 'not_started'].includes(String(value.retrieval_mode))
+  ['hybrid', 'bm25', 'deterministic', 'not_used', 'not_started'].includes(
+    String(value.retrieval_mode),
+  )
 
 const isRouting = (value: unknown) =>
   isRecord(value) &&

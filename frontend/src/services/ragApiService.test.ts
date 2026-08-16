@@ -93,6 +93,50 @@ describe('RagApiService', () => {
     expect(exchange.request).not.toHaveProperty('headers')
   })
 
+  it('accepts deterministic retrieval from a demo chat response', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        conversation_id: 'c-demo',
+        mode: 'fast_rag',
+        answer: 'Cell Leakage는 저장 전하 누설 현상입니다 [S1]',
+        references: [
+          {
+            evidence_id: 'S1',
+            source_type: 'domain_knowledge',
+            document_id: 'domain-cell-leakage',
+            title: 'Cell Leakage',
+            excerpt: '저장 전하 누설 현상이다.',
+          },
+        ],
+        quality: {
+          citation_valid: true,
+          limited_answer: false,
+          retrieval_mode: 'deterministic',
+        },
+        routing: {
+          requested_mode: 'fast',
+          route: 'fast',
+          executed_system: 'fast_rag',
+          reason_code: 'explicit_mode',
+          confidence: 1,
+          estimated_searches: 1,
+        },
+        disclosures: [],
+        trace_id: 'trace-demo',
+      }),
+    )
+
+    const exchange = await new RagApiService('/api').sendChat({
+      user_id: 'kim',
+      message: 'Cell Leakage가 뭐야?',
+      response_mode: 'fast',
+      filters: { teams: [], weeks: [] },
+    })
+
+    expect(exchange.error).toBeUndefined()
+    expect(exchange.response?.quality?.retrieval_mode).toBe('deterministic')
+  })
+
   it('accepts general routing with retrieval not used', async () => {
     fetchMock.mockResolvedValue(
       jsonResponse({

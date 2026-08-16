@@ -24,7 +24,7 @@ export interface ChatPayload {
 export interface QualityStatus {
   citation_valid: boolean | null
   limited_answer: boolean
-  retrieval_mode: 'hybrid' | 'bm25' | 'not_used' | 'not_started'
+  retrieval_mode: 'hybrid' | 'bm25' | 'deterministic' | 'not_used' | 'not_started'
 }
 
 export interface NodeRunMetrics {
@@ -35,7 +35,7 @@ export interface NodeRunMetrics {
   evidence_count?: number
   rewrite_count?: number
   revision_count?: number
-  retrieval_mode?: 'hybrid' | 'bm25' | 'not_used' | 'not_started' | null
+  retrieval_mode?: 'hybrid' | 'bm25' | 'deterministic' | 'not_used' | 'not_started' | null
   fallback_used?: boolean
 }
 
