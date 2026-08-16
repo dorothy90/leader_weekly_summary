@@ -136,14 +136,14 @@ describe('RagLabApp', () => {
     expect(screen.getByText('200')).toBeInTheDocument()
   })
 
-  it('shows accessible labels for calendar and domain knowledge references', async () => {
+  it('shows accessible labels for every supported reference source', async () => {
     const user = userEvent.setup()
     const service = baseService()
     vi.mocked(service.sendChat).mockResolvedValue(
       exchange<ChatResponse>({
         conversation_id: 'conversation-multi-source',
         mode: 'fast_rag',
-        answer: '회의와 도메인 근거입니다 [S1] [S2]',
+        answer: '모든 출처의 근거입니다 [S1] [S2] [S3] [S4] [S5]',
         references: [
           {
             evidence_id: 'S1',
@@ -158,6 +158,29 @@ describe('RagLabApp', () => {
             document_id: 'domain-cell-leakage',
             title: 'Cell Leakage',
             excerpt: '저장 전하 누설 현상이다.',
+          },
+          {
+            evidence_id: 'S3',
+            source_type: 'mail',
+            document_id: 'mail-yield-1',
+            title: '주간 수율 메일',
+            excerpt: '수율 저하 원인을 정리했다.',
+            team: 'YIELD',
+            week: '2026-31',
+          },
+          {
+            evidence_id: 'S4',
+            source_type: 'wiki',
+            document_id: 'wiki-nand-1',
+            title: 'NAND 공정 Wiki',
+            excerpt: '공정 기준을 설명한다.',
+          },
+          {
+            evidence_id: 'S5',
+            source_type: 'statistic',
+            document_id: 'stat-yield-1',
+            title: '수율 통계',
+            excerpt: '최근 수율 추이를 집계했다.',
           },
         ],
         quality: {
@@ -177,8 +200,10 @@ describe('RagLabApp', () => {
     const referenceList = await screen.findByRole('region', { name: '검증된 인용 근거' })
     expect(within(referenceList).getByText('일정/회의')).toBeInTheDocument()
     expect(within(referenceList).getByText('도메인 지식')).toBeInTheDocument()
-    expect(within(referenceList).queryByText('calendar')).not.toBeInTheDocument()
-    expect(within(referenceList).queryByText('domain_knowledge')).not.toBeInTheDocument()
+    expect(within(referenceList).getByText('메일 · YIELD · 2026-31')).toBeInTheDocument()
+    expect(within(referenceList).getByText('Wiki')).toBeInTheDocument()
+    expect(within(referenceList).getByText('통계')).toBeInTheDocument()
+    expect(referenceList.textContent).not.toMatch(/calendar|domain_knowledge/)
   })
 
   it('shows authoritative general routing without retrieval quality badges', async () => {

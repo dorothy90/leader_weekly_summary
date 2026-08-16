@@ -130,12 +130,12 @@ describe('RagApiService', () => {
     expect(exchange.response?.quality?.retrieval_mode).toBe('not_used')
   })
 
-  it('accepts calendar and domain knowledge references', async () => {
+  it('accepts references from every supported source type', async () => {
     fetchMock.mockResolvedValue(
       jsonResponse({
         conversation_id: 'c-multi-source',
         mode: 'fast_rag',
-        answer: '확인된 답변입니다 [S1] [S2]',
+        answer: '확인된 답변입니다 [S1] [S2] [S3] [S4] [S5]',
         references: [
           {
             evidence_id: 'S1',
@@ -150,6 +150,29 @@ describe('RagApiService', () => {
             document_id: 'domain-cell-leakage',
             title: 'Cell Leakage',
             excerpt: '저장 전하 누설 현상이다.',
+          },
+          {
+            evidence_id: 'S3',
+            source_type: 'mail',
+            document_id: 'mail-yield-1',
+            title: '주간 수율 메일',
+            excerpt: '수율 저하 원인을 정리했다.',
+            team: 'YIELD',
+            week: '2026-31',
+          },
+          {
+            evidence_id: 'S4',
+            source_type: 'wiki',
+            document_id: 'wiki-nand-1',
+            title: 'NAND 공정 Wiki',
+            excerpt: '공정 기준을 설명한다.',
+          },
+          {
+            evidence_id: 'S5',
+            source_type: 'statistic',
+            document_id: 'stat-yield-1',
+            title: '수율 통계',
+            excerpt: '최근 수율 추이를 집계했다.',
           },
         ],
         quality: {
@@ -178,11 +201,58 @@ describe('RagApiService', () => {
     })
 
     expect(exchange.error).toBeUndefined()
-    expect(exchange.response?.references).toHaveLength(2)
+    expect(exchange.response?.references).toHaveLength(5)
     expect(exchange.response?.references.map((reference) => reference.source_type)).toEqual([
       'calendar',
       'domain_knowledge',
+      'mail',
+      'wiki',
+      'statistic',
     ])
+  })
+
+  it('rejects an unsupported reference source type', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        conversation_id: 'c-unsupported-source',
+        mode: 'fast_rag',
+        answer: '지원하지 않는 근거입니다 [S1]',
+        references: [
+          {
+            evidence_id: 'S1',
+            source_type: 'chat_log',
+            document_id: 'chat-1',
+            title: '내부 대화 로그',
+            excerpt: '외부에 노출하면 안 되는 값이다.',
+          },
+        ],
+        quality: {
+          citation_valid: true,
+          limited_answer: false,
+          retrieval_mode: 'hybrid',
+        },
+        routing: {
+          requested_mode: 'fast',
+          route: 'fast',
+          executed_system: 'fast_rag',
+          reason_code: 'explicit_mode',
+          confidence: 1,
+          estimated_searches: 1,
+        },
+        disclosures: [],
+        trace_id: 'trace-unsupported-source',
+      }),
+    )
+
+    const exchange = await new RagApiService('/api').sendChat({
+      user_id: 'kim',
+      message: '지원하지 않는 출처를 확인해줘',
+      response_mode: 'fast',
+      filters: { teams: [], weeks: [] },
+    })
+
+    expect(exchange.response).toBeUndefined()
+    expect(exchange.error?.code).toBe('INVALID_RESPONSE')
   })
 
   it('accepts typed failed execution with unrun citation and search', async () => {
