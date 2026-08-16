@@ -2,6 +2,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.domain.agentic import AgentMemoryUpdate, AgentTrace
 from app.domain.evidence import Evidence, RetrievalFilters
 from app.domain.research import ResearchStatus
 from app.observability.node_runs import NodeRun
@@ -113,6 +114,8 @@ class FastRAGResult(BaseModel):
     quality: QualityStatus
     disclosures: list[str] = Field(default_factory=list)
     execution: ExecutionMetadata | None = None
+    agent_memory: AgentMemoryUpdate | None = None
+    agent_trace: AgentTrace | None = None
 
 
 class ChatReference(BaseModel):
@@ -121,7 +124,9 @@ class ChatReference(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     evidence_id: str = Field(min_length=1, max_length=32)
-    source_type: Literal["mail", "wiki", "statistic"]
+    source_type: Literal[
+        "mail", "wiki", "statistic", "domain_knowledge", "calendar"
+    ]
     document_id: str = Field(min_length=1, max_length=256)
     title: str = Field(default="", max_length=500)
     excerpt: str = Field(min_length=1, max_length=8000)

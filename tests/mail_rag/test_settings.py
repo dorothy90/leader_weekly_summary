@@ -50,3 +50,12 @@ def test_endpoint_overrides_remain_independent():
         "custom-embed",
     )
     assert llm.timeout_seconds == embedding.timeout_seconds == 75
+
+
+def test_multi_source_alias_and_demo_defaults():
+    settings = Settings()
+    assert settings.multi_source_demo is False
+    assert settings.domain_knowledge_index == "syld_gpt"
+    assert settings.mail_index_alias == "ews-mail-active"
+    assert settings.calendar_index_alias == "ews-calendar-active"
+    assert settings.default_user_timezone == "Asia/Seoul"

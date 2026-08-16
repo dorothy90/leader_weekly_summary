@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     mail_child_index: str = "weekly_mail"
     mail_parent_index: str = "weekly_mail_parent_read"
     wiki_index: str = "wiki_summaries_v2"
+    multi_source_demo: bool = False
+    domain_knowledge_index: str = "syld_gpt"
+    mail_index_alias: str = "ews-mail-active"
+    calendar_index_alias: str = "ews-calendar-active"
+    default_user_timezone: str = "Asia/Seoul"
     openrouter_api_key: SecretStr = SecretStr("")
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     openrouter_llm_model: str = "google/gemma-4-26b-a4b-it:free"

@@ -42,7 +42,9 @@ class Evidence(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     evidence_id: str = Field(min_length=1, max_length=32)
-    source_type: Literal["mail", "wiki", "statistic"]
+    source_type: Literal[
+        "mail", "wiki", "statistic", "domain_knowledge", "calendar"
+    ]
     document_id: str = Field(min_length=1, max_length=256)
     parent_id: str | None = Field(default=None, max_length=256)
     title: str = Field(default="", max_length=500)
