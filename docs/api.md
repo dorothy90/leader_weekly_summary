@@ -92,9 +92,13 @@ and Deep therefore share one `POST /v1/chat` request-response contract.
 
 `references[].source_type` now also accepts `domain_knowledge` and `calendar`,
 in addition to the existing `mail`, `wiki`, and `statistic` values. Both new
-sources use the unchanged public reference shape. Calendar identifiers are
-opaque stable event/document identifiers; storage index names, raw query DSL,
-employee IDs, and private agent state are never included in the response.
+sources use the unchanged public reference shape. A Calendar reference keeps
+the hit's opaque storage `document_id` so distinct evidence items stay unique.
+The canonical `calendar_item_id` or attachment `parent_event_id` is validated
+and used internally for event expansion and same-owner follow-up memory; it is
+never substituted for `references[].document_id`. Missing or malformed
+relation IDs fail closed. Storage index names, raw query DSL, employee IDs, and
+private agent state are never included in the response.
 
 Automatic routing also has two deterministic system routes. Questions such as “왜 답변을 못했어?” use `diagnostic` and read the previous persisted execution state. Questions such as “뭐가 임베딩돼 있어?” use `corpus_info` and run exact-`user_id` OpenSearch aggregations for counts, teams, weeks, mail types, recent titles, and embedding-model metadata. Neither route asks the LLM to invent operational facts.
 

@@ -16,6 +16,8 @@ from app.domain.agentic import (
     SearchDocument,
     SearchResult,
     ToolAction,
+    normalize_stable_event_id,
+    search_document_identity,
 )
 from app.domain.chat import (
     ChatRequest,
@@ -85,6 +87,16 @@ class MultiSourceAgenticWorkflow:
         if "bm25" in modes:
             return "bm25"
         return "deterministic"
+
+    @staticmethod
+    def _calendar_relation_id(item: SearchDocument) -> str | None:
+        if item.source_type != "calendar":
+            return None
+        if item.content_kind == "event":
+            return normalize_stable_event_id(item.source_id)
+        if item.content_kind == "attachment":
+            return normalize_stable_event_id(item.parent_event_id)
+        return None
 
     def _build(self):
         graph = StateGraph(MultiSourceState)
@@ -197,9 +209,10 @@ class MultiSourceAgenticWorkflow:
         ):
             event_ids = list(
                 dict.fromkeys(
-                    item.parent_event_id or item.document_id
+                    relation_id
                     for item in documents
-                    if item.content_kind in {"event", "attachment"}
+                    if (relation_id := self._calendar_relation_id(item))
+                    is not None
                 )
             )
             for event_id in event_ids[:1]:
@@ -514,11 +527,20 @@ class MultiSourceAgenticWorkflow:
         unique = {}
         for raw_item in documents:
             item = cls._normalize_document(SearchDocument.model_validate(raw_item))
-            existing = unique.get(item.document_id)
+            key = search_document_identity(item)
+            existing = unique.get(key)
             if existing is None or item.score > existing.score:
-                unique[item.document_id] = item
+                unique[key] = item
         return sorted(
-            unique.values(), key=lambda item: (-item.score, item.document_id)
+            unique.values(),
+            key=lambda item: (
+                -item.score,
+                item.source_type,
+                item.document_id,
+                item.content_kind or "",
+                item.source_id or "",
+                item.parent_event_id or "",
+            ),
         )[:20]
 
     @staticmethod
@@ -555,20 +577,43 @@ class MultiSourceAgenticWorkflow:
     def _event_reference(
         documents: list[SearchDocument],
     ) -> EventReference | None:
-        event = next(
+        selected = next(
             (
                 item
                 for item in documents
                 if item.source_type == "calendar"
                 and item.content_kind == "event"
+                and normalize_stable_event_id(item.source_id) is not None
             ),
             None,
         )
-        if event is None:
+        event_id = (
+            normalize_stable_event_id(selected.source_id)
+            if selected is not None
+            else None
+        )
+        if selected is None:
+            selected = next(
+                (
+                    item
+                    for item in documents
+                    if item.source_type == "calendar"
+                    and item.content_kind == "attachment"
+                    and normalize_stable_event_id(item.parent_event_id)
+                    is not None
+                ),
+                None,
+            )
+            event_id = (
+                normalize_stable_event_id(selected.parent_event_id)
+                if selected is not None
+                else None
+            )
+        if selected is None or event_id is None:
             return None
 
         def parse(key: str) -> datetime | None:
-            raw = event.metadata.get(key)
+            raw = selected.metadata.get(key)
             if not isinstance(raw, str):
                 return None
             try:
@@ -577,8 +622,8 @@ class MultiSourceAgenticWorkflow:
                 return None
 
         return EventReference(
-            event_id=event.parent_event_id or event.document_id,
-            subject=event.title,
+            event_id=event_id,
+            subject=selected.title,
             start_at_utc=parse("start_at_utc"),
             end_at_utc=parse("end_at_utc"),
         )

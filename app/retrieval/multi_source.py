@@ -12,6 +12,7 @@ from app.domain.agentic import (
     SearchDocument,
     SearchResult,
     ToolAction,
+    normalize_stable_event_id,
 )
 from app.domain.policy import PolicyContext
 from app.retrieval.source_registry import SourceRegistry
@@ -171,7 +172,8 @@ class InMemoryMultiSourceSearch:
         parents = [
             item
             for item in allowed
-            if item.document_id == event_id and item.content_kind == "event"
+            if item.content_kind == "event"
+            and normalize_stable_event_id(item.source_id) == event_id
         ]
         if not parents:
             return []
@@ -181,8 +183,8 @@ class InMemoryMultiSourceSearch:
             (
                 item
                 for item in allowed
-                if item.document_id != event_id
-                and item.parent_event_id == event_id
+                if item.content_kind == "attachment"
+                and normalize_stable_event_id(item.parent_event_id) == event_id
             ),
             key=lambda item: item.document_id,
         )

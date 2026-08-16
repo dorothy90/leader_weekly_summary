@@ -326,8 +326,22 @@ def test_demo_cli_custom_calendar_question_succeeds_without_canonical_tool_path(
 
     assert result.returncode == 0, result.stderr
     assert "FDC" in result.stdout
-    assert "Sources: calendar" in result.stdout
-    assert "Tool calls: search_calendar -> expand_calendar_event" in result.stdout
+    lines = result.stdout.splitlines()
+    sources_line = next(line for line in lines if line.startswith("Sources:"))
+    tools_line = next(line for line in lines if line.startswith("Tool calls:"))
+    sources = [
+        item.strip()
+        for item in sources_line.removeprefix("Sources:").split(",")
+        if item.strip()
+    ]
+    tools = [
+        item.strip()
+        for item in tools_line.removeprefix("Tool calls:").split("->")
+        if item.strip()
+    ]
+    assert tools == ["search_calendar", "expand_calendar_event"]
+    assert sources
+    assert set(sources) == {"calendar"}
 
 
 def test_demo_cli_reports_invalid_input_without_traceback_or_raw_state():

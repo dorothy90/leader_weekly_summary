@@ -11,6 +11,8 @@ from app.domain.agentic import (
     SearchDocument,
     SearchResult,
     ToolAction,
+    normalize_stable_event_id,
+    search_document_identity,
 )
 from app.domain.chat import BM25_FALLBACK_DISCLOSURE
 from app.domain.policy import PolicyContext
@@ -356,31 +358,35 @@ class OpenSearchMultiSourceSearch:
             text = text_value.strip()
             if not text or len(text) > MAX_TEXT_LENGTH:
                 continue
+            content_kind = source.get("content_kind")
             source_id, source_id_valid = self._optional_id(source, "source_id")
+            raw_parent_event_id = source.get("parent_event_id")
             parent_event_id, parent_event_id_valid = self._optional_id(
                 source, "parent_event_id"
             )
-            calendar_item_id, calendar_item_id_valid = self._optional_id(
-                source, "calendar_item_id"
-            )
+            if source_type == "calendar" and content_kind == "event":
+                stable_event_id = normalize_stable_event_id(
+                    source.get("calendar_item_id")
+                )
+                if stable_event_id is None:
+                    continue
+                source_id = stable_event_id
+                parent_event_id = stable_event_id
+                source_id_valid = parent_event_id_valid = True
+            elif source_type == "calendar" and content_kind == "attachment":
+                stable_parent_id = normalize_stable_event_id(raw_parent_event_id)
+                if stable_parent_id is None:
+                    continue
+                parent_event_id = stable_parent_id
             title, title_valid = self._title(source)
             metadata = self._safe_metadata(source)
             if not (
                 source_id_valid
                 and parent_event_id_valid
-                and calendar_item_id_valid
                 and title_valid
                 and metadata is not None
             ):
                 continue
-            normalized_document_id = document_id.strip()
-            if (
-                source_type == "calendar"
-                and source.get("content_kind") == "event"
-                and calendar_item_id is not None
-            ):
-                normalized_document_id = calendar_item_id
-                parent_event_id = calendar_item_id
             raw_score = hit.get("_rrf_score") or hit.get("_score") or 0
             try:
                 score = float(raw_score)
@@ -388,10 +394,10 @@ class OpenSearchMultiSourceSearch:
                     continue
                 document = SearchDocument(
                     source_type=source_type,
-                    document_id=normalized_document_id,
+                    document_id=document_id.strip(),
                     source_id=source_id,
                     parent_event_id=parent_event_id,
-                    content_kind=source.get("content_kind"),
+                    content_kind=content_kind,
                     title=title,
                     text=text,
                     score=score,
@@ -436,9 +442,10 @@ class OpenSearchMultiSourceSearch:
     ) -> list[SearchDocument]:
         unique = {}
         for item in documents:
-            current = unique.get(item.document_id)
+            key = search_document_identity(item)
+            current = unique.get(key)
             if current is None or item.score > current.score:
-                unique[item.document_id] = item
+                unique[key] = item
         return sorted(unique.values(), key=lambda item: (-item.score, item.document_id))
 
     async def _expand_calendar(
@@ -448,6 +455,81 @@ class OpenSearchMultiSourceSearch:
         analysis: QueryAnalysis,
     ) -> SearchResult:
         event_id = action.event_id or ""
+        index = self.registry.index_for("expand_calendar_event")
+        parent_action = ToolAction(
+            tool="expand_calendar_event",
+            event_id=event_id,
+            reason="authorize calendar parent",
+            top_k=1,
+        )
+        parent_filters = self._mandatory_filters(
+            parent_action,
+            policy,
+            analysis,
+        )
+        parent_filters.extend(
+            [
+                {"term": {"calendar_item_id": event_id}},
+                {"term": {"content_kind": "event"}},
+            ]
+        )
+        parent_response = await self.backend.search(
+            index,
+            {
+                "size": 1,
+                "_source": SOURCE_FIELDS,
+                "query": {"bool": {"filter": parent_filters}},
+            },
+        )
+
+        def response_hits(response: object) -> list[Mapping]:
+            if not isinstance(response, Mapping):
+                return []
+            hits_block = response.get("hits")
+            raw_hits = (
+                hits_block.get("hits", [])
+                if isinstance(hits_block, Mapping)
+                else []
+            )
+            if not isinstance(raw_hits, Sequence) or isinstance(
+                raw_hits, (str, bytes)
+            ):
+                return []
+            return [item for item in raw_hits if isinstance(item, Mapping)]
+
+        parent_hits = []
+        for raw_hit in response_hits(parent_response):
+            source = raw_hit.get("_source")
+            if not isinstance(source, Mapping):
+                continue
+            if not (
+                source.get("calendar_item_id") == event_id
+                and source.get("content_kind") == "event"
+            ):
+                continue
+            try:
+                score = float(raw_hit.get("_score") or 1)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(score):
+                parent_hits.append({**raw_hit, "_rrf_score": score})
+        authorized_parent = any(
+            item.content_kind == "event" and item.source_id == event_id
+            for item in self._normalize_hits(
+                parent_hits,
+                parent_action,
+                policy,
+            )
+        )
+        if not authorized_parent:
+            return SearchResult(
+                tool=action.tool,
+                query="",
+                documents=[],
+                total_hits=0,
+                retrieval_mode="bm25",
+            )
+
         filters = self._mandatory_filters(action, policy, analysis)
         filters.append(
             {
@@ -465,43 +547,32 @@ class OpenSearchMultiSourceSearch:
             "_source": SOURCE_FIELDS,
             "query": {"bool": {"filter": filters}},
         }
-        response = await self.backend.search(
-            self.registry.index_for("expand_calendar_event"),
-            body,
-        )
-        if isinstance(response, Mapping):
-            hits_block = response.get("hits")
-            raw_hits = (
-                hits_block.get("hits", []) if isinstance(hits_block, Mapping) else []
-            )
-        else:
-            raw_hits = []
+        response = await self.backend.search(index, body)
         hits = []
-        if isinstance(raw_hits, Sequence) and not isinstance(raw_hits, (str, bytes)):
-            for raw_hit in raw_hits:
-                if not isinstance(raw_hit, Mapping):
-                    continue
-                source = raw_hit.get("_source")
-                if not isinstance(source, Mapping):
-                    continue
-                if not (
-                    source.get("calendar_item_id") == event_id
-                    or source.get("parent_event_id") == event_id
-                ):
-                    continue
-                try:
-                    score = float(raw_hit.get("_score") or 1)
-                except (TypeError, ValueError):
-                    continue
-                if not math.isfinite(score):
-                    continue
-                hits.append({**raw_hit, "_rrf_score": score})
+        for raw_hit in response_hits(response):
+            source = raw_hit.get("_source")
+            if not isinstance(source, Mapping):
+                continue
+            if not (
+                source.get("calendar_item_id") == event_id
+                or source.get("parent_event_id") == event_id
+            ):
+                continue
+            try:
+                score = float(raw_hit.get("_score") or 1)
+            except (TypeError, ValueError):
+                continue
+            if not math.isfinite(score):
+                continue
+            hits.append({**raw_hit, "_rrf_score": score})
         documents = self._deduplicate_documents(
             self._normalize_hits(hits, action, policy)
         )
         documents.sort(
             key=lambda item: (
-                0 if item.metadata.get("calendar_item_id") == event_id else 1,
+                0
+                if item.content_kind == "event" and item.source_id == event_id
+                else 1,
                 -item.score,
                 item.document_id,
             )

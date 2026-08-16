@@ -222,7 +222,7 @@ class RuleBasedAgentModel:
         return QueryAnalysis(
             intent="knowledge_query",
             question_type=question_type,
-            entities=entities,
+            entities=dict(list(entities.items())[-16:]),
             time_expression=expression,
             start_at_utc=resolved.start_at_utc if resolved else None,
             end_at_utc=resolved.end_at_utc if resolved else None,
@@ -383,10 +383,15 @@ class StructuredAgentModel:
             baseline,
             information_needs,
         )
-        return analysis.model_copy(
-            update={
+        merged_entities = {
+            **analysis.entities,
+            **baseline.entities,
+        }
+        return QueryAnalysis.model_validate(
+            {
+                **analysis.model_dump(),
                 "question_type": question_type,
-                "entities": {**analysis.entities, **baseline.entities},
+                "entities": dict(list(merged_entities.items())[-16:]),
                 "information_needs": information_needs,
                 "time_expression": baseline.time_expression,
                 "start_at_utc": baseline.start_at_utc,

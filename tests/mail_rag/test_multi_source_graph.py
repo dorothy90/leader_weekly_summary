@@ -676,6 +676,128 @@ def test_answer_citations_and_evidence_are_grounded_and_normalized():
     assert "agent_trace" not in ChatResponse.model_fields
 
 
+def test_graph_dedup_preserves_cross_source_storage_id_collisions():
+    documents = [
+        SearchDocument(
+            source_type="mail",
+            document_id="shared-storage-id",
+            content_kind="body",
+            text="mail evidence",
+            score=1.0,
+        ),
+        SearchDocument(
+            source_type="calendar",
+            document_id="shared-storage-id",
+            source_id="event-42",
+            parent_event_id="event-42",
+            content_kind="event",
+            text="calendar evidence",
+            score=0.9,
+        ),
+        SearchDocument(
+            source_type="domain_knowledge",
+            document_id="shared-storage-id",
+            text="domain evidence",
+            score=0.8,
+        ),
+    ]
+
+    deduplicated = MultiSourceAgenticWorkflow._deduplicate_documents(documents)
+
+    assert len(deduplicated) == 3
+    assert {item.source_type for item in deduplicated} == {
+        "mail",
+        "calendar",
+        "domain_knowledge",
+    }
+
+
+def test_graph_dedup_preserves_calendar_event_attachment_storage_id_collision():
+    event = SearchDocument(
+        source_type="calendar",
+        document_id="shared-storage-id",
+        source_id="event-42",
+        parent_event_id="event-42",
+        content_kind="event",
+        text="meeting",
+        score=1.0,
+    )
+    attachment = SearchDocument(
+        source_type="calendar",
+        document_id="shared-storage-id",
+        source_id="attachment-42",
+        parent_event_id="event-42",
+        content_kind="attachment",
+        text="Action: inspect FDC",
+        score=0.9,
+    )
+
+    deduplicated = MultiSourceAgenticWorkflow._deduplicate_documents(
+        [event, event.model_copy(update={"score": 0.5}), attachment]
+    )
+
+    assert len(deduplicated) == 2
+    assert {item.content_kind for item in deduplicated} == {
+        "event",
+        "attachment",
+    }
+    assert next(item for item in deduplicated if item.content_kind == "event").score == 1
+
+
+def test_event_memory_uses_stable_event_source_id_not_storage_id():
+    reference = MultiSourceAgenticWorkflow._event_reference(
+        [
+            SearchDocument(
+                source_type="calendar",
+                document_id="doc-42",
+                source_id="event-42",
+                content_kind="event",
+                title="NAND Yield Review",
+                text="meeting",
+                score=1.0,
+            )
+        ]
+    )
+
+    assert reference.event_id == "event-42"
+
+
+def test_event_memory_never_falls_back_to_calendar_storage_id():
+    reference = MultiSourceAgenticWorkflow._event_reference(
+        [
+            SearchDocument(
+                source_type="calendar",
+                document_id="doc-42",
+                content_kind="event",
+                title="NAND Yield Review",
+                text="meeting",
+                score=1.0,
+            )
+        ]
+    )
+
+    assert reference is None
+
+
+def test_event_memory_can_use_stable_attachment_parent_relation():
+    reference = MultiSourceAgenticWorkflow._event_reference(
+        [
+            SearchDocument(
+                source_type="calendar",
+                document_id="doc-attachment-42",
+                source_id="attachment-42",
+                parent_event_id="event-42",
+                content_kind="attachment",
+                title="NAND action.pdf",
+                text="Action: inspect FDC",
+                score=1.0,
+            )
+        ]
+    )
+
+    assert reference.event_id == "event-42"
+
+
 def test_agentic_result_preserves_bm25_retrieval_mode():
     class BM25Search:
         async def execute(self, action, policy, analysis):

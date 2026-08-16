@@ -104,7 +104,23 @@ def test_domain_queries_use_configured_index_and_active_filter_only():
 
 
 def test_calendar_search_and_expansion_repeat_all_security_filters_and_alias():
-    backend = RecordingBackend()
+    empty = {"hits": {"hits": []}}
+    parent = {
+        "hits": {
+            "hits": [
+                hit(
+                    "event-storage-1",
+                    employee_id="kim",
+                    is_active=True,
+                    is_cancelled=False,
+                    calendar_item_id="event-1",
+                    content_kind="event",
+                    text="meeting",
+                )
+            ]
+        }
+    }
+    backend = RecordingBackend([empty, empty, parent, empty])
     configured = Settings(calendar_index_alias="tenant-calendar-read")
     service = workflow(backend, settings=configured)
     policy = PolicyContext.from_user_id("kim")
@@ -129,6 +145,7 @@ def test_calendar_search_and_expansion_repeat_all_security_filters_and_alias():
     )
 
     assert [index for index, _body in backend.calls] == [
+        "tenant-calendar-read",
         "tenant-calendar-read",
         "tenant-calendar-read",
         "tenant-calendar-read",
@@ -314,6 +331,14 @@ def test_production_calendar_uses_stable_event_id_for_memory_and_follow_up():
     class ProductionShapedBackend(RecordingBackend):
         async def search(self, index, body):
             self.calls.append((index, deepcopy(body)))
+            parent_gate = (
+                {"term": {"calendar_item_id": "event-42"}}
+                in filters_from(body)
+                and {"term": {"content_kind": "event"}}
+                in filters_from(body)
+            )
+            if parent_gate:
+                return {"hits": {"hits": [deepcopy(event_hit)]}}
             relation = next(
                 (
                     item
@@ -345,8 +370,8 @@ def test_production_calendar_uses_stable_event_id_for_memory_and_follow_up():
         ConversationMemory(), first.agent_memory, policy
     )
 
-    assert "event-42" in {item.document_id for item in first.evidence}
-    assert "doc-42" not in {item.document_id for item in first.evidence}
+    assert "doc-42" in {item.document_id for item in first.evidence}
+    assert "event-42" not in {item.document_id for item in first.evidence}
     assert memory.previous_event_reference.event_id == "event-42"
 
     follow_up = asyncio.run(
@@ -368,9 +393,17 @@ def test_production_calendar_uses_stable_event_id_for_memory_and_follow_up():
             for item in filters_from(body)
         )
     ]
+    parent_gate_calls = [
+        body
+        for _index, body in backend.calls
+        if {"term": {"calendar_item_id": "event-42"}}
+        in filters_from(body)
+        and {"term": {"content_kind": "event"}} in filters_from(body)
+    ]
     assert len(relation_calls) == 2
+    assert len(parent_gate_calls) == 2
     assert follow_up.agent_memory.previous_event_reference.event_id == "event-42"
-    for body in relation_calls:
+    for body in [*parent_gate_calls, *relation_calls]:
         serialized = repr(filters_from(body))
         assert "event-42" in serialized
         assert "doc-42" not in serialized
@@ -517,6 +550,7 @@ def test_post_filter_drops_foreign_inactive_cancelled_and_malformed_hits():
                     employee_id="kim",
                     is_active=True,
                     is_cancelled=False,
+                    calendar_item_id="allowed",
                     content_kind="event",
                     subject="NAND Review",
                     text="NAND allowed",
@@ -564,7 +598,22 @@ def test_domain_post_filter_drops_inactive_or_missing_lifecycle_hits():
 
 
 def test_calendar_expansion_uses_relation_clause_and_optional_filters():
-    backend = RecordingBackend()
+    parent = {
+        "hits": {
+            "hits": [
+                hit(
+                    "event-storage-1",
+                    employee_id="kim",
+                    is_active=True,
+                    is_cancelled=False,
+                    calendar_item_id="event-1",
+                    content_kind="event",
+                    text="meeting",
+                )
+            ]
+        }
+    }
+    backend = RecordingBackend([parent, {"hits": {"hits": []}}])
 
     asyncio.run(
         workflow(backend).execute(
@@ -580,9 +629,16 @@ def test_calendar_expansion_uses_relation_clause_and_optional_filters():
         )
     )
 
-    index, body = backend.calls[0]
-    assert index == "ews-calendar-active"
+    assert len(backend.calls) == 2
+    parent_index, parent_body = backend.calls[0]
+    index, body = backend.calls[1]
+    assert parent_index == index == "ews-calendar-active"
+    parent_filters = filters_from(parent_body)
     filters = filters_from(body)
+    assert {"term": {"calendar_item_id": "event-1"}} in parent_filters
+    assert {"term": {"content_kind": "event"}} in parent_filters
+    assert {"terms": {"content_kind": ["attachment"]}} not in parent_filters
+    assert {"wildcard": {"attachment_name": "*action.pdf*"}} not in parent_filters
     assert {
         "bool": {
             "should": [
@@ -594,6 +650,10 @@ def test_calendar_expansion_uses_relation_clause_and_optional_filters():
     } in filters
     assert {"terms": {"content_kind": ["attachment"]}} in filters
     assert {"wildcard": {"attachment_name": "*action.pdf*"}} in filters
+    for query_filters in (parent_filters, filters):
+        assert {"term": {"employee_id": "kim"}} in query_filters
+        assert {"term": {"is_active": True}} in query_filters
+        assert {"term": {"is_cancelled": False}} in query_filters
     assert body["size"] == 50
 
 
@@ -644,7 +704,7 @@ def test_calendar_expansion_returns_same_owner_parent_and_sibling_only():
             ]
         }
     }
-    backend = RecordingBackend([response])
+    backend = RecordingBackend([response, response])
 
     result = asyncio.run(
         workflow(backend).execute(
@@ -691,7 +751,22 @@ def test_calendar_expansion_skips_malformed_scores_and_unrelated_hits():
             ]
         }
     }
-    backend = RecordingBackend([response])
+    parent = {
+        "hits": {
+            "hits": [
+                hit(
+                    "event-storage-1",
+                    employee_id="kim",
+                    is_active=True,
+                    is_cancelled=False,
+                    calendar_item_id="event-1",
+                    content_kind="event",
+                    text="meeting",
+                )
+            ]
+        }
+    }
+    backend = RecordingBackend([parent, response])
 
     result = asyncio.run(
         workflow(backend).execute(
@@ -707,6 +782,278 @@ def test_calendar_expansion_skips_malformed_scores_and_unrelated_hits():
 
     assert result.documents == []
     assert result.total_hits == 0
+
+
+def _calendar_payload(content_kind="event", **updates):
+    payload = {
+        "employee_id": "kim",
+        "is_active": True,
+        "is_cancelled": False,
+        "content_kind": content_kind,
+        "text": "calendar evidence",
+    }
+    payload.update(updates)
+    return payload
+
+
+def normalize_calendar_hit(*, document_id="doc-42", content_kind="event", **source):
+    action = ToolAction(
+        tool="search_calendar",
+        query="NAND",
+        reason="normalize calendar",
+    )
+    return workflow(RecordingBackend())._normalize_hits(
+        [
+            {
+                "_id": document_id,
+                "_rrf_score": 1,
+                "_source": _calendar_payload(content_kind, **source),
+            }
+        ],
+        action,
+        PolicyContext.from_user_id("kim"),
+    )
+
+
+VALID_EDGE_EVENT_ID = ("A" * 250) + "_.:@+-"
+
+
+def test_calendar_event_normalization_preserves_storage_id_and_stable_relation_id():
+    documents = normalize_calendar_hit(
+        document_id="doc-edge",
+        calendar_item_id=VALID_EDGE_EVENT_ID,
+        source_id="untrusted-source-id",
+    )
+
+    assert len(documents) == 1
+    assert documents[0].document_id == "doc-edge"
+    assert documents[0].source_id == VALID_EDGE_EVENT_ID
+    assert documents[0].parent_event_id == VALID_EDGE_EVENT_ID
+
+
+@pytest.mark.parametrize(
+    "calendar_item_id",
+    [
+        None,
+        "",
+        " event-42",
+        "event-42 ",
+        "event 42",
+        "event/42",
+        "event=42",
+        "event#42",
+        "x" * 257,
+        42,
+    ],
+    ids=[
+        "missing",
+        "empty",
+        "leading-space",
+        "trailing-space",
+        "internal-space",
+        "slash",
+        "equals",
+        "symbol",
+        "overlong",
+        "non-string",
+    ],
+)
+def test_calendar_event_normalization_rejects_missing_or_unsafe_relation_id(
+    calendar_item_id,
+):
+    source = (
+        {}
+        if calendar_item_id is None
+        else {"calendar_item_id": calendar_item_id}
+    )
+
+    assert normalize_calendar_hit(**source) == []
+
+
+@pytest.mark.parametrize(
+    "parent_event_id",
+    [
+        None,
+        "",
+        " event-42",
+        "event-42 ",
+        "event 42",
+        "event/42",
+        "event=42",
+        "event#42",
+        "x" * 257,
+        42,
+    ],
+    ids=[
+        "missing",
+        "empty",
+        "leading-space",
+        "trailing-space",
+        "internal-space",
+        "slash",
+        "equals",
+        "symbol",
+        "overlong",
+        "non-string",
+    ],
+)
+def test_calendar_attachment_normalization_requires_safe_parent_relation_id(
+    parent_event_id,
+):
+    source = (
+        {}
+        if parent_event_id is None
+        else {"parent_event_id": parent_event_id}
+    )
+
+    assert normalize_calendar_hit(content_kind="attachment", **source) == []
+
+
+def test_calendar_attachment_preserves_storage_identity_and_stable_parent():
+    documents = normalize_calendar_hit(
+        document_id="doc-attachment-edge",
+        content_kind="attachment",
+        source_id="attachment-source-42",
+        parent_event_id=VALID_EDGE_EVENT_ID,
+    )
+
+    assert len(documents) == 1
+    assert documents[0].document_id == "doc-attachment-edge"
+    assert documents[0].source_id == "attachment-source-42"
+    assert documents[0].parent_event_id == VALID_EDGE_EVENT_ID
+
+
+def _parent_gate_response(**updates):
+    source = _calendar_payload(
+        "event",
+        calendar_item_id="event-1",
+        **updates,
+    )
+    return {"hits": {"hits": [hit("event-storage-1", **source)]}}
+
+
+def _allowed_child_response(*, parent_event_id="event-1"):
+    source = _calendar_payload(
+        "attachment",
+        parent_event_id=parent_event_id,
+        attachment_name="action.pdf",
+    )
+    return {"hits": {"hits": [hit("attachment-storage-1", **source)]}}
+
+
+@pytest.mark.parametrize(
+    "parent_response",
+    [
+        {"hits": {"hits": []}},
+        _parent_gate_response(employee_id="lee"),
+        _parent_gate_response(is_active=False),
+        _parent_gate_response(is_cancelled=True),
+    ],
+    ids=["missing", "foreign", "inactive", "cancelled"],
+)
+def test_calendar_expansion_rejects_allowed_child_without_authorized_parent(
+    parent_response,
+):
+    class ParentAwareBackend(RecordingBackend):
+        async def search(self, index, body):
+            self.calls.append((index, deepcopy(body)))
+            parent_gate = {"term": {"content_kind": "event"}} in filters_from(body)
+            return deepcopy(
+                parent_response if parent_gate else _allowed_child_response()
+            )
+
+    backend = ParentAwareBackend()
+    result = asyncio.run(
+        workflow(backend).execute(
+            ToolAction(
+                tool="expand_calendar_event",
+                event_id="event-1",
+                reason="parent gate",
+                content_kinds=["attachment"],
+            ),
+            PolicyContext.from_user_id("kim"),
+            analysis(),
+        )
+    )
+
+    assert result.documents == []
+    assert result.total_hits == 0
+    assert len(backend.calls) == 1
+
+
+def test_calendar_expansion_applies_attachment_filter_after_parent_gate():
+    class ParentAwareBackend(RecordingBackend):
+        async def search(self, index, body):
+            self.calls.append((index, deepcopy(body)))
+            parent_gate = {"term": {"content_kind": "event"}} in filters_from(body)
+            if parent_gate:
+                return _parent_gate_response()
+            return {
+                "hits": {
+                    "hits": [
+                        *_parent_gate_response()["hits"]["hits"],
+                        *_allowed_child_response()["hits"]["hits"],
+                    ]
+                }
+            }
+
+    backend = ParentAwareBackend()
+    result = asyncio.run(
+        workflow(backend).execute(
+            ToolAction(
+                tool="expand_calendar_event",
+                event_id="event-1",
+                reason="attachment only",
+                content_kinds=["attachment"],
+                attachment_name="action.pdf",
+            ),
+            PolicyContext.from_user_id("kim"),
+            analysis(),
+        )
+    )
+
+    assert [item.document_id for item in result.documents] == [
+        "attachment-storage-1"
+    ]
+    assert len(backend.calls) == 2
+    assert {"terms": {"content_kind": ["attachment"]}} not in filters_from(
+        backend.calls[0][1]
+    )
+    assert {"terms": {"content_kind": ["attachment"]}} in filters_from(
+        backend.calls[1][1]
+    )
+
+
+def test_calendar_expansion_omits_unrelated_child_after_parent_gate():
+    backend = RecordingBackend(
+        [
+            _parent_gate_response(),
+            {
+                "hits": {
+                    "hits": [
+                        *_allowed_child_response()["hits"]["hits"],
+                        *_allowed_child_response(
+                            parent_event_id="event-2"
+                        )["hits"]["hits"],
+                    ]
+                }
+            },
+        ]
+    )
+
+    result = asyncio.run(
+        workflow(backend).execute(
+            ToolAction(
+                tool="expand_calendar_event",
+                event_id="event-1",
+                reason="relation",
+            ),
+            PolicyContext.from_user_id("kim"),
+            analysis(),
+        )
+    )
+
+    assert [item.parent_event_id for item in result.documents] == ["event-1"]
 
 
 def test_production_mail_reconstruction_sorts_and_deduplicates_chunks():

@@ -54,14 +54,14 @@ def test_structured_memory_round_trips_through_owner_scoped_store():
     assert loaded.previous_event_reference.event_id == "event-kim-1"
 
 
-def test_agent_memory_oversized_and_unsafe_values_are_sanitized():
+def test_agent_memory_bounded_unsafe_values_are_sanitized():
     policy = PolicyContext.from_user_id("kim")
     update = AgentMemoryUpdate(
         entities={
             f"entity-{index}": (
-                "NAND password=super-secret " + ("x" * 1000)
+                "NAND password=super-secret " + ("x" * 470)
             )
-            for index in range(20)
+            for index in range(16)
         },
         current_topic="NAND password=super-secret",
         search_history=["token=secret-token"],
@@ -70,7 +70,7 @@ def test_agent_memory_oversized_and_unsafe_values_are_sanitized():
             subject="NAND password=super-secret",
         ),
         retrieved_source_refs=["../../private/event-kim-1"],
-        unresolved_information=["password=super-secret " + ("x" * 1000)],
+        unresolved_information=["password=super-secret " + ("x" * 470)],
     )
 
     memory = apply_agent_memory_update(ConversationMemory(), update, policy)

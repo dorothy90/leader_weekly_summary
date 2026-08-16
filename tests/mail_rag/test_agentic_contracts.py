@@ -7,6 +7,7 @@ from app.config.settings import Settings
 from app.domain.agentic import (
     AgentMemoryUpdate,
     AgentTrace,
+    EventReference,
     JudgeDecision,
     Observation,
     QueryAnalysis,
@@ -212,3 +213,206 @@ def test_agent_output_contracts_reject_extra_fields(factory):
 def test_agent_output_contracts_reject_values_beyond_bounds(factory):
     with pytest.raises(ValidationError):
         factory()
+
+
+def _bounded_entities():
+    return {
+        f"entity-{index:02d}-" + ("k" * 90): "v" * 500
+        for index in range(16)
+    }
+
+
+def test_model_facing_entity_and_list_items_accept_exact_bounds():
+    entities = _bounded_entities()
+    needs = [f"need-{index}-" + ("n" * 493) for index in range(8)]
+    analysis = QueryAnalysis(
+        intent="knowledge_query",
+        question_type="multi_source",
+        entities=entities,
+        information_needs=needs,
+    )
+    observation = Observation(
+        action=_contract_action(),
+        result=_contract_result(),
+        extracted_entities=entities,
+    )
+    decision = JudgeDecision(
+        sufficient=False,
+        reason="bounded",
+        missing_information=needs,
+    )
+    memory = AgentMemoryUpdate(
+        entities=entities,
+        search_history=["s" * 500 for _index in range(16)],
+        retrieved_source_refs=["r" * 256 for _index in range(16)],
+        unresolved_information=needs,
+    )
+    trace = AgentTrace(
+        tool_calls=["search_mail" for _index in range(8)],
+        judge_decisions=["j" * 500 for _index in range(8)],
+        iteration_count=4,
+    )
+    result = SearchResult(
+        tool="search_mail",
+        query="NAND",
+        disclosures=["d" * 500 for _index in range(4)],
+    )
+
+    assert len(analysis.entities) == len(observation.extracted_entities) == 16
+    assert len(decision.missing_information[0]) == 500
+    assert len(memory.unresolved_information[0]) == 500
+    assert len(trace.judge_decisions[0]) == 500
+    assert len(result.disclosures[0]) == 500
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("entities", {f"key-{index}": "value" for index in range(17)}),
+        ("entities", {"k" * 101: "value"}),
+        ("entities", {"key": "v" * 501}),
+        ("entities", {"": "value"}),
+        ("entities", {"key": 42}),
+        ("information_needs", [f"need-{index}" for index in range(9)]),
+        ("information_needs", ["n" * 501]),
+        ("information_needs", [""]),
+        ("information_needs", [42]),
+    ],
+    ids=[
+        "entity-count",
+        "entity-key-length",
+        "entity-value-length",
+        "empty-entity-key",
+        "entity-value-type",
+        "need-count",
+        "need-length",
+        "empty-need",
+        "need-type",
+    ],
+)
+def test_query_analysis_rejects_unbounded_nested_model_values(field, value):
+    with pytest.raises(ValidationError):
+        QueryAnalysis(
+            intent="knowledge_query",
+            question_type="multi_source",
+            **{field: value},
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("entities", {f"key-{index}": "value" for index in range(17)}),
+        ("entities", {"k" * 101: "value"}),
+        ("entities", {"key": "v" * 501}),
+        ("unresolved_information", [f"need-{index}" for index in range(9)]),
+        ("unresolved_information", ["n" * 501]),
+        ("unresolved_information", [""]),
+        ("unresolved_information", [42]),
+        ("search_history", ["s" * 501]),
+        ("retrieved_source_refs", ["r" * 257]),
+    ],
+    ids=[
+        "entity-count",
+        "entity-key-length",
+        "entity-value-length",
+        "unresolved-count",
+        "unresolved-length",
+        "empty-unresolved",
+        "unresolved-type",
+        "search-history-item",
+        "source-reference-item",
+    ],
+)
+def test_agent_memory_update_rejects_unbounded_nested_values(field, value):
+    with pytest.raises(ValidationError):
+        AgentMemoryUpdate(**{field: value})
+
+
+@pytest.mark.parametrize(
+    "factory",
+    [
+        lambda: Observation(
+            action=_contract_action(),
+            result=_contract_result(),
+            extracted_entities={"key": "v" * 501},
+        ),
+        lambda: JudgeDecision(
+            sufficient=False,
+            reason="missing",
+            missing_information=["n" * 501],
+        ),
+        lambda: SearchResult(
+            tool="search_mail",
+            query="NAND",
+            disclosures=["d" * 501],
+        ),
+        lambda: AgentTrace(judge_decisions=["j" * 501]),
+        lambda: ToolAction(
+            tool="search_calendar",
+            query="NAND",
+            reason="attendees",
+            attendee_emails=["a" * 321],
+        ),
+    ],
+    ids=[
+        "observation-entity",
+        "judge-missing-item",
+        "result-disclosure-item",
+        "trace-decision-item",
+        "attendee-email-item",
+    ],
+)
+def test_analogous_model_facing_items_reject_oversized_strings(factory):
+    with pytest.raises(ValidationError):
+        factory()
+
+
+VALID_EDGE_EVENT_ID = ("A" * 250) + "_.:@+-"
+
+
+def test_event_reference_and_expansion_accept_shared_valid_edge_id():
+    reference = EventReference(event_id=VALID_EDGE_EVENT_ID)
+    action = ToolAction(
+        tool="expand_calendar_event",
+        event_id=VALID_EDGE_EVENT_ID,
+        reason="edge",
+    )
+
+    assert len(reference.event_id) == len(action.event_id) == 256
+
+
+@pytest.mark.parametrize(
+    "event_id",
+    [
+        "",
+        " event-42",
+        "event-42 ",
+        "event 42",
+        "event/42",
+        "event=42",
+        "event#42",
+        "x" * 257,
+        42,
+    ],
+    ids=[
+        "empty",
+        "leading-space",
+        "trailing-space",
+        "internal-space",
+        "slash",
+        "equals",
+        "symbol",
+        "overlong",
+        "non-string",
+    ],
+)
+def test_event_reference_and_expansion_reject_same_unsafe_ids(event_id):
+    with pytest.raises(ValidationError):
+        EventReference(event_id=event_id)
+    with pytest.raises(ValidationError):
+        ToolAction(
+            tool="expand_calendar_event",
+            event_id=event_id,
+            reason="unsafe",
+        )

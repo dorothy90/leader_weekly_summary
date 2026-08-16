@@ -54,5 +54,9 @@ not require an agent code change.
 Mail is filtered by the current `employee_id` and `is_active=true`. Calendar
 adds `is_cancelled=false`. Event expansion repeats the same filters. Missing,
 inactive, cancelled, or foreign events return no bundle and do not reveal
-whether they exist. Only normalized same-owner evidence can enter model
-context, memory, citations, or public references.
+whether they exist. Production expansion first authorizes the canonical parent
+event independently of attachment/output filters and only then loads its
+filtered bundle. Calendar evidence keeps its unique storage document ID while
+validated `calendar_item_id`/`parent_event_id` relation keys are used for
+expansion and follow-up memory. Only normalized same-owner evidence can enter
+model context, memory, citations, or public references.

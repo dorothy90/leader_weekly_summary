@@ -51,7 +51,10 @@ MULTI_SOURCE_DEMO=false
 physical versioned index names. Agent/model output cannot select an index,
 owner, or raw OpenSearch DSL. Backend code always injects
 `employee_id == policy.user_id` and `is_active == true` for Mail; Calendar
-search and expansion also inject `is_cancelled == false`.
+search and expansion also inject `is_cancelled == false`. Calendar expansion
+first verifies a same-owner, active, non-cancelled parent event by its validated
+canonical ID without applying requested attachment/output filters. It queries
+the related bundle only after that parent gate succeeds.
 
 `OPENROUTER_API_KEY`, a reachable `MONGO_URI`, and reachable OpenRouter and OpenSearch endpoints are required for normal service operation. The default AI endpoint, models, and per-request timeout are:
 
