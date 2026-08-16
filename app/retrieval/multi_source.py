@@ -69,7 +69,7 @@ class InMemoryMultiSourceSearch:
             registry,
         )
 
-    def _allowed(
+    def _authorized(
         self,
         item: StoredDocument,
         action: ToolAction,
@@ -99,14 +99,30 @@ class InMemoryMultiSourceSearch:
             if not analysis.start_at_utc <= occurred_at < analysis.end_at_utc:
                 return False
 
-        if action.tool != "expand_calendar_event":
-            if action.content_kinds and item.content_kind not in action.content_kinds:
-                return False
-            if action.attachment_name:
-                actual = str(item.metadata.get("attachment_name") or "")
-                if action.attachment_name.casefold() not in actual.casefold():
-                    return False
         return True
+
+    @staticmethod
+    def _matches_action_filters(
+        item: StoredDocument, action: ToolAction
+    ) -> bool:
+        if action.content_kinds and item.content_kind not in action.content_kinds:
+            return False
+        if action.attachment_name:
+            actual = str(item.metadata.get("attachment_name") or "")
+            if action.attachment_name.casefold() not in actual.casefold():
+                return False
+        return True
+
+    def _allowed(
+        self,
+        item: StoredDocument,
+        action: ToolAction,
+        owner: str,
+        analysis: QueryAnalysis,
+    ) -> bool:
+        return self._authorized(item, action, owner, analysis) and (
+            self._matches_action_filters(item, action)
+        )
 
     @staticmethod
     def _document(item: StoredDocument, score: float) -> SearchDocument:
@@ -179,16 +195,28 @@ class InMemoryMultiSourceSearch:
         analysis: QueryAnalysis,
     ) -> SearchResult:
         self.calls.append((action, policy.user_id))
-        allowed = [
-            item
-            for item in self.documents
-            if self._allowed(item, action, policy.user_id, analysis)
-        ]
 
         if action.tool == "expand_calendar_event":
-            related = self._expand_event(allowed, action.event_id or "")
+            authorized = [
+                item
+                for item in self.documents
+                if self._authorized(item, action, policy.user_id, analysis)
+            ]
+            visible_bundle = self._expand_event(
+                authorized, action.event_id or ""
+            )
+            related = [
+                item
+                for item in visible_bundle
+                if self._matches_action_filters(item, action)
+            ]
             documents = [self._document(item, 1.0) for item in related]
         else:
+            allowed = [
+                item
+                for item in self.documents
+                if self._allowed(item, action, policy.user_id, analysis)
+            ]
             query_tokens = _tokens(action.query)
             ranked = []
             for item in allowed:

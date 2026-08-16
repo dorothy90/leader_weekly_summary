@@ -82,6 +82,34 @@ def test_domain_search_is_shared_active_and_normalized():
     assert result.documents[0].source_type == "domain_knowledge"
 
 
+def test_domain_search_applies_content_kind_filter():
+    result = run(
+        ToolAction(
+            tool="search_domain_knowledge",
+            query="Cell Leakage",
+            reason="domain kind",
+            content_kinds=["attachment"],
+        )
+    )
+
+    assert result.documents == []
+    assert result.total_hits == 0
+
+
+def test_domain_search_applies_attachment_name_filter():
+    result = run(
+        ToolAction(
+            tool="search_domain_knowledge",
+            query="Cell Leakage",
+            reason="domain attachment",
+            attachment_name="secret.pdf",
+        )
+    )
+
+    assert result.documents == []
+    assert result.total_hits == 0
+
+
 def test_mail_search_enforces_index_owner_active_and_content_kind():
     search = service()
     search.documents.append(
@@ -156,6 +184,36 @@ def test_calendar_search_filters_cancelled_and_expands_event_bundle():
     ]
 
 
+def test_event_expansion_applies_content_kind_after_parent_visibility():
+    result = run(
+        ToolAction(
+            tool="expand_calendar_event",
+            event_id="event-kim-1",
+            reason="attachment only",
+            content_kinds=["attachment"],
+        )
+    )
+
+    assert [item.document_id for item in result.documents] == [
+        "event-kim-1-action"
+    ]
+
+
+def test_event_expansion_applies_attachment_name_after_parent_visibility():
+    result = run(
+        ToolAction(
+            tool="expand_calendar_event",
+            event_id="event-kim-1",
+            reason="named attachment",
+            attachment_name="ACTION.PDF",
+        )
+    )
+
+    assert [item.document_id for item in result.documents] == [
+        "event-kim-1-action"
+    ]
+
+
 def test_cancelled_event_expansion_does_not_reveal_existence():
     result = run(
         ToolAction(
@@ -204,6 +262,7 @@ def test_event_expansion_requires_an_owner_visible_parent():
                 tool="expand_calendar_event",
                 event_id="event-kim-1",
                 reason="foreign parent",
+                content_kinds=["attachment"],
             ),
             PolicyContext.from_user_id("lee"),
             analysis(question_type="calendar_search"),
