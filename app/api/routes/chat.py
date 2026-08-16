@@ -193,6 +193,7 @@ def _should_use_no_evidence_fallback(
     execution = result.execution
     return bool(
         payload.response_mode == "auto"
+        and result.agent_trace is None
         and execution is not None
         and execution.status == "limited"
         and execution.failure_stage == "retrieval"

@@ -5,6 +5,7 @@ import pytest
 
 from app.api.dependencies import ServiceContainer
 from app.api.main import create_app
+from app.domain.agentic import AgentTrace
 from app.domain.chat import (
     BM25_FALLBACK_DISCLOSURE,
     ExecutionMetadata,
@@ -263,6 +264,54 @@ def test_auto_fast_no_evidence_uses_labelled_general_fallback():
         },
     ]
     assert memory.turns[-1].execution.status == "limited"
+
+
+def test_auto_agentic_no_evidence_remains_grounded_only():
+    conversations = InMemoryConversationStore()
+    agentic_result = _no_evidence_result().model_copy(
+        update={"agent_trace": AgentTrace()}
+    )
+    fast = FakeFast(
+        agentic_result,
+        fallback_result=FastRAGResult(
+            answer="근거 없는 일반 답변",
+            evidence=[],
+            quality=QualityStatus(
+                citation_valid=None,
+                limited_answer=True,
+                retrieval_mode="not_used",
+            ),
+            execution=ExecutionMetadata(status="succeeded"),
+        ),
+    )
+
+    response = client(
+        router=FakeRouter("fast"), fast=fast, conversations=conversations
+    ).post(
+        "/v1/chat",
+        json={
+            "user_id": "kim",
+            "message": "여러 소스에서 관련 내용을 찾아줘",
+            "response_mode": "auto",
+        },
+    )
+
+    body = response.json()
+    assert body["answer"] == "검증된 근거만으로 답변을 제공할 수 없습니다."
+    assert body["references"] == []
+    assert body["quality"]["limited_answer"] is True
+    assert body["execution"]["status"] == "limited"
+    assert body["execution"]["error_code"] == "NO_EVIDENCE"
+    assert len(fast.calls) == 1
+    memory = asyncio.run(
+        conversations.load(
+            body["conversation_id"], PolicyContext.from_user_id("kim")
+        )
+    )
+    assert memory.messages[-1] == {
+        "role": "assistant",
+        "content": "검증된 근거만으로 답변을 제공할 수 없습니다.",
+    }
 
 
 def test_explicit_fast_no_evidence_remains_grounded_only():
