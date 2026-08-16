@@ -1,0 +1,303 @@
+import asyncio
+from datetime import UTC, datetime
+from pathlib import Path
+
+from app.config.settings import Settings
+from app.domain.agentic import QueryAnalysis, SearchDocument, ToolAction
+from app.domain.policy import PolicyContext
+from app.retrieval.multi_source import InMemoryMultiSourceSearch, StoredDocument
+from app.retrieval.source_registry import SourceRegistry
+
+
+FIXTURE = Path("fixtures/multi_source_demo/corpus.json")
+
+
+def service():
+    return InMemoryMultiSourceSearch.from_path(
+        FIXTURE, SourceRegistry.from_settings(Settings())
+    )
+
+
+def analysis(**updates):
+    values = {
+        "intent": "knowledge_query",
+        "question_type": "multi_source",
+        "information_needs": [],
+    }
+    values.update(updates)
+    return QueryAnalysis(**values)
+
+
+def run(action, owner="kim", query_analysis=None):
+    return asyncio.run(
+        service().execute(
+            action,
+            PolicyContext.from_user_id(owner),
+            query_analysis or analysis(),
+        )
+    )
+
+
+def test_domain_search_is_shared_active_and_normalized():
+    search = service()
+    search.documents.extend(
+        [
+            StoredDocument(
+                index="syld_gpt",
+                document_id="domain-inactive",
+                source_type="domain_knowledge",
+                source_id="domain-inactive",
+                is_active=False,
+                title="Cell Leakage inactive",
+                text="Cell Leakage inactive knowledge",
+            ),
+            StoredDocument(
+                index="wrong-domain-index",
+                document_id="domain-wrong-index",
+                source_type="domain_knowledge",
+                source_id="domain-wrong-index",
+                title="Cell Leakage wrong index",
+                text="Cell Leakage wrong index knowledge",
+            ),
+        ]
+    )
+
+    result = asyncio.run(
+        search.execute(
+            ToolAction(
+                tool="search_domain_knowledge",
+                query="Cell Leakage",
+                reason="기술 의미",
+            ),
+            PolicyContext.from_user_id("lee"),
+            analysis(question_type="domain_knowledge"),
+        )
+    )
+
+    assert [item.document_id for item in result.documents] == [
+        "domain-cell-leakage"
+    ]
+    assert result.retrieval_mode == "deterministic"
+    assert result.total_hits == 1
+    assert result.documents[0].source_type == "domain_knowledge"
+
+
+def test_mail_search_enforces_index_owner_active_and_content_kind():
+    search = service()
+    search.documents.append(
+        StoredDocument(
+            index="wrong-mail-index",
+            document_id="mail-kim-wrong-index",
+            source_type="mail",
+            content_kind="body",
+            source_id="mail-kim-wrong-index",
+            employee_id="kim",
+            title="NAND Cell Leakage wrong index",
+            text="NAND Cell Leakage wrong index body",
+            occurred_at="2026-08-05T01:00:00Z",
+            metadata={"chunk_index": 0},
+        )
+    )
+    search.documents.append(
+        StoredDocument(
+            index="ews-mail-active",
+            document_id="mail-masquerading-as-shared-domain",
+            source_type="domain_knowledge",
+            content_kind="body",
+            source_id="mail-masquerading-as-shared-domain",
+            title="NAND Cell Leakage shared bypass",
+            text="NAND Cell Leakage must not bypass mail ownership",
+            occurred_at="2026-08-05T01:00:00Z",
+        )
+    )
+
+    result = asyncio.run(
+        search.execute(
+            ToolAction(
+                tool="search_mail",
+                query="NAND Cell Leakage",
+                reason="메일",
+                content_kinds=["body"],
+            ),
+            PolicyContext.from_user_id("kim"),
+            analysis(question_type="mail_search"),
+        )
+    )
+
+    ids = {item.document_id for item in result.documents}
+    assert "mail-kim-body-0" in ids
+    assert "mail-lee-decoy" not in ids
+    assert "mail-kim-inactive" not in ids
+    assert "mail-kim-wrong-index" not in ids
+    assert "mail-masquerading-as-shared-domain" not in ids
+    assert all(item.content_kind == "body" for item in result.documents)
+
+
+def test_calendar_search_filters_cancelled_and_expands_event_bundle():
+    found = run(
+        ToolAction(
+            tool="search_calendar", query="NAND Yield Review", reason="회의"
+        )
+    )
+    assert "event-kim-cancelled" not in {
+        item.document_id for item in found.documents
+    }
+
+    expanded = run(
+        ToolAction(
+            tool="expand_calendar_event",
+            event_id="event-kim-1",
+            reason="회의 내용과 Action",
+        )
+    )
+    assert [item.document_id for item in expanded.documents] == [
+        "event-kim-1",
+        "event-kim-1-action",
+    ]
+
+
+def test_cancelled_event_expansion_does_not_reveal_existence():
+    result = run(
+        ToolAction(
+            tool="expand_calendar_event",
+            event_id="event-kim-cancelled",
+            reason="cancelled",
+        )
+    )
+    assert result.documents == []
+    assert result.total_hits == 0
+
+
+def test_foreign_event_expansion_does_not_reveal_existence():
+    result = run(
+        ToolAction(
+            tool="expand_calendar_event",
+            event_id="event-kim-1",
+            reason="foreign",
+        ),
+        owner="lee",
+    )
+    assert result.documents == []
+    assert result.total_hits == 0
+
+
+def test_event_expansion_requires_an_owner_visible_parent():
+    search = service()
+    search.documents.append(
+        StoredDocument(
+            index="ews-calendar-active",
+            document_id="event-kim-1-lee-child",
+            source_type="calendar",
+            content_kind="attachment",
+            source_id="event-kim-1-lee-child",
+            parent_event_id="event-kim-1",
+            employee_id="lee",
+            title="foreign-parent child",
+            text="lee can own this child but not the parent",
+            occurred_at="2026-08-07T01:00:00Z",
+        )
+    )
+
+    result = asyncio.run(
+        search.execute(
+            ToolAction(
+                tool="expand_calendar_event",
+                event_id="event-kim-1",
+                reason="foreign parent",
+            ),
+            PolicyContext.from_user_id("lee"),
+            analysis(question_type="calendar_search"),
+        )
+    )
+
+    assert result.documents == []
+    assert result.total_hits == 0
+
+
+def test_resolved_date_range_is_half_open_for_dummy_mail_results():
+    inside = run(
+        ToolAction(tool="search_mail", query="NAND", reason="날짜 필터"),
+        query_analysis=analysis(
+            question_type="mail_search",
+            start_at_utc=datetime(2026, 8, 5, 1, tzinfo=UTC),
+            end_at_utc=datetime(2026, 8, 5, 2, tzinfo=UTC),
+        ),
+    )
+    outside = run(
+        ToolAction(tool="search_mail", query="NAND", reason="날짜 필터"),
+        query_analysis=analysis(
+            question_type="mail_search",
+            start_at_utc=datetime(2026, 8, 5, 0, tzinfo=UTC),
+            end_at_utc=datetime(2026, 8, 5, 1, tzinfo=UTC),
+        ),
+    )
+
+    assert [item.document_id for item in inside.documents] == ["mail-kim-body-0"]
+    assert outside.documents == []
+
+
+def test_mail_attachment_name_filter_is_case_insensitive():
+    result = run(
+        ToolAction(
+            tool="search_mail",
+            query="Cell Leakage",
+            reason="첨부",
+            content_kinds=["attachment"],
+            attachment_name="MEASUREMENTS.XLSX",
+        )
+    )
+
+    assert [item.document_id for item in result.documents] == [
+        "mail-kim-attachment-0"
+    ]
+
+
+def test_mail_chunks_are_sorted_deduplicated_and_reconstructed():
+    documents = [
+        SearchDocument(
+            source_type="mail",
+            document_id="chunk-2",
+            source_id="mail-1",
+            content_kind="body",
+            text="두 번째",
+            score=0.8,
+            metadata={"chunk_index": 2},
+        ),
+        SearchDocument(
+            source_type="mail",
+            document_id="chunk-1",
+            source_id="mail-1",
+            content_kind="body",
+            text="첫 번째",
+            score=1.0,
+            metadata={"chunk_index": 1},
+        ),
+        SearchDocument(
+            source_type="mail",
+            document_id="chunk-1-copy",
+            source_id="mail-1",
+            content_kind="body",
+            text="첫 번째",
+            score=0.5,
+            metadata={"chunk_index": 1},
+        ),
+    ]
+
+    result = InMemoryMultiSourceSearch._reconstruct_mail(documents, 10)
+
+    assert len(result) == 1
+    assert result[0].document_id == "chunk-1"
+    assert result[0].text == "첫 번째\n\n두 번째"
+
+
+def test_tied_scores_have_deterministic_document_id_order():
+    first = run(
+        ToolAction(tool="search_mail", query="Cell Leakage", reason="order")
+    )
+    second = run(
+        ToolAction(tool="search_mail", query="Cell Leakage", reason="order")
+    )
+
+    expected = ["mail-kim-attachment-0", "mail-kim-body-0"]
+    assert [item.document_id for item in first.documents] == expected
+    assert [item.document_id for item in second.documents] == expected
