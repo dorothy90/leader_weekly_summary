@@ -3,6 +3,8 @@ from datetime import UTC, datetime
 import re
 from pathlib import Path
 
+import pytest
+
 from app.config.settings import Settings
 from app.domain.agentic import (
     JudgeDecision,
@@ -538,7 +540,7 @@ def test_model_authored_utc_is_replaced_by_deterministic_resolution():
                 "intent": "knowledge_query",
                 "question_type": "mail_search",
                 "entities": {"product": "NAND"},
-                "time_expression": "지난주",
+                "time_expression": "어제",
                 "start_at_utc": "2000-01-01T00:00:00Z",
                 "end_at_utc": "2000-01-02T00:00:00Z",
                 "information_needs": ["관련 메일"],
@@ -555,8 +557,96 @@ def test_model_authored_utc_is_replaced_by_deterministic_resolution():
     expected = resolve_time_range(
         "지난주", now=NOW, timezone_name="Asia/Seoul"
     )
+    assert analysis.time_expression == "지난주"
     assert analysis.start_at_utc == expected.start_at_utc
     assert analysis.end_at_utc == expected.end_at_utc
+
+
+@pytest.mark.parametrize(
+    "hostile_analysis",
+    [
+        {
+            "intent": "knowledge_query",
+            "question_type": "general_chat",
+            "entities": {},
+            "information_needs": [],
+        },
+        {
+            "intent": "knowledge_query",
+            "question_type": "multi_source",
+            "entities": {"product": "NAND"},
+            "information_needs": ["기술적 의미"],
+        },
+    ],
+    ids=["general-chat-empty", "multi-source-wrong-needs"],
+)
+def test_structured_analysis_cannot_remove_raw_multi_source_requirements(
+    hostile_analysis,
+):
+    class HostileStructuredLLM:
+        async def complete_model(self, system, user, schema):
+            if schema.__name__ == "QueryAnalysis":
+                return hostile_analysis
+            if schema.__name__ == "ToolAction":
+                return {
+                    "tool": "search_mail",
+                    "query": "NAND",
+                    "reason": "stop after one source",
+                }
+            return {
+                "sufficient": True,
+                "reason": "one source is enough",
+                "missing_information": [],
+                "recommended_action": None,
+            }
+
+    search = InMemoryMultiSourceSearch.from_path(
+        Path("fixtures/multi_source_demo/corpus.json"),
+        SourceRegistry.from_settings(Settings()),
+    )
+    workflow = MultiSourceAgenticWorkflow(
+        search,
+        StructuredAgentModel(HostileStructuredLLM(), now=NOW),
+    )
+
+    result = invoke(workflow, QUESTION)
+
+    assert [action.tool for action, _owner in search.calls] == [
+        "search_mail",
+        "search_calendar",
+        "expand_calendar_event",
+        "search_domain_knowledge",
+    ]
+    assert {item.source_type for item in result.evidence} == {
+        "mail",
+        "calendar",
+        "domain_knowledge",
+    }
+    assert result.execution.status == "succeeded"
+
+
+def test_structured_analysis_may_add_need_without_removing_baseline_needs():
+    class AdditiveStructuredLLM:
+        async def complete_model(self, system, user, schema):
+            return {
+                "intent": "knowledge_query",
+                "question_type": "domain_knowledge",
+                "entities": {"product": "NAND"},
+                "information_needs": ["기술적 의미"],
+            }
+
+    model = StructuredAgentModel(AdditiveStructuredLLM(), now=NOW)
+
+    analysis = asyncio.run(
+        model.analyze(
+            "NAND 관련 메일 찾아줘",
+            ConversationMemory(),
+            "Asia/Seoul",
+        )
+    )
+
+    assert analysis.information_needs == ["관련 메일", "기술적 의미"]
+    assert analysis.question_type == "multi_source"
 
 
 def test_answer_citations_and_evidence_are_grounded_and_normalized():

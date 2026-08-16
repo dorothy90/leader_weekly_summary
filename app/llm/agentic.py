@@ -322,11 +322,44 @@ class StructuredAgentModel:
                 continue
         return await fallback_call()
 
+    @staticmethod
+    def _merged_question_type(baseline, information_needs):
+        probe = baseline.model_copy(
+            update={
+                "question_type": "general_chat",
+                "information_needs": information_needs,
+            }
+        )
+        sources = RuleBasedAgentModel._required_sources(probe)
+        for source in RuleBasedAgentModel._required_sources(baseline):
+            if source not in sources:
+                sources.append(source)
+        if baseline.question_type == "follow_up":
+            return "follow_up"
+        if len(sources) > 1:
+            return "multi_source"
+        if sources:
+            return {
+                "mail": "mail_search",
+                "calendar": "calendar_search",
+                "domain_knowledge": "domain_knowledge",
+            }[sources[0]]
+        return baseline.question_type
+
     async def analyze(self, question, memory, timezone_name):
+        baseline = await RuleBasedAgentModel(now=self.now).analyze(
+            question,
+            memory,
+            timezone_name,
+        )
         safe_memory = {
             "entities": getattr(memory, "entities", {}),
             "current_topic": getattr(memory, "current_topic", None),
         }
+
+        async def baseline_fallback():
+            return baseline
+
         analysis = await self._structured(
             QueryAnalysis,
             (
@@ -336,17 +369,28 @@ class StructuredAgentModel:
             json.dumps(
                 {"question": question, "memory": safe_memory}, ensure_ascii=False
             ),
-            lambda: self.fallback.analyze(question, memory, timezone_name),
+            baseline_fallback,
         )
-        expression = _time_expression(question)
-        resolved = resolve_time_range(
-            expression, now=self.now, timezone_name=timezone_name
+        information_needs = list(
+            dict.fromkeys(
+                [
+                    *baseline.information_needs,
+                    *analysis.information_needs,
+                ]
+            )
+        )[:8]
+        question_type = self._merged_question_type(
+            baseline,
+            information_needs,
         )
         return analysis.model_copy(
             update={
-                "time_expression": expression,
-                "start_at_utc": resolved.start_at_utc if resolved else None,
-                "end_at_utc": resolved.end_at_utc if resolved else None,
+                "question_type": question_type,
+                "entities": {**analysis.entities, **baseline.entities},
+                "information_needs": information_needs,
+                "time_expression": baseline.time_expression,
+                "start_at_utc": baseline.start_at_utc,
+                "end_at_utc": baseline.end_at_utc,
             }
         )
 
