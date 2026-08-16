@@ -216,16 +216,26 @@ async def _save_turn(
     trace_id=None,
     reason_code=None,
     quality=None,
+    agent_memory=None,
 ):
     if services.conversations is None:
         return True
+    current_memory = memory or ConversationMemory()
+    if agent_memory is not None:
+        from app.persistence.conversations import apply_agent_memory_update
+
+        current_memory = apply_agent_memory_update(
+            current_memory,
+            agent_memory,
+            policy,
+        )
     safe_user = sanitize_text(payload.message) or "[REDACTED]"
     safe_answer = sanitize_text(answer) if answer is not None else None
-    prior = list(memory.messages if memory else [])
+    prior = list(current_memory.messages)
     prior.append({"role": "user", "content": safe_user})
     if safe_answer:
         prior.append({"role": "assistant", "content": safe_answer})
-    turns = list(memory.turns if memory else [])
+    turns = list(current_memory.turns)
     turns.append(
         TurnRecord(
             user_content=safe_user,
@@ -244,14 +254,15 @@ async def _save_turn(
         await services.conversations.save(
             conversation_id,
             policy,
-            ConversationMemory(
-                revision=memory.revision if memory else 0,
-                messages=prior[-20:],
-                turns=turns[-20:],
-                filters=sanitize_filters_for_memory(payload.filters),
-                cited_evidence=(cited_evidence if cited_evidence is not None else [])[
-                    :8
-                ],
+            current_memory.model_copy(
+                update={
+                    "messages": prior[-20:],
+                    "turns": turns[-20:],
+                    "filters": sanitize_filters_for_memory(payload.filters),
+                    "cited_evidence": (
+                        cited_evidence if cited_evidence is not None else []
+                    )[:8],
+                }
             ),
         )
     except AppError:
@@ -574,7 +585,10 @@ async def chat(payload: ChatRequest, request: Request):
     saved = await _save_turn(
         services, conversation_id, policy, payload, memory, public_answer,
         "fast", "fast_rag", execution, disclosures, owned,
-        trace_id=trace_id, reason_code=decision.reason_code, quality=quality,
+        trace_id=trace_id,
+        reason_code=decision.reason_code,
+        quality=quality,
+        agent_memory=(result.agent_memory if execution.status != "failed" else None),
     )
     if not saved and CONTEXT_UNAVAILABLE_DISCLOSURE not in context_disclosures:
         context_disclosures.append(CONTEXT_UNAVAILABLE_DISCLOSURE)

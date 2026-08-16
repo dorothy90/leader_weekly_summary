@@ -12,6 +12,7 @@ from app.api.routes.content import router as content_router
 from app.api.routes.health import router as health_router
 from app.api.routes.research import router as research_router
 from app.domain.errors import AppError, ErrorCode
+from app.config.settings import Settings
 from app.observability.tracing import TraceEvent, emit_trace, hash_trace_value
 from app.observability.node_runs import ensure_node_recorder
 
@@ -150,3 +151,18 @@ def create_app(container) -> FastAPI:
     app.include_router(research_router)
     app.include_router(health_router)
     return app
+
+
+def build_configured_app() -> FastAPI:
+    from app.api.dependencies import build_container, build_demo_container
+
+    settings = Settings.from_env()
+    container = (
+        build_demo_container(settings)
+        if settings.multi_source_demo
+        else build_container(settings)
+    )
+    return create_app(container)
+
+
+app = build_configured_app() if Settings.from_env().multi_source_demo else None

@@ -48,6 +48,16 @@ class DependencyReadiness:
         return status
 
 
+class DemoReadiness:
+    async def check(self):
+        return {
+            "opensearch": "ready",
+            "mongo": "ready",
+            "aliases": "ready",
+            "agent_model": "ready",
+        }
+
+
 def build_opensearch_client(settings=None):
     from opensearchpy import OpenSearch
 
@@ -102,14 +112,18 @@ def build_container(settings=None, trace_sink=None) -> ServiceContainer:
     from app.graphs.conversation import contextualize_request
     from app.graphs.deep_research import DeepResearchWorkflow
     from app.graphs.fast_rag import FastRAGWorkflow
+    from app.graphs.multi_source import MultiSourceAgenticWorkflow
     from app.graphs.router import route_request
+    from app.llm.agentic import StructuredAgentModel
     from app.observability.tracing import NoOpTraceSink
     from app.observability.node_runs import record_node
     from app.persistence.conversations import MongoConversationStore
     from app.persistence.research_jobs import MongoResearchJobStore
     from app.retrieval.opensearch import AsyncOpenSearchGateway
     from app.retrieval.corpus_info import CorpusInfoService
+    from app.retrieval.multi_source_opensearch import OpenSearchMultiSourceSearch
     from app.retrieval.service import RetrievalService
+    from app.retrieval.source_registry import SourceRegistry
 
     current = settings or get_settings()
     traces = trace_sink if trace_sink is not None else NoOpTraceSink()
@@ -123,6 +137,15 @@ def build_container(settings=None, trace_sink=None) -> ServiceContainer:
         current.mail_parent_index,
         current.wiki_index,
         trace_sink=traces,
+    )
+    registry = SourceRegistry.from_settings(current)
+    agentic = MultiSourceAgenticWorkflow(
+        OpenSearchMultiSourceSearch(search, embeddings, registry),
+        StructuredAgentModel(
+            llm,
+            timeout_seconds=current.openrouter_request_timeout_seconds,
+        ),
+        timezone_name=current.default_user_timezone,
     )
     mongo_client = AsyncIOMotorClient(current.mongo_uri)
     database = mongo_client[current.mongo_db]
@@ -153,6 +176,7 @@ def build_container(settings=None, trace_sink=None) -> ServiceContainer:
             trace_sink=traces,
             model_step_timeout_seconds=current.openrouter_request_timeout_seconds,
             general_timeout_seconds=current.openrouter_request_timeout_seconds,
+            agentic=agentic,
         ),
         deep=DeepResearchWorkflow(
             retrieval,
@@ -166,7 +190,71 @@ def build_container(settings=None, trace_sink=None) -> ServiceContainer:
         readiness=DependencyReadiness(
             opensearch_client,
             mongo_client,
-            [current.mail_child_index, current.mail_parent_index, current.wiki_index],
+            [
+                current.mail_child_index,
+                current.mail_parent_index,
+                current.wiki_index,
+                current.mail_index_alias,
+                current.calendar_index_alias,
+            ],
         ),
         corpus_info=CorpusInfoService(search, current.mail_child_index),
+    )
+
+
+def build_demo_container(settings=None) -> ServiceContainer:
+    from datetime import UTC, datetime
+    from pathlib import Path
+
+    from app.config.settings import get_settings
+    from app.domain.chat import RouteDecision
+    from app.graphs.fast_rag import FastRAGWorkflow
+    from app.graphs.multi_source import MultiSourceAgenticWorkflow
+    from app.llm.agentic import RuleBasedAgentModel
+    from app.persistence.conversations import InMemoryConversationStore
+    from app.persistence.research_jobs import InMemoryResearchJobStore
+    from app.retrieval.multi_source import InMemoryMultiSourceSearch
+    from app.retrieval.source_registry import SourceRegistry
+
+    current = settings or get_settings()
+    registry = SourceRegistry.from_settings(current)
+    fixture = (
+        Path(__file__).resolve().parents[2]
+        / "fixtures"
+        / "multi_source_demo"
+        / "corpus.json"
+    )
+    search = InMemoryMultiSourceSearch.from_path(fixture, registry)
+    model = RuleBasedAgentModel(now=datetime(2026, 8, 16, 12, tzinfo=UTC))
+    agentic = MultiSourceAgenticWorkflow(
+        search,
+        model,
+        timezone_name=current.default_user_timezone,
+    )
+
+    class DemoRouter:
+        async def route(self, request, conversation=None):
+            general = request.message.casefold().strip() in {
+                "안녕",
+                "안녕하세요",
+                "hello",
+                "hi",
+            }
+            return RouteDecision(
+                route="general" if general else "fast",
+                reason_code="demo_rule",
+                confidence=1,
+                estimated_searches=0 if general else 1,
+            )
+
+        async def contextualize_request(self, request, conversation=None):
+            return request
+
+    return ServiceContainer(
+        router=DemoRouter(),
+        fast=FastRAGWorkflow(None, model, agentic=agentic),
+        deep=None,
+        conversations=InMemoryConversationStore(),
+        jobs=InMemoryResearchJobStore(),
+        readiness=DemoReadiness(),
     )
