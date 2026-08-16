@@ -115,6 +115,64 @@ def test_follow_up_expands_previous_event_before_semantic_search():
     assert "FDC" in result.answer
 
 
+def test_stale_saved_event_falls_back_to_calendar_search_within_bound():
+    class StaleEventSearch:
+        def __init__(self):
+            self.calls = []
+
+        async def execute(
+            self,
+            action,
+            policy,
+            analysis,
+            request_filters=None,
+        ):
+            self.calls.append(action.tool)
+            if action.tool == "expand_calendar_event":
+                return SearchResult(
+                    tool=action.tool,
+                    query=action.query,
+                    retrieval_mode="deterministic",
+                )
+            return SearchResult(
+                tool=action.tool,
+                query=action.query,
+                documents=[
+                    SearchDocument(
+                        source_type="calendar",
+                        document_id="event-current-storage",
+                        source_id="event-current",
+                        parent_event_id="event-current",
+                        content_kind="event",
+                        title="Current NAND Yield Review",
+                        text="현재 NAND 수율 검토 회의",
+                        score=1.0,
+                    )
+                ],
+                total_hits=1,
+                retrieval_mode="deterministic",
+            )
+
+    memory = ConversationMemory.model_validate(
+        {
+            "previous_event_reference": {
+                "event_id": "event-stale",
+                "subject": "Stale NAND Yield Review",
+            }
+        }
+    )
+    search = StaleEventSearch()
+    workflow = MultiSourceAgenticWorkflow(search, RuleBasedAgentModel())
+
+    result = invoke(workflow, "그 회의 언제였어?", memory)
+
+    assert search.calls[:2] == ["expand_calendar_event", "search_calendar"]
+    assert len(result.agent_trace.tool_calls) <= MAX_ITERATIONS
+    assert [item.document_id for item in result.evidence] == [
+        "event-current-storage"
+    ]
+
+
 def test_structured_planner_cannot_override_saved_event_id_for_follow_up():
     class FuzzyCalendarLLM:
         def __init__(self):

@@ -3,6 +3,11 @@ from copy import deepcopy
 from datetime import UTC, datetime
 
 import pytest
+from opensearchpy.exceptions import (
+    ConnectionError as OpenSearchConnectionError,
+    ConnectionTimeout as OpenSearchConnectionTimeout,
+    TransportError as OpenSearchTransportError,
+)
 
 from app.config.settings import Settings
 from app.domain.agentic import QueryAnalysis, SearchDocument, ToolAction
@@ -316,8 +321,30 @@ def test_mail_hits_are_post_filtered_against_trusted_facets_and_date_range():
 @pytest.mark.parametrize(
     ("backend_error", "expected_code"),
     [
-        (TimeoutError("backend timeout secret"), ErrorCode.RETRIEVAL_TIMEOUT),
-        (RuntimeError("backend crash secret"), ErrorCode.INDEX_UNAVAILABLE),
+        (
+            OpenSearchConnectionTimeout(
+                "N/A",
+                "timeout secret",
+                TimeoutError("socket timeout secret"),
+            ),
+            ErrorCode.RETRIEVAL_TIMEOUT,
+        ),
+        (
+            OpenSearchConnectionError(
+                "N/A",
+                "connection secret",
+                OSError("socket failure secret"),
+            ),
+            ErrorCode.INDEX_UNAVAILABLE,
+        ),
+        (
+            OpenSearchTransportError(
+                503,
+                "service unavailable secret",
+                {},
+            ),
+            ErrorCode.INDEX_UNAVAILABLE,
+        ),
     ],
 )
 def test_backend_failures_are_normalized_to_safe_typed_errors(
@@ -347,6 +374,28 @@ def test_backend_failures_are_normalized_to_safe_typed_errors(
     assert failure.value.code == expected_code
     assert failure.value.retryable is True
     assert "secret" not in failure.value.message
+
+
+def test_backend_programming_error_is_not_normalized_as_recoverable():
+    class BrokenBackend:
+        async def search(self, index, body):
+            raise AssertionError("backend contract bug")
+
+    class UnavailableEmbedding:
+        async def embed(self, text):
+            raise RuntimeError("embedding unavailable")
+
+    with pytest.raises(AssertionError, match="backend contract bug"):
+        asyncio.run(
+            workflow(
+                BrokenBackend(),
+                embeddings=UnavailableEmbedding(),
+            ).execute(
+                ToolAction(tool="search_mail", query="NAND", reason="failure"),
+                PolicyContext.from_user_id("kim"),
+                analysis(),
+            )
+        )
 
 
 def test_model_action_cannot_override_owner_index_or_query_dsl():

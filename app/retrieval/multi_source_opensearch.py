@@ -5,6 +5,11 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
+from opensearchpy.exceptions import (
+    ConnectionError as OpenSearchConnectionError,
+    ConnectionTimeout as OpenSearchConnectionTimeout,
+    TransportError as OpenSearchTransportError,
+)
 from pydantic import ValidationError
 
 from app.domain.agentic import (
@@ -77,18 +82,29 @@ class OpenSearchMultiSourceSearch:
             return await self.backend.search(index, body)
         except AppError:
             raise
-        except TimeoutError:
+        except (OpenSearchConnectionTimeout, TimeoutError):
             raise AppError(
                 ErrorCode.RETRIEVAL_TIMEOUT,
                 "검색 요청 시간이 초과되었습니다.",
                 retryable=True,
             ) from None
-        except Exception:
+        except OpenSearchConnectionError:
             raise AppError(
                 ErrorCode.INDEX_UNAVAILABLE,
                 "검색 인덱스를 사용할 수 없습니다.",
                 retryable=True,
             ) from None
+        except OpenSearchTransportError as error:
+            status_code = error.status_code
+            if status_code == 429 or (
+                isinstance(status_code, int) and status_code >= 500
+            ):
+                raise AppError(
+                    ErrorCode.INDEX_UNAVAILABLE,
+                    "검색 인덱스를 사용할 수 없습니다.",
+                    retryable=True,
+                ) from None
+            raise
 
     async def execute(
         self,
