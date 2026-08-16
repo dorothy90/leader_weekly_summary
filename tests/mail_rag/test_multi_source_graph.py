@@ -14,6 +14,7 @@ from app.domain.agentic import (
     ToolAction,
 )
 from app.domain.chat import ChatRequest, ChatResponse
+from app.domain.errors import AppError, ErrorCode
 from app.domain.policy import PolicyContext
 from app.graphs.fast_rag import FastRAGWorkflow
 from app.graphs.multi_source import (
@@ -260,7 +261,7 @@ def test_model_sufficiency_cannot_override_a_missing_required_source():
     result = invoke(workflow, "NAND 메일 찾아줘")
 
     assert [action.tool for action in search.calls] == ["search_mail"]
-    assert "duplicate_search_blocked" in result.agent_trace.judge_decisions
+    assert "duplicate_search_blocked" not in result.agent_trace.judge_decisions
     assert result.agent_memory.unresolved_information == ["관련 메일"]
     assert result.quality.limited_answer is True
 
@@ -1048,7 +1049,11 @@ def test_source_failure_returns_partial_grounded_result_instead_of_raising():
                     total_hits=1,
                     retrieval_mode="hybrid",
                 )
-            raise RuntimeError("calendar backend secret failure")
+            raise AppError(
+                ErrorCode.RETRIEVAL_TIMEOUT,
+                "calendar backend secret failure",
+                retryable=True,
+            )
 
     search = PartiallyFailingSearch()
     workflow = MultiSourceAgenticWorkflow(search, RuleBasedAgentModel())
@@ -1058,7 +1063,169 @@ def test_source_failure_returns_partial_grounded_result_instead_of_raising():
     assert [item.source_type for item in result.evidence] == ["mail"]
     assert result.quality.limited_answer is True
     assert result.execution.status == "limited"
+    assert result.execution.error_code == "RETRIEVAL_TIMEOUT"
+    assert result.execution.retryable is True
     assert "calendar backend secret failure" not in result.model_dump_json()
+
+
+@pytest.mark.parametrize("mail_outcome", ["zero_hits", "source_failure"])
+def test_required_source_sweep_continues_after_empty_or_failed_mail(
+    mail_outcome,
+):
+    class SweepSearch:
+        def __init__(self):
+            self.calls = []
+
+        async def execute(
+            self,
+            action,
+            policy,
+            analysis,
+            request_filters=None,
+        ):
+            self.calls.append(action.tool)
+            if action.tool == "search_mail":
+                if mail_outcome == "source_failure":
+                    raise AppError(
+                        ErrorCode.INDEX_UNAVAILABLE,
+                        "mail backend unavailable secret",
+                        retryable=True,
+                    )
+                return SearchResult(
+                    tool=action.tool,
+                    query=action.query,
+                    retrieval_mode="hybrid",
+                )
+            return SearchResult(
+                tool=action.tool,
+                query=action.query,
+                documents=[
+                    SearchDocument(
+                        source_type="calendar",
+                        document_id="event-storage-1",
+                        source_id="event-1",
+                        parent_event_id="event-1",
+                        content_kind="event",
+                        title="NAND Yield Review",
+                        text="NAND 수율 검토 회의",
+                        score=1.0,
+                    )
+                ],
+                total_hits=1,
+                retrieval_mode="hybrid",
+            )
+
+    search = SweepSearch()
+    workflow = MultiSourceAgenticWorkflow(search, RuleBasedAgentModel())
+
+    result = invoke(workflow, "NAND 메일과 회의 찾아줘")
+
+    assert search.calls == ["search_mail", "search_calendar"]
+    assert [item.source_type for item in result.evidence] == ["calendar"]
+    assert result.quality.limited_answer is True
+    assert "mail backend unavailable secret" not in result.model_dump_json()
+
+
+def test_policy_and_programming_errors_are_not_downgraded_to_source_failure():
+    class RaisingSearch:
+        def __init__(self, error):
+            self.error = error
+
+        async def execute(
+            self,
+            action,
+            policy,
+            analysis,
+            request_filters=None,
+        ):
+            raise self.error
+
+    policy_error = AppError(
+        ErrorCode.UNAUTHORIZED_RESOURCE,
+        "policy denied",
+    )
+    policy_workflow = MultiSourceAgenticWorkflow(
+        RaisingSearch(policy_error),
+        RuleBasedAgentModel(),
+    )
+    programming_workflow = MultiSourceAgenticWorkflow(
+        RaisingSearch(AssertionError("programming contract failed")),
+        RuleBasedAgentModel(),
+    )
+
+    with pytest.raises(AppError) as policy_failure:
+        invoke(policy_workflow, "NAND 메일 찾아줘")
+    assert policy_failure.value.code == ErrorCode.UNAUTHORIZED_RESOURCE
+    with pytest.raises(AssertionError, match="programming contract failed"):
+        invoke(programming_workflow, "NAND 메일 찾아줘")
+
+
+def test_optional_source_failure_keeps_quality_and_execution_limited():
+    class OptionalFailureSearch:
+        async def execute(
+            self,
+            action,
+            policy,
+            analysis,
+            request_filters=None,
+        ):
+            if action.tool == "search_domain_knowledge":
+                raise AppError(
+                    ErrorCode.INDEX_UNAVAILABLE,
+                    "optional source unavailable",
+                    retryable=True,
+                )
+            return SearchResult(
+                tool=action.tool,
+                query=action.query,
+                documents=[
+                    SearchDocument(
+                        source_type="mail",
+                        document_id="mail-grounded",
+                        content_kind="body",
+                        title="NAND yield mail",
+                        text="NAND 수율 이슈가 보고됐다.",
+                        score=1.0,
+                    )
+                ],
+                total_hits=1,
+                retrieval_mode="hybrid",
+            )
+
+    class OptionalSourceJudge(RuleBasedAgentModel):
+        def __init__(self):
+            super().__init__()
+            self.judge_calls = 0
+
+        async def judge(self, state):
+            self.judge_calls += 1
+            return JudgeDecision(
+                sufficient=self.judge_calls > 1,
+                reason="optional source check",
+                missing_information=[],
+                recommended_action=(
+                    None
+                    if self.judge_calls > 1
+                    else ToolAction(
+                        tool="search_domain_knowledge",
+                        query="NAND",
+                        reason="optional corroboration",
+                    )
+                ),
+            )
+
+    workflow = MultiSourceAgenticWorkflow(
+        OptionalFailureSearch(),
+        OptionalSourceJudge(),
+    )
+
+    result = invoke(workflow, "NAND 메일 찾아줘")
+
+    assert [item.source_type for item in result.evidence] == ["mail"]
+    assert result.quality.limited_answer is True
+    assert result.execution.status == "limited"
+    assert result.execution.error_code == "INDEX_UNAVAILABLE"
+    assert LIMIT_DISCLOSURE in result.answer
 
 
 def test_calendar_expansion_failure_is_reported_as_typed_partial_result():
@@ -1071,7 +1238,11 @@ def test_calendar_expansion_failure_is_reported_as_typed_partial_result():
             request_filters=None,
         ):
             if action.tool == "expand_calendar_event":
-                raise TimeoutError("calendar attachment timeout secret")
+                raise AppError(
+                    ErrorCode.RETRIEVAL_TIMEOUT,
+                    "calendar attachment timeout secret",
+                    retryable=True,
+                )
             return SearchResult(
                 tool=action.tool,
                 query=action.query,
@@ -1100,7 +1271,8 @@ def test_calendar_expansion_failure_is_reported_as_typed_partial_result():
 
     assert [item.source_type for item in result.evidence] == ["calendar"]
     assert result.execution.status == "limited"
-    assert result.execution.error_code == "SOURCE_UNAVAILABLE"
+    assert result.execution.error_code == "RETRIEVAL_TIMEOUT"
+    assert result.execution.retryable is True
     assert "calendar attachment timeout secret" not in result.model_dump_json()
 
 

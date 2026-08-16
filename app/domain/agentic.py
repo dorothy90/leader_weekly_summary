@@ -332,6 +332,7 @@ class SearchResult(BaseModel):
     retrieval_mode: Literal["hybrid", "bm25", "deterministic"] = "hybrid"
     disclosures: list[BoundedModelText] = Field(default_factory=list, max_length=4)
     error_code: str | None = Field(default=None, max_length=128)
+    retryable: bool = False
 
 
 class Observation(BaseModel):

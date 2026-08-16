@@ -26,6 +26,7 @@ from app.domain.chat import (
     QualityStatus,
 )
 from app.domain.evidence import Evidence
+from app.domain.errors import AppError, ErrorCode
 from app.domain.policy import PolicyContext
 from app.llm.agentic import AgentModel, RuleBasedAgentModel
 from app.persistence.conversations import ConversationMemory
@@ -38,6 +39,12 @@ MAX_ITERATIONS = 4
 MAX_EVIDENCE = 8
 LIMIT_DISCLOSURE = "검색 한계 내에서 확인된 범위만 답변했습니다."
 SOURCE_UNAVAILABLE_DISCLOSURE = "일부 검색 소스를 사용할 수 없습니다."
+RECOVERABLE_SOURCE_ERRORS = {
+    ErrorCode.INDEX_UNAVAILABLE,
+    ErrorCode.EMBEDDING_UNAVAILABLE,
+    ErrorCode.RETRIEVAL_TIMEOUT,
+    ErrorCode.DEPENDENCY_UNAVAILABLE,
+}
 
 
 class MultiSourceState(TypedDict, total=False):
@@ -60,7 +67,8 @@ class MultiSourceState(TypedDict, total=False):
     limited_answer: bool
     memory_update: AgentMemoryUpdate
     disclosures: list[str]
-    source_errors: list[str]
+    source_error_code: str | None
+    source_error_retryable: bool
     retrieval_mode: Literal["hybrid", "bm25", "deterministic"]
     trace: AgentTrace
     execution: ExecutionMetadata
@@ -183,7 +191,9 @@ class MultiSourceAgenticWorkflow:
                 analysis,
                 request_filters=state["request"].filters,
             )
-        except Exception:
+        except AppError as error:
+            if error.code not in RECOVERABLE_SOURCE_ERRORS:
+                raise
             return SearchResult(
                 tool=action.tool,
                 query=action.query,
@@ -192,7 +202,8 @@ class MultiSourceAgenticWorkflow:
                     "deterministic",
                 ),
                 disclosures=[SOURCE_UNAVAILABLE_DISCLOSURE],
-                error_code="SOURCE_UNAVAILABLE",
+                error_code=error.code.value,
+                retryable=error.retryable,
             )
         return SearchResult.model_validate(result)
 
@@ -293,6 +304,9 @@ class MultiSourceAgenticWorkflow:
                         "error_code": (
                             result.error_code or expanded.error_code
                         ),
+                        "retryable": (
+                            result.retryable or expanded.retryable
+                        ),
                     }
                 )
 
@@ -334,18 +348,19 @@ class MultiSourceAgenticWorkflow:
                 state.get("retrieval_mode", "deterministic"),
                 result.retrieval_mode,
             ),
-            "source_errors": list(
-                dict.fromkeys(
-                    [
-                        *state.get("source_errors", []),
-                        *(
-                            [result.error_code]
-                            if result.error_code == "SOURCE_UNAVAILABLE"
-                            else []
-                        ),
-                    ]
+            "source_error_code": (
+                state.get("source_error_code")
+                or (
+                    result.error_code
+                    if result.error_code
+                    in {item.value for item in RECOVERABLE_SOURCE_ERRORS}
+                    else None
                 )
-            )[:4],
+            ),
+            "source_error_retryable": (
+                state.get("source_error_retryable", False)
+                or result.retryable
+            ),
         }
 
     async def _judge(self, state: MultiSourceState) -> dict:
@@ -447,6 +462,7 @@ class MultiSourceAgenticWorkflow:
             or not decision.sufficient
             or (state.get("force_finish") and not decision.sufficient)
             or citation_valid is False
+            or state.get("source_error_code")
         )
         disclosures = list(state.get("disclosures", []))
         if limited:
@@ -458,12 +474,13 @@ class MultiSourceAgenticWorkflow:
                 answer = f"{answer}\n\n{LIMIT_DISCLOSURE}".strip()
 
         trace = AgentTrace.model_validate(state.get("trace") or {})
-        source_errors = state.get("source_errors", [])
-        if source_errors:
+        source_error_code = state.get("source_error_code")
+        if source_error_code:
             execution = ExecutionMetadata(
                 status="limited",
                 failure_stage="retrieval",
-                error_code=source_errors[0],
+                error_code=source_error_code,
+                retryable=state.get("source_error_retryable", False),
                 search_count=len(trace.tool_calls),
                 evidence_count=len(evidence),
                 include_in_llm_history=False,
@@ -723,7 +740,8 @@ class MultiSourceAgenticWorkflow:
                 "iteration_count": 0,
                 "force_finish": False,
                 "disclosures": [],
-                "source_errors": [],
+                "source_error_code": None,
+                "source_error_retryable": False,
                 "retrieval_mode": "deterministic",
                 "trace": AgentTrace(),
             }

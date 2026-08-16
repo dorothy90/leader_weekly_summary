@@ -2,6 +2,7 @@ import asyncio
 import json
 import math
 from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import ValidationError
@@ -23,6 +24,7 @@ from app.domain.agentic import (
 )
 from app.domain.chat import BM25_FALLBACK_DISCLOSURE
 from app.domain.evidence import RetrievalFilters
+from app.domain.errors import AppError, ErrorCode
 from app.domain.policy import PolicyContext
 from app.retrieval.fusion import RankedHit, reciprocal_rank_fusion
 from app.retrieval.source_registry import SourceRegistry
@@ -52,6 +54,9 @@ SOURCE_FIELDS = [
     "source_id",
     "parent_event_id",
     "content_kind",
+    "team",
+    "week",
+    "mail_type",
     "subject",
     "title",
     "text",
@@ -66,6 +71,24 @@ class OpenSearchMultiSourceSearch:
         self.backend = backend
         self.embeddings = embeddings
         self.registry = registry
+
+    async def _backend_search(self, index, body):
+        try:
+            return await self.backend.search(index, body)
+        except AppError:
+            raise
+        except TimeoutError:
+            raise AppError(
+                ErrorCode.RETRIEVAL_TIMEOUT,
+                "검색 요청 시간이 초과되었습니다.",
+                retryable=True,
+            ) from None
+        except Exception:
+            raise AppError(
+                ErrorCode.INDEX_UNAVAILABLE,
+                "검색 인덱스를 사용할 수 없습니다.",
+                retryable=True,
+            ) from None
 
     async def execute(
         self,
@@ -94,13 +117,13 @@ class OpenSearchMultiSourceSearch:
         try:
             vector = await self.embeddings.embed(action.query)
         except Exception:
-            responses = [await self.backend.search(index, bm25)]
+            responses = [await self._backend_search(index, bm25)]
             mode = "bm25"
             disclosures = [BM25_FALLBACK_DISCLOSURE]
         else:
-            bm25_task = asyncio.create_task(self.backend.search(index, bm25))
+            bm25_task = asyncio.create_task(self._backend_search(index, bm25))
             vector_task = asyncio.create_task(
-                self.backend.search(
+                self._backend_search(
                     index,
                     self._vector_body(action, filters, vector),
                 )
@@ -109,7 +132,13 @@ class OpenSearchMultiSourceSearch:
             mode = "hybrid"
 
         hits = self._fuse(responses)
-        documents = self._normalize_hits(hits, action, policy)
+        documents = self._normalize_hits(
+            hits,
+            action,
+            policy,
+            analysis,
+            request_filters,
+        )
         if action.tool == "search_mail":
             documents = self._reconstruct_mail(documents, action.top_k)
         else:
@@ -351,6 +380,8 @@ class OpenSearchMultiSourceSearch:
         hits: Sequence[object],
         action: ToolAction,
         policy: PolicyContext,
+        analysis: QueryAnalysis | None = None,
+        request_filters: RetrievalFilters | None = None,
     ) -> list[SearchDocument]:
         source_type = self.registry.source_for(action.tool)
         documents = []
@@ -366,6 +397,14 @@ class OpenSearchMultiSourceSearch:
             if source.get("is_active") is not True:
                 continue
             if source_type == "calendar" and source.get("is_cancelled") is not False:
+                continue
+            if not self._matches_trusted_constraints(
+                source,
+                source_type,
+                action,
+                analysis,
+                request_filters,
+            ):
                 continue
             if (
                 action.content_kinds
@@ -436,6 +475,65 @@ class OpenSearchMultiSourceSearch:
         return documents
 
     @staticmethod
+    def _matches_trusted_constraints(
+        source: Mapping,
+        source_type: str,
+        action: ToolAction,
+        analysis: QueryAnalysis | None,
+        request_filters: RetrievalFilters | None,
+    ) -> bool:
+        if source_type == "mail" and request_filters is not None:
+            if (
+                request_filters.teams
+                and source.get("team") not in request_filters.teams
+            ):
+                return False
+            if (
+                request_filters.weeks
+                and source.get("week") not in request_filters.weeks
+            ):
+                return False
+            if (
+                request_filters.mail_type
+                and source.get("mail_type") != request_filters.mail_type
+            ):
+                return False
+        if action.organizer_email and (
+            source.get("organizer_email") != action.organizer_email
+        ):
+            return False
+        if action.attendee_emails:
+            attendees = source.get("attendee_emails")
+            if not isinstance(attendees, Sequence) or isinstance(
+                attendees,
+                (str, bytes),
+            ):
+                return False
+            if not any(email in attendees for email in action.attendee_emails):
+                return False
+        if (
+            source_type not in {"mail", "calendar"}
+            or analysis is None
+            or analysis.start_at_utc is None
+            or analysis.end_at_utc is None
+        ):
+            return True
+        field = "start_at_utc" if source_type == "calendar" else "received_at"
+        raw_value = source.get(field)
+        if not isinstance(raw_value, str):
+            return False
+        try:
+            occurred_at = datetime.fromisoformat(
+                raw_value.replace("Z", "+00:00")
+            )
+        except ValueError:
+            return False
+        if occurred_at.tzinfo is None or occurred_at.utcoffset() is None:
+            return False
+        occurred_at = occurred_at.astimezone(UTC)
+        return analysis.start_at_utc <= occurred_at < analysis.end_at_utc
+
+    @staticmethod
     def _chunk_index(document: SearchDocument) -> int:
         try:
             return int(document.metadata.get("chunk_index") or 0)
@@ -502,7 +600,7 @@ class OpenSearchMultiSourceSearch:
                 {"term": {"content_kind": "event"}},
             ]
         )
-        parent_response = await self.backend.search(
+        parent_response = await self._backend_search(
             index,
             {
                 "size": 1,
@@ -548,6 +646,8 @@ class OpenSearchMultiSourceSearch:
                 parent_hits,
                 parent_action,
                 policy,
+                analysis,
+                request_filters,
             )
         )
         if not authorized_parent:
@@ -581,7 +681,7 @@ class OpenSearchMultiSourceSearch:
             "_source": SOURCE_FIELDS,
             "query": {"bool": {"filter": filters}},
         }
-        response = await self.backend.search(index, body)
+        response = await self._backend_search(index, body)
         hits = []
         for raw_hit in response_hits(response):
             source = raw_hit.get("_source")
@@ -600,7 +700,13 @@ class OpenSearchMultiSourceSearch:
                 continue
             hits.append({**raw_hit, "_rrf_score": score})
         documents = self._deduplicate_documents(
-            self._normalize_hits(hits, action, policy)
+            self._normalize_hits(
+                hits,
+                action,
+                policy,
+                analysis,
+                request_filters,
+            )
         )
         documents.sort(
             key=lambda item: (

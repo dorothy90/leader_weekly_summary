@@ -184,6 +184,28 @@ def test_calendar_search_filters_cancelled_and_expands_event_bundle():
     ]
 
 
+def test_calendar_search_post_filters_organizer_and_attendees():
+    wrong_organizer = run(
+        ToolAction(
+            tool="search_calendar",
+            query="NAND Yield Review",
+            reason="organizer",
+            organizer_email="other@example.com",
+        )
+    )
+    wrong_attendee = run(
+        ToolAction(
+            tool="search_calendar",
+            query="NAND Yield Review",
+            reason="attendee",
+            attendee_emails=["other@example.com"],
+        )
+    )
+
+    assert wrong_organizer.documents == []
+    assert wrong_attendee.documents == []
+
+
 def test_event_expansion_applies_content_kind_after_parent_visibility():
     result = run(
         ToolAction(

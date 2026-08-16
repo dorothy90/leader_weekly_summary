@@ -8,6 +8,7 @@ from app.config.settings import Settings
 from app.domain.agentic import QueryAnalysis, SearchDocument, ToolAction
 from app.domain.chat import BM25_FALLBACK_DISCLOSURE, ChatRequest
 from app.domain.evidence import RetrievalFilters
+from app.domain.errors import AppError, ErrorCode
 from app.domain.policy import PolicyContext
 from app.graphs.multi_source import MultiSourceAgenticWorkflow
 from app.llm.agentic import RuleBasedAgentModel
@@ -264,6 +265,88 @@ def test_mail_facets_are_added_to_backend_built_filters():
         assert {"terms": {"team": ["YIELD팀"]}} in filters
         assert {"terms": {"week": ["2026-08"]}} in filters
         assert {"term": {"mail_type": "weekly_report"}} in filters
+
+
+def test_mail_hits_are_post_filtered_against_trusted_facets_and_date_range():
+    base = {
+        "employee_id": "kim",
+        "is_active": True,
+        "content_kind": "body",
+        "text": "NAND yield report",
+        "team": "YIELD팀",
+        "week": "2026-08",
+        "mail_type": "weekly_report",
+        "received_at": "2026-08-05T01:00:00Z",
+    }
+    response = {
+        "hits": {
+            "hits": [
+                hit("valid", **base),
+                hit("wrong-team", **{**base, "team": "OTHER"}),
+                hit("wrong-week", **{**base, "week": "2026-09"}),
+                hit("wrong-type", **{**base, "mail_type": "daily_report"}),
+                hit(
+                    "out-of-range",
+                    **{**base, "received_at": "2026-08-09T15:00:00Z"},
+                ),
+            ]
+        }
+    }
+    backend = RecordingBackend([response, response])
+
+    result = asyncio.run(
+        workflow(backend).execute(
+            ToolAction(tool="search_mail", query="NAND", reason="facets"),
+            PolicyContext.from_user_id("kim"),
+            analysis(
+                start_at_utc=datetime(2026, 8, 2, 15, tzinfo=UTC),
+                end_at_utc=datetime(2026, 8, 9, 15, tzinfo=UTC),
+            ),
+            request_filters=RetrievalFilters(
+                teams=["YIELD팀"],
+                weeks=["2026-08"],
+                mail_type="weekly_report",
+            ),
+        )
+    )
+
+    assert [item.document_id for item in result.documents] == ["valid"]
+
+
+@pytest.mark.parametrize(
+    ("backend_error", "expected_code"),
+    [
+        (TimeoutError("backend timeout secret"), ErrorCode.RETRIEVAL_TIMEOUT),
+        (RuntimeError("backend crash secret"), ErrorCode.INDEX_UNAVAILABLE),
+    ],
+)
+def test_backend_failures_are_normalized_to_safe_typed_errors(
+    backend_error,
+    expected_code,
+):
+    class FailingBackend:
+        async def search(self, index, body):
+            raise backend_error
+
+    class UnavailableEmbedding:
+        async def embed(self, text):
+            raise RuntimeError("embedding unavailable")
+
+    with pytest.raises(AppError) as failure:
+        asyncio.run(
+            workflow(
+                FailingBackend(),
+                embeddings=UnavailableEmbedding(),
+            ).execute(
+                ToolAction(tool="search_mail", query="NAND", reason="failure"),
+                PolicyContext.from_user_id("kim"),
+                analysis(),
+            )
+        )
+
+    assert failure.value.code == expected_code
+    assert failure.value.retryable is True
+    assert "secret" not in failure.value.message
 
 
 def test_model_action_cannot_override_owner_index_or_query_dsl():

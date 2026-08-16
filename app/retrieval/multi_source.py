@@ -130,6 +130,16 @@ class InMemoryMultiSourceSearch:
             actual = str(item.metadata.get("attachment_name") or "")
             if action.attachment_name.casefold() not in actual.casefold():
                 return False
+        if action.organizer_email:
+            organizer = item.metadata.get("organizer_email")
+            if organizer != action.organizer_email:
+                return False
+        if action.attendee_emails:
+            attendees = item.metadata.get("attendee_emails")
+            if not isinstance(attendees, list) or not any(
+                email in attendees for email in action.attendee_emails
+            ):
+                return False
         return True
 
     def _allowed(

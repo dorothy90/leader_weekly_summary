@@ -244,14 +244,17 @@ class RuleBasedAgentModel:
         )
         if saved_event_action is not None:
             return saved_event_action
-        used = {
+        attempted = {
             SOURCE_FOR_TOOL[item.action.tool]
             for item in observations
-            if item.result.documents
+            if item.action.tool != "expand_calendar_event"
         }
         for tool in TOOL_ORDER:
             source = SOURCE_FOR_TOOL[tool]
-            if source in self._required_sources(analysis) and source not in used:
+            if (
+                source in self._required_sources(analysis)
+                and source not in attempted
+            ):
                 return ToolAction(
                     tool=tool,
                     query=self._query(question, analysis),
