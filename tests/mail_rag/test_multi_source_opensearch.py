@@ -7,6 +7,7 @@ import pytest
 from app.config.settings import Settings
 from app.domain.agentic import QueryAnalysis, SearchDocument, ToolAction
 from app.domain.chat import BM25_FALLBACK_DISCLOSURE, ChatRequest
+from app.domain.evidence import RetrievalFilters
 from app.domain.policy import PolicyContext
 from app.graphs.multi_source import MultiSourceAgenticWorkflow
 from app.llm.agentic import RuleBasedAgentModel
@@ -195,29 +196,74 @@ def test_calendar_optional_filters_and_date_range_are_backend_built():
     } in filters
 
 
-def test_mail_and_domain_date_ranges_are_half_open_on_received_at():
+def test_mail_date_ranges_are_half_open_on_received_at():
     current = analysis(
         start_at_utc=datetime(2026, 8, 2, 15, tzinfo=UTC),
         end_at_utc=datetime(2026, 8, 9, 15, tzinfo=UTC),
     )
 
-    for tool in ("search_mail", "search_domain_knowledge"):
-        backend = RecordingBackend()
-        asyncio.run(
-            workflow(backend).execute(
-                ToolAction(tool=tool, query="NAND", reason="range"),
-                PolicyContext.from_user_id("kim"),
-                current,
-            )
+    backend = RecordingBackend()
+    asyncio.run(
+        workflow(backend).execute(
+            ToolAction(tool="search_mail", query="NAND", reason="range"),
+            PolicyContext.from_user_id("kim"),
+            current,
         )
-        assert {
-            "range": {
-                "received_at": {
-                    "gte": "2026-08-02T15:00:00+00:00",
-                    "lt": "2026-08-09T15:00:00+00:00",
-                }
+    )
+    assert {
+        "range": {
+            "received_at": {
+                "gte": "2026-08-02T15:00:00+00:00",
+                "lt": "2026-08-09T15:00:00+00:00",
             }
-        } in filters_from(backend.calls[0][1])
+        }
+    } in filters_from(backend.calls[0][1])
+
+
+def test_domain_knowledge_does_not_inherit_mail_date_filters():
+    backend = RecordingBackend()
+    current = analysis(
+        start_at_utc=datetime(2026, 8, 2, 15, tzinfo=UTC),
+        end_at_utc=datetime(2026, 8, 9, 15, tzinfo=UTC),
+    )
+
+    asyncio.run(
+        workflow(backend).execute(
+            ToolAction(
+                tool="search_domain_knowledge",
+                query="NAND",
+                reason="timeless domain corpus",
+            ),
+            PolicyContext.from_user_id("kim"),
+            current,
+        )
+    )
+
+    for _index, body in backend.calls:
+        assert filters_from(body) == [{"term": {"is_active": True}}]
+
+
+def test_mail_facets_are_added_to_backend_built_filters():
+    backend = RecordingBackend()
+
+    asyncio.run(
+        workflow(backend).execute(
+            ToolAction(tool="search_mail", query="NAND", reason="facets"),
+            PolicyContext.from_user_id("kim"),
+            analysis(),
+            request_filters=RetrievalFilters(
+                teams=["YIELD팀"],
+                weeks=["2026-08"],
+                mail_type="weekly_report",
+            ),
+        )
+    )
+
+    for _index, body in backend.calls:
+        filters = filters_from(body)
+        assert {"terms": {"team": ["YIELD팀"]}} in filters
+        assert {"terms": {"week": ["2026-08"]}} in filters
+        assert {"term": {"mail_type": "weekly_report"}} in filters
 
 
 def test_model_action_cannot_override_owner_index_or_query_dsl():

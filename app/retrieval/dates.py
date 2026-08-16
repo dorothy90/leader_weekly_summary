@@ -1,4 +1,4 @@
-from datetime import UTC, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from app.domain.agentic import ResolvedTimeRange
@@ -37,7 +37,16 @@ def resolve_time_range(
         end = first_this_month
         start = (first_this_month - timedelta(days=1)).replace(day=1)
     else:
-        return None
+        try:
+            explicit_date = date.fromisoformat(normalized)
+        except ValueError:
+            return None
+        start = datetime.combine(explicit_date, time.min, tzinfo=zone)
+        end = datetime.combine(
+            explicit_date + timedelta(days=1),
+            time.min,
+            tzinfo=zone,
+        )
     return ResolvedTimeRange(
         expression=normalized,
         start_at_utc=start.astimezone(UTC),

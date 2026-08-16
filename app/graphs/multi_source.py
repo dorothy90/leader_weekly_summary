@@ -37,6 +37,7 @@ from app.security.redaction import sanitize_text
 MAX_ITERATIONS = 4
 MAX_EVIDENCE = 8
 LIMIT_DISCLOSURE = "검색 한계 내에서 확인된 범위만 답변했습니다."
+SOURCE_UNAVAILABLE_DISCLOSURE = "일부 검색 소스를 사용할 수 없습니다."
 
 
 class MultiSourceState(TypedDict, total=False):
@@ -59,6 +60,7 @@ class MultiSourceState(TypedDict, total=False):
     limited_answer: bool
     memory_update: AgentMemoryUpdate
     disclosures: list[str]
+    source_errors: list[str]
     retrieval_mode: Literal["hybrid", "bm25", "deterministic"]
     trace: AgentTrace
     execution: ExecutionMetadata
@@ -138,17 +140,61 @@ class MultiSourceAgenticWorkflow:
         return {"candidates": candidates}
 
     async def _planner(self, state: MultiSourceState) -> dict:
-        action = await self.model.plan(
-            state["request"].message,
-            state["analysis"],
-            state.get("observations", []),
-            state["conversation"],
-        )
+        found_sources = {
+            item.source_type for item in state.get("documents", [])
+        }
+        remaining_sources = [
+            source
+            for source in state.get("candidates", [])
+            if source not in found_sources
+        ]
+        if remaining_sources:
+            action = await RuleBasedAgentModel().plan(
+                state["request"].message,
+                state["analysis"],
+                state.get("observations", []),
+                state["conversation"],
+            )
+        else:
+            action = await self.model.plan(
+                state["request"].message,
+                state["analysis"],
+                state.get("observations", []),
+                state["conversation"],
+            )
         return {
             "current_action": (
-                ToolAction.model_validate(action) if action is not None else None
+                ToolAction.model_validate(action)
+                if action is not None
+                else None
             )
         }
+
+    async def _execute_source(
+        self,
+        action: ToolAction,
+        state: MultiSourceState,
+        analysis: QueryAnalysis,
+    ) -> SearchResult:
+        try:
+            result = await self.search.execute(
+                action,
+                state["policy"],
+                analysis,
+                request_filters=state["request"].filters,
+            )
+        except Exception:
+            return SearchResult(
+                tool=action.tool,
+                query=action.query,
+                retrieval_mode=state.get(
+                    "retrieval_mode",
+                    "deterministic",
+                ),
+                disclosures=[SOURCE_UNAVAILABLE_DISCLOSURE],
+                error_code="SOURCE_UNAVAILABLE",
+            )
+        return SearchResult.model_validate(result)
 
     async def _tool_executor(self, state: MultiSourceState) -> dict:
         raw_action = state.get("current_action")
@@ -189,9 +235,7 @@ class MultiSourceAgenticWorkflow:
                 ),
             }
 
-        result = SearchResult.model_validate(
-            await self.search.execute(action, state["policy"], analysis)
-        )
+        result = await self._execute_source(action, state, analysis)
         fingerprints.add(fingerprint)
         semantic_increment = 0 if action.tool == "expand_calendar_event" else 1
         iteration_count = state.get("iteration_count", 0) + semantic_increment
@@ -224,10 +268,10 @@ class MultiSourceAgenticWorkflow:
                 expansion_fingerprint = expansion.fingerprint(analysis)
                 if expansion_fingerprint in fingerprints:
                     continue
-                expanded = SearchResult.model_validate(
-                    await self.search.execute(
-                        expansion, state["policy"], analysis
-                    )
+                expanded = await self._execute_source(
+                    expansion,
+                    state,
+                    analysis,
                 )
                 fingerprints.add(expansion_fingerprint)
                 tool_calls.append(expansion.tool)
@@ -245,6 +289,9 @@ class MultiSourceAgenticWorkflow:
                         "retrieval_mode": self._combine_retrieval_modes(
                             result.retrieval_mode,
                             expanded.retrieval_mode,
+                        ),
+                        "error_code": (
+                            result.error_code or expanded.error_code
                         ),
                     }
                 )
@@ -287,6 +334,18 @@ class MultiSourceAgenticWorkflow:
                 state.get("retrieval_mode", "deterministic"),
                 result.retrieval_mode,
             ),
+            "source_errors": list(
+                dict.fromkeys(
+                    [
+                        *state.get("source_errors", []),
+                        *(
+                            [result.error_code]
+                            if result.error_code == "SOURCE_UNAVAILABLE"
+                            else []
+                        ),
+                    ]
+                )
+            )[:4],
         }
 
     async def _judge(self, state: MultiSourceState) -> dict:
@@ -297,20 +356,13 @@ class MultiSourceAgenticWorkflow:
             await RuleBasedAgentModel().judge(state)
         )
         sufficient = model_decision.sufficient and deterministic.sufficient
-        if deterministic.sufficient:
+        if not deterministic.sufficient:
+            recommended_action = deterministic.recommended_action
+        else:
             recommended_action = (
                 None
                 if model_decision.sufficient
                 else model_decision.recommended_action
-            )
-        else:
-            recommended_action = (
-                deterministic.recommended_action
-                if model_decision.sufficient
-                else (
-                    model_decision.recommended_action
-                    or deterministic.recommended_action
-                )
             )
         decision = JudgeDecision(
             sufficient=sufficient,
@@ -406,7 +458,17 @@ class MultiSourceAgenticWorkflow:
                 answer = f"{answer}\n\n{LIMIT_DISCLOSURE}".strip()
 
         trace = AgentTrace.model_validate(state.get("trace") or {})
-        if not evidence:
+        source_errors = state.get("source_errors", [])
+        if source_errors:
+            execution = ExecutionMetadata(
+                status="limited",
+                failure_stage="retrieval",
+                error_code=source_errors[0],
+                search_count=len(trace.tool_calls),
+                evidence_count=len(evidence),
+                include_in_llm_history=False,
+            )
+        elif not evidence:
             execution = ExecutionMetadata(
                 status="limited",
                 failure_stage="retrieval",
@@ -661,6 +723,7 @@ class MultiSourceAgenticWorkflow:
                 "iteration_count": 0,
                 "force_finish": False,
                 "disclosures": [],
+                "source_errors": [],
                 "retrieval_mode": "deterministic",
                 "trace": AgentTrace(),
             }

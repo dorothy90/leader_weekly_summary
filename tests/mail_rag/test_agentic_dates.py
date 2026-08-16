@@ -1,7 +1,10 @@
+import asyncio
 from datetime import UTC, datetime
 
 import pytest
 
+from app.llm.agentic import RuleBasedAgentModel
+from app.persistence.conversations import ConversationMemory
 from app.retrieval.dates import resolve_time_range
 
 
@@ -38,3 +41,29 @@ def test_unknown_time_expression_does_not_guess():
 def test_naive_now_is_rejected_instead_of_using_host_timezone():
     with pytest.raises(ValueError, match="timezone-aware"):
         resolve_time_range("어제", now=datetime(2026, 8, 16, 12, 0))
+
+
+def test_explicit_iso_date_uses_local_day_as_half_open_utc_range():
+    resolved = resolve_time_range(
+        "2026-08-18",
+        now=NOW,
+        timezone_name="Asia/Seoul",
+    )
+
+    assert resolved.expression == "2026-08-18"
+    assert resolved.start_at_utc == datetime(2026, 8, 17, 15, tzinfo=UTC)
+    assert resolved.end_at_utc == datetime(2026, 8, 18, 15, tzinfo=UTC)
+
+
+def test_rule_based_analyzer_extracts_explicit_iso_date_from_question():
+    result = asyncio.run(
+        RuleBasedAgentModel(now=NOW).analyze(
+            "2026-08-18 NAND 메일 찾아줘",
+            ConversationMemory(),
+            "Asia/Seoul",
+        )
+    )
+
+    assert result.time_expression == "2026-08-18"
+    assert result.start_at_utc == datetime(2026, 8, 17, 15, tzinfo=UTC)
+    assert result.end_at_utc == datetime(2026, 8, 18, 15, tzinfo=UTC)

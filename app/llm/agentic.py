@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 from typing import Protocol
 
 from app.domain.agentic import (
@@ -38,6 +39,7 @@ SAME_EVENT_REFERENCES = (
     "해당 일정",
     "이 일정",
 )
+ISO_DATE = re.compile(r"(?<!\d)(\d{4}-\d{2}-\d{2})(?!\d)")
 
 
 class AgentModel(Protocol):
@@ -62,7 +64,14 @@ class AgentModel(Protocol):
 
 
 def _time_expression(question: str) -> str | None:
-    return next((item for item in TIME_EXPRESSIONS if item in question), None)
+    relative = next(
+        (item for item in TIME_EXPRESSIONS if item in question),
+        None,
+    )
+    if relative is not None:
+        return relative
+    explicit = ISO_DATE.search(question)
+    return explicit.group(1) if explicit is not None else None
 
 
 def _saved_event_action(question, analysis, observations, memory):

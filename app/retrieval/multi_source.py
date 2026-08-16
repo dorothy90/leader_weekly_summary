@@ -3,7 +3,7 @@ import re
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -16,6 +16,7 @@ from app.domain.agentic import (
     normalize_stable_event_id,
 )
 from app.domain.policy import PolicyContext
+from app.domain.evidence import RetrievalFilters
 from app.retrieval.source_registry import SourceRegistry
 
 
@@ -25,6 +26,7 @@ class MultiSourceSearch(Protocol):
         action: ToolAction,
         policy: PolicyContext,
         analysis: QueryAnalysis,
+        request_filters: RetrievalFilters | None = None,
     ) -> SearchResult:
         raise NotImplementedError
 
@@ -39,6 +41,9 @@ class StoredDocument(BaseModel):
     source_id: str | None = None
     parent_event_id: str | None = None
     employee_id: str | None = None
+    team: str | None = None
+    week: str | None = None
+    mail_type: Literal["weekly_report", "daily_report", "other"] | None = None
     is_active: bool = True
     is_cancelled: bool = False
     title: str = ""
@@ -77,6 +82,7 @@ class InMemoryMultiSourceSearch:
         action: ToolAction,
         owner: str,
         analysis: QueryAnalysis,
+        request_filters: RetrievalFilters,
     ) -> bool:
         if item.index != self.registry.index_for(action.tool):
             return False
@@ -91,6 +97,17 @@ class InMemoryMultiSourceSearch:
             return False
         if expected_source == "calendar" and item.is_cancelled:
             return False
+
+        if expected_source == "mail":
+            if request_filters.teams and item.team not in request_filters.teams:
+                return False
+            if request_filters.weeks and item.week not in request_filters.weeks:
+                return False
+            if (
+                request_filters.mail_type
+                and item.mail_type != request_filters.mail_type
+            ):
+                return False
 
         if analysis.start_at_utc and analysis.end_at_utc:
             if not item.occurred_at:
@@ -121,8 +138,15 @@ class InMemoryMultiSourceSearch:
         action: ToolAction,
         owner: str,
         analysis: QueryAnalysis,
+        request_filters: RetrievalFilters,
     ) -> bool:
-        return self._authorized(item, action, owner, analysis) and (
+        return self._authorized(
+            item,
+            action,
+            owner,
+            analysis,
+            request_filters,
+        ) and (
             self._matches_action_filters(item, action)
         )
 
@@ -196,14 +220,22 @@ class InMemoryMultiSourceSearch:
         action: ToolAction,
         policy: PolicyContext,
         analysis: QueryAnalysis,
+        request_filters: RetrievalFilters | None = None,
     ) -> SearchResult:
         self.calls.append((action, policy.user_id))
+        request_filters = request_filters or RetrievalFilters()
 
         if action.tool == "expand_calendar_event":
             authorized = [
                 item
                 for item in self.documents
-                if self._authorized(item, action, policy.user_id, analysis)
+                if self._authorized(
+                    item,
+                    action,
+                    policy.user_id,
+                    analysis,
+                    request_filters,
+                )
             ]
             visible_bundle = self._expand_event(
                 authorized, action.event_id or ""
@@ -218,7 +250,13 @@ class InMemoryMultiSourceSearch:
             allowed = [
                 item
                 for item in self.documents
-                if self._allowed(item, action, policy.user_id, analysis)
+                if self._allowed(
+                    item,
+                    action,
+                    policy.user_id,
+                    analysis,
+                    request_filters,
+                )
             ]
             query_tokens = _tokens(action.query)
             ranked = []

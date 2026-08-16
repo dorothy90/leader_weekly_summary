@@ -194,7 +194,9 @@ def test_calendar_event_without_requested_action_is_not_judged_sufficient():
         def __init__(self):
             self.calls = []
 
-        async def execute(self, action, policy, analysis):
+        async def execute(
+            self, action, policy, analysis, request_filters=None
+        ):
             self.calls.append(action)
             return SearchResult(
                 tool=action.tool,
@@ -233,7 +235,9 @@ def test_model_sufficiency_cannot_override_a_missing_required_source():
         def __init__(self):
             self.calls = []
 
-        async def execute(self, action, policy, analysis):
+        async def execute(
+            self, action, policy, analysis, request_filters=None
+        ):
             self.calls.append(action)
             return SearchResult(
                 tool=action.tool,
@@ -275,7 +279,9 @@ def test_question_type_requires_its_source_when_model_omits_information_needs():
 
 def test_model_sufficiency_cannot_override_missing_calendar_action_detail():
     class EventOnlySearch:
-        async def execute(self, action, policy, analysis):
+        async def execute(
+            self, action, policy, analysis, request_filters=None
+        ):
             return SearchResult(
                 tool=action.tool,
                 query=action.query,
@@ -347,6 +353,7 @@ def test_duplicate_search_is_blocked_without_a_duplicate_backend_call():
     assert result.agent_trace.iteration_count == 1
     assert "duplicate_search_blocked" in result.agent_trace.judge_decisions
     assert result.quality.limited_answer is True
+    assert result.execution.error_code == "INSUFFICIENT_EVIDENCE"
 
 
 def test_semantic_iteration_limit_is_exactly_four_and_disclosed():
@@ -382,7 +389,7 @@ def test_semantic_iteration_limit_is_exactly_four_and_disclosed():
     assert len(search.calls) == MAX_ITERATIONS == 4
     assert result.agent_trace.iteration_count == MAX_ITERATIONS
     assert result.quality.limited_answer is True
-    assert "확인하지 못한 항목" in result.answer
+    assert LIMIT_DISCLOSURE in result.answer
 
 
 def test_unique_event_expansions_cannot_bypass_the_total_action_bound():
@@ -417,7 +424,8 @@ def test_unique_event_expansions_cannot_bypass_the_total_action_bound():
 
     assert len(search.calls) == MAX_ITERATIONS == 4
     assert result.quality.limited_answer is True
-    assert result.agent_trace.iteration_count == 0
+    assert result.agent_trace.iteration_count == 1
+    assert "search_calendar" in result.agent_trace.tool_calls
 
 
 def test_invalid_structured_output_retries_once_then_falls_back():
@@ -800,7 +808,9 @@ def test_event_memory_can_use_stable_attachment_parent_relation():
 
 def test_agentic_result_preserves_bm25_retrieval_mode():
     class BM25Search:
-        async def execute(self, action, policy, analysis):
+        async def execute(
+            self, action, policy, analysis, request_filters=None
+        ):
             return SearchResult(
                 tool=action.tool,
                 query=action.query,
@@ -837,7 +847,9 @@ def test_agentic_result_preserves_deterministic_retrieval_mode():
 
 def test_limited_answer_reserves_a_disclosure_slot_for_the_limit_message():
     class FourDisclosureSearch:
-        async def execute(self, action, policy, analysis):
+        async def execute(
+            self, action, policy, analysis, request_filters=None
+        ):
             return SearchResult(
                 tool=action.tool,
                 query=action.query,
@@ -889,7 +901,9 @@ def test_hostile_judge_output_is_sanitized_from_answer_trace_and_memory():
 
 def test_no_evidence_cannot_persist_model_authored_memory_fields():
     class EmptySearch:
-        async def execute(self, action, policy, analysis):
+        async def execute(
+            self, action, policy, analysis, request_filters=None
+        ):
             return SearchResult(
                 tool=action.tool,
                 query=action.query,
@@ -939,6 +953,201 @@ def test_no_evidence_cannot_persist_model_authored_memory_fields():
     assert "HOSTILE_MISSING" not in result.model_dump_json()
     assert persisted.entities == {"product": "TRUSTED_NAND"}
     assert persisted.current_topic == "Trusted topic"
+
+
+def test_request_mail_facets_are_forwarded_to_source_search():
+    class FilterRecordingSearch:
+        def __init__(self):
+            self.request_filters = []
+
+        async def execute(
+            self,
+            action,
+            policy,
+            analysis,
+            request_filters=None,
+        ):
+            self.request_filters.append(request_filters)
+            return SearchResult(
+                tool=action.tool,
+                query=action.query,
+                documents=[
+                    SearchDocument(
+                        source_type="mail",
+                        document_id="mail-filtered",
+                        content_kind="body",
+                        title="NAND weekly report",
+                        text="NAND 수율 검토 메일이다.",
+                        score=1.0,
+                    )
+                ],
+                total_hits=1,
+                retrieval_mode="deterministic",
+            )
+
+    search = FilterRecordingSearch()
+    workflow = MultiSourceAgenticWorkflow(search, RuleBasedAgentModel())
+
+    result = asyncio.run(
+        workflow.invoke(
+            ChatRequest(
+                user_id="kim",
+                message="NAND 메일 찾아줘",
+                filters={
+                    "teams": ["YIELD팀"],
+                    "weeks": ["2026-08"],
+                    "mail_type": "weekly_report",
+                },
+            ),
+            PolicyContext.from_user_id("kim"),
+            ConversationMemory(),
+        )
+    )
+
+    assert result.evidence
+    assert search.request_filters == [
+        ChatRequest(
+            user_id="kim",
+            message="NAND 메일 찾아줘",
+            filters={
+                "teams": ["YIELD팀"],
+                "weeks": ["2026-08"],
+                "mail_type": "weekly_report",
+            },
+        ).filters
+    ]
+
+
+def test_source_failure_returns_partial_grounded_result_instead_of_raising():
+    class PartiallyFailingSearch:
+        def __init__(self):
+            self.calls = []
+
+        async def execute(
+            self,
+            action,
+            policy,
+            analysis,
+            request_filters=None,
+        ):
+            self.calls.append(action.tool)
+            if action.tool == "search_mail":
+                return SearchResult(
+                    tool=action.tool,
+                    query=action.query,
+                    documents=[
+                        SearchDocument(
+                            source_type="mail",
+                            document_id="mail-partial",
+                            content_kind="body",
+                            title="NAND yield mail",
+                            text="NAND 수율 이슈가 보고됐다.",
+                            score=1.0,
+                        )
+                    ],
+                    total_hits=1,
+                    retrieval_mode="hybrid",
+                )
+            raise RuntimeError("calendar backend secret failure")
+
+    search = PartiallyFailingSearch()
+    workflow = MultiSourceAgenticWorkflow(search, RuleBasedAgentModel())
+
+    result = invoke(workflow, "NAND 메일과 회의 찾아줘")
+
+    assert [item.source_type for item in result.evidence] == ["mail"]
+    assert result.quality.limited_answer is True
+    assert result.execution.status == "limited"
+    assert "calendar backend secret failure" not in result.model_dump_json()
+
+
+def test_calendar_expansion_failure_is_reported_as_typed_partial_result():
+    class ExpansionFailingSearch:
+        async def execute(
+            self,
+            action,
+            policy,
+            analysis,
+            request_filters=None,
+        ):
+            if action.tool == "expand_calendar_event":
+                raise TimeoutError("calendar attachment timeout secret")
+            return SearchResult(
+                tool=action.tool,
+                query=action.query,
+                documents=[
+                    SearchDocument(
+                        source_type="calendar",
+                        document_id="event-storage-1",
+                        source_id="event-1",
+                        parent_event_id="event-1",
+                        content_kind="event",
+                        title="NAND Yield Review",
+                        text="NAND 수율 검토 회의",
+                        score=1.0,
+                    )
+                ],
+                total_hits=1,
+                retrieval_mode="hybrid",
+            )
+
+    workflow = MultiSourceAgenticWorkflow(
+        ExpansionFailingSearch(),
+        RuleBasedAgentModel(),
+    )
+
+    result = invoke(workflow, "NAND 회의에서 Action 뭐였어?")
+
+    assert [item.source_type for item in result.evidence] == ["calendar"]
+    assert result.execution.status == "limited"
+    assert result.execution.error_code == "SOURCE_UNAVAILABLE"
+    assert "calendar attachment timeout secret" not in result.model_dump_json()
+
+
+def test_deterministic_required_source_precedes_irrelevant_model_plan():
+    class IrrelevantPlanner(RuleBasedAgentModel):
+        async def plan(self, question, analysis, observations, memory):
+            return ToolAction(
+                tool="search_domain_knowledge",
+                query="NAND",
+                reason="irrelevant model preference",
+            )
+
+    search = InMemoryMultiSourceSearch.from_path(
+        Path("fixtures/multi_source_demo/corpus.json"),
+        SourceRegistry.from_settings(Settings()),
+    )
+    workflow = MultiSourceAgenticWorkflow(search, IrrelevantPlanner(now=NOW))
+
+    result = invoke(workflow, "NAND 메일 찾아줘")
+
+    assert search.calls[0][0].tool == "search_mail"
+    assert {item.source_type for item in result.evidence} == {"mail"}
+
+
+def test_deterministic_required_source_also_controls_initial_query():
+    class EmptyMailQueryPlanner(RuleBasedAgentModel):
+        async def plan(self, question, analysis, observations, memory):
+            return ToolAction(
+                tool="search_mail",
+                query="definitely-no-such-mail-token",
+                reason="same source but unusable model query",
+            )
+
+    search = InMemoryMultiSourceSearch.from_path(
+        Path("fixtures/multi_source_demo/corpus.json"),
+        SourceRegistry.from_settings(Settings()),
+    )
+    workflow = MultiSourceAgenticWorkflow(
+        search,
+        EmptyMailQueryPlanner(now=NOW),
+    )
+
+    result = invoke(workflow, "NAND 메일 찾아줘")
+
+    assert search.calls[0][0].query == "NAND"
+    assert len(search.calls) == 1
+    assert {item.source_type for item in result.evidence} == {"mail"}
 
 
 def test_fast_rag_facade_delegates_without_entering_legacy_graph():

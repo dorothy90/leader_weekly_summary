@@ -22,6 +22,7 @@ from app.domain.agentic import (
     search_document_identity,
 )
 from app.domain.chat import BM25_FALLBACK_DISCLOSURE
+from app.domain.evidence import RetrievalFilters
 from app.domain.policy import PolicyContext
 from app.retrieval.fusion import RankedHit, reciprocal_rank_fusion
 from app.retrieval.source_registry import SourceRegistry
@@ -71,12 +72,23 @@ class OpenSearchMultiSourceSearch:
         action: ToolAction,
         policy: PolicyContext,
         analysis: QueryAnalysis,
+        request_filters: RetrievalFilters | None = None,
     ) -> SearchResult:
         if action.tool == "expand_calendar_event":
-            return await self._expand_calendar(action, policy, analysis)
+            return await self._expand_calendar(
+                action,
+                policy,
+                analysis,
+                request_filters,
+            )
 
         index = self.registry.index_for(action.tool)
-        filters = self._mandatory_filters(action, policy, analysis)
+        filters = self._mandatory_filters(
+            action,
+            policy,
+            analysis,
+            request_filters,
+        )
         bm25 = self._bm25_body(action, filters)
         disclosures = []
         try:
@@ -116,6 +128,7 @@ class OpenSearchMultiSourceSearch:
         action: ToolAction,
         policy: PolicyContext,
         analysis: QueryAnalysis,
+        request_filters: RetrievalFilters | None = None,
     ) -> list[dict[str, Any]]:
         source = self.registry.source_for(action.tool)
         filters: list[dict[str, Any]] = []
@@ -124,7 +137,20 @@ class OpenSearchMultiSourceSearch:
         filters.append({"term": {"is_active": True}})
         if source == "calendar":
             filters.append({"term": {"is_cancelled": False}})
-        if analysis.start_at_utc and analysis.end_at_utc:
+        if source == "mail" and request_filters is not None:
+            if request_filters.teams:
+                filters.append({"terms": {"team": request_filters.teams}})
+            if request_filters.weeks:
+                filters.append({"terms": {"week": request_filters.weeks}})
+            if request_filters.mail_type:
+                filters.append(
+                    {"term": {"mail_type": request_filters.mail_type}}
+                )
+        if (
+            source in {"mail", "calendar"}
+            and analysis.start_at_utc
+            and analysis.end_at_utc
+        ):
             field = "start_at_utc" if source == "calendar" else "received_at"
             filters.append(
                 {
@@ -454,6 +480,7 @@ class OpenSearchMultiSourceSearch:
         action: ToolAction,
         policy: PolicyContext,
         analysis: QueryAnalysis,
+        request_filters: RetrievalFilters | None = None,
     ) -> SearchResult:
         event_id = action.event_id or ""
         index = self.registry.index_for("expand_calendar_event")
@@ -467,6 +494,7 @@ class OpenSearchMultiSourceSearch:
             parent_action,
             policy,
             analysis,
+            request_filters,
         )
         parent_filters.extend(
             [
@@ -531,7 +559,12 @@ class OpenSearchMultiSourceSearch:
                 retrieval_mode="bm25",
             )
 
-        filters = self._mandatory_filters(action, policy, analysis)
+        filters = self._mandatory_filters(
+            action,
+            policy,
+            analysis,
+            request_filters,
+        )
         filters.append(
             {
                 "bool": {
