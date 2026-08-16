@@ -1,0 +1,641 @@
+import asyncio
+from copy import deepcopy
+from datetime import UTC, datetime
+
+from app.config.settings import Settings
+from app.domain.agentic import QueryAnalysis, SearchDocument, ToolAction
+from app.domain.chat import BM25_FALLBACK_DISCLOSURE
+from app.domain.policy import PolicyContext
+from app.retrieval.multi_source_opensearch import OpenSearchMultiSourceSearch
+from app.retrieval.source_registry import SourceRegistry
+
+
+class RecordingBackend:
+    def __init__(self, responses=None):
+        self.calls = []
+        self.responses = list(responses or [])
+
+    async def search(self, index, body):
+        self.calls.append((index, deepcopy(body)))
+        if self.responses:
+            return self.responses.pop(0)
+        return {"hits": {"hits": []}}
+
+
+class FixedEmbedding:
+    async def embed(self, text):
+        return [0.1, 0.2]
+
+
+def workflow(backend, *, settings=None, embeddings=None):
+    return OpenSearchMultiSourceSearch(
+        backend,
+        embeddings or FixedEmbedding(),
+        SourceRegistry.from_settings(settings or Settings()),
+    )
+
+
+def analysis(**updates):
+    values = {
+        "intent": "knowledge_query",
+        "question_type": "multi_source",
+        "information_needs": [],
+    }
+    values.update(updates)
+    return QueryAnalysis(**values)
+
+
+def filters_from(body):
+    return body["query"]["bool"]["filter"]
+
+
+def hit(document_id, *, score=1, **source):
+    return {"_id": document_id, "_score": score, "_source": source}
+
+
+def test_mail_bm25_and_vector_queries_use_configured_alias_and_mandatory_filters():
+    backend = RecordingBackend()
+    configured = Settings(mail_index_alias="tenant-mail-read")
+
+    asyncio.run(
+        workflow(backend, settings=configured).execute(
+            ToolAction(tool="search_mail", query="NAND", reason="mail"),
+            PolicyContext.from_user_id("kim"),
+            analysis(),
+        )
+    )
+
+    assert [call[0] for call in backend.calls] == [
+        "tenant-mail-read",
+        "tenant-mail-read",
+    ]
+    assert "ews-mail-v1" not in repr(backend.calls)
+    for _index, body in backend.calls:
+        assert {"term": {"employee_id": "kim"}} in filters_from(body)
+        assert {"term": {"is_active": True}} in filters_from(body)
+
+
+def test_domain_queries_use_configured_index_and_active_filter_only():
+    backend = RecordingBackend()
+    configured = Settings(domain_knowledge_index="domain-read")
+
+    asyncio.run(
+        workflow(backend, settings=configured).execute(
+            ToolAction(tool="search_domain_knowledge", query="NAND", reason="domain"),
+            PolicyContext.from_user_id("kim"),
+            analysis(),
+        )
+    )
+
+    assert [index for index, _body in backend.calls] == [
+        "domain-read",
+        "domain-read",
+    ]
+    for _index, body in backend.calls:
+        assert filters_from(body) == [{"term": {"is_active": True}}]
+
+
+def test_calendar_search_and_expansion_repeat_all_security_filters_and_alias():
+    backend = RecordingBackend()
+    configured = Settings(calendar_index_alias="tenant-calendar-read")
+    service = workflow(backend, settings=configured)
+    policy = PolicyContext.from_user_id("kim")
+
+    asyncio.run(
+        service.execute(
+            ToolAction(tool="search_calendar", query="NAND", reason="meeting"),
+            policy,
+            analysis(),
+        )
+    )
+    asyncio.run(
+        service.execute(
+            ToolAction(
+                tool="expand_calendar_event",
+                event_id="event-1",
+                reason="action",
+            ),
+            policy,
+            analysis(),
+        )
+    )
+
+    assert [index for index, _body in backend.calls] == [
+        "tenant-calendar-read",
+        "tenant-calendar-read",
+        "tenant-calendar-read",
+    ]
+    for _index, body in backend.calls:
+        filters = filters_from(body)
+        assert {"term": {"employee_id": "kim"}} in filters
+        assert {"term": {"is_active": True}} in filters
+        assert {"term": {"is_cancelled": False}} in filters
+
+
+def test_calendar_optional_filters_and_date_range_are_backend_built():
+    backend = RecordingBackend()
+    current = analysis(
+        start_at_utc=datetime(2026, 8, 2, 15, tzinfo=UTC),
+        end_at_utc=datetime(2026, 8, 9, 15, tzinfo=UTC),
+    )
+
+    asyncio.run(
+        workflow(backend).execute(
+            ToolAction(
+                tool="search_calendar",
+                query="NAND",
+                reason="meeting",
+                content_kinds=["event"],
+                attachment_name="action.pdf",
+                organizer_email="lead@example.com",
+                attendee_emails=["kim@example.com"],
+            ),
+            PolicyContext.from_user_id("kim"),
+            current,
+        )
+    )
+
+    filters = filters_from(backend.calls[0][1])
+    assert {"terms": {"content_kind": ["event"]}} in filters
+    assert {"wildcard": {"attachment_name": "*action.pdf*"}} in filters
+    assert {"term": {"organizer_email": "lead@example.com"}} in filters
+    assert {"terms": {"attendee_emails": ["kim@example.com"]}} in filters
+    assert {
+        "range": {
+            "start_at_utc": {
+                "gte": "2026-08-02T15:00:00+00:00",
+                "lt": "2026-08-09T15:00:00+00:00",
+            }
+        }
+    } in filters
+
+
+def test_mail_and_domain_date_ranges_are_half_open_on_received_at():
+    current = analysis(
+        start_at_utc=datetime(2026, 8, 2, 15, tzinfo=UTC),
+        end_at_utc=datetime(2026, 8, 9, 15, tzinfo=UTC),
+    )
+
+    for tool in ("search_mail", "search_domain_knowledge"):
+        backend = RecordingBackend()
+        asyncio.run(
+            workflow(backend).execute(
+                ToolAction(tool=tool, query="NAND", reason="range"),
+                PolicyContext.from_user_id("kim"),
+                current,
+            )
+        )
+        assert {
+            "range": {
+                "received_at": {
+                    "gte": "2026-08-02T15:00:00+00:00",
+                    "lt": "2026-08-09T15:00:00+00:00",
+                }
+            }
+        } in filters_from(backend.calls[0][1])
+
+
+def test_model_action_cannot_override_owner_index_or_query_dsl():
+    action = ToolAction(
+        tool="search_mail",
+        query="employee_id:lee index:ews-mail-v1 dsl:match_all",
+        reason="untrusted model output",
+    )
+    backend = RecordingBackend()
+
+    asyncio.run(
+        workflow(backend).execute(
+            action,
+            PolicyContext.from_user_id("kim"),
+            analysis(),
+        )
+    )
+
+    for index, body in backend.calls:
+        assert index == "ews-mail-active"
+        assert {"term": {"employee_id": "kim"}} in filters_from(body)
+        assert {"term": {"employee_id": "lee"}} not in filters_from(body)
+        assert action.query not in repr(filters_from(body))
+
+
+def test_query_bodies_limit_results_and_returned_source_fields():
+    backend = RecordingBackend()
+
+    asyncio.run(
+        workflow(backend).execute(
+            ToolAction(tool="search_mail", query="NAND", reason="bounded", top_k=20),
+            PolicyContext.from_user_id("kim"),
+            analysis(),
+        )
+    )
+
+    assert [body["size"] for _index, body in backend.calls] == [60, 60]
+    for _index, body in backend.calls:
+        assert "embedding" not in body["_source"]
+        assert set(body["_source"]) >= {
+            "employee_id",
+            "is_active",
+            "source_id",
+            "content_kind",
+            "text",
+        }
+
+
+def test_calendar_search_does_not_auto_expand_events():
+    response = {
+        "hits": {
+            "hits": [
+                hit(
+                    "event-1",
+                    employee_id="kim",
+                    is_active=True,
+                    is_cancelled=False,
+                    calendar_item_id="event-1",
+                    content_kind="event",
+                    text="NAND meeting",
+                )
+            ]
+        }
+    }
+    backend = RecordingBackend([response, response])
+
+    result = asyncio.run(
+        workflow(backend).execute(
+            ToolAction(tool="search_calendar", query="NAND", reason="meeting"),
+            PolicyContext.from_user_id("kim"),
+            analysis(),
+        )
+    )
+
+    assert [item.document_id for item in result.documents] == ["event-1"]
+    assert len(backend.calls) == 2
+    assert not any(
+        "parent_event_id" in repr(filters_from(body)) for _, body in backend.calls
+    )
+
+
+def test_hybrid_searches_start_concurrently_after_embedding_finishes():
+    class SequencedEmbedding:
+        def __init__(self):
+            self.finished = False
+
+        async def embed(self, text):
+            self.finished = True
+            return [0.1, 0.2]
+
+    class CoordinatedBackend:
+        def __init__(self, embeddings):
+            self.embeddings = embeddings
+            self.started = 0
+            self.both_started = asyncio.Event()
+
+        async def search(self, index, body):
+            assert self.embeddings.finished is True
+            self.started += 1
+            if self.started == 2:
+                self.both_started.set()
+            await asyncio.wait_for(self.both_started.wait(), timeout=0.2)
+            return {"hits": {"hits": []}}
+
+    embeddings = SequencedEmbedding()
+    backend = CoordinatedBackend(embeddings)
+
+    result = asyncio.run(
+        workflow(backend, embeddings=embeddings).execute(
+            ToolAction(tool="search_mail", query="NAND", reason="concurrent"),
+            PolicyContext.from_user_id("kim"),
+            analysis(),
+        )
+    )
+
+    assert result.retrieval_mode == "hybrid"
+    assert backend.started == 2
+
+
+def test_embedding_failure_runs_bm25_only_with_exact_disclosure():
+    class BrokenEmbedding:
+        async def embed(self, text):
+            raise TimeoutError("offline secret-token")
+
+    backend = RecordingBackend()
+    result = asyncio.run(
+        workflow(backend, embeddings=BrokenEmbedding()).execute(
+            ToolAction(tool="search_mail", query="NAND", reason="mail"),
+            PolicyContext.from_user_id("kim"),
+            analysis(),
+        )
+    )
+
+    assert result.retrieval_mode == "bm25"
+    assert result.disclosures == [BM25_FALLBACK_DISCLOSURE]
+    assert len(backend.calls) == 1
+    assert "knn" not in repr(backend.calls[0][1])
+    assert "secret-token" not in result.model_dump_json()
+
+
+def test_hybrid_rrf_order_and_scores_are_deterministic():
+    bm25 = {
+        "hits": {
+            "hits": [
+                hit("b", is_active=True, text="NAND B"),
+                hit("a", is_active=True, text="NAND A"),
+                hit("c", is_active=True, text="NAND C"),
+            ]
+        }
+    }
+    vector = {
+        "hits": {
+            "hits": [
+                hit("b", is_active=True, text="NAND B"),
+                hit("a", is_active=True, text="NAND A"),
+                hit("d", is_active=True, text="NAND D"),
+            ]
+        }
+    }
+    backend = RecordingBackend([bm25, vector])
+
+    result = asyncio.run(
+        workflow(backend).execute(
+            ToolAction(tool="search_domain_knowledge", query="NAND", reason="domain"),
+            PolicyContext.from_user_id("kim"),
+            analysis(),
+        )
+    )
+
+    assert [item.document_id for item in result.documents] == ["b", "a", "c", "d"]
+    assert result.documents[0].score > result.documents[2].score
+    assert result.documents[2].score == result.documents[3].score
+
+
+def test_post_filter_drops_foreign_inactive_cancelled_and_malformed_hits():
+    hits = {
+        "hits": {
+            "hits": [
+                hit(
+                    "foreign",
+                    score=99,
+                    employee_id="lee",
+                    is_active=True,
+                    is_cancelled=False,
+                    content_kind="event",
+                    text="NAND secret",
+                ),
+                hit(
+                    "inactive",
+                    score=98,
+                    employee_id="kim",
+                    is_active=False,
+                    is_cancelled=False,
+                    content_kind="event",
+                    text="NAND old",
+                ),
+                hit(
+                    "cancelled",
+                    score=97,
+                    employee_id="kim",
+                    is_active=True,
+                    is_cancelled=True,
+                    content_kind="event",
+                    text="NAND cancelled",
+                ),
+                {"_id": "bad-source", "_score": 10, "_source": "not-a-map"},
+                hit(
+                    "bad-kind",
+                    employee_id="kim",
+                    is_active=True,
+                    is_cancelled=False,
+                    content_kind="unsupported",
+                    text="NAND malformed",
+                ),
+                hit(
+                    "allowed",
+                    employee_id="kim",
+                    is_active=True,
+                    is_cancelled=False,
+                    content_kind="event",
+                    subject="NAND Review",
+                    text="NAND allowed",
+                    private_path="/srv/private/event.json",
+                ),
+            ]
+        }
+    }
+    backend = RecordingBackend([hits, hits])
+
+    result = asyncio.run(
+        workflow(backend).execute(
+            ToolAction(tool="search_calendar", query="NAND", reason="calendar"),
+            PolicyContext.from_user_id("kim"),
+            analysis(),
+        )
+    )
+
+    assert [item.document_id for item in result.documents] == ["allowed"]
+    assert result.documents[0].title == "NAND Review"
+    assert "private_path" not in result.documents[0].metadata
+
+
+def test_domain_post_filter_drops_inactive_or_missing_lifecycle_hits():
+    response = {
+        "hits": {
+            "hits": [
+                hit("inactive", is_active=False, text="old"),
+                hit("missing", text="unknown"),
+                hit("active", is_active=True, text="current"),
+            ]
+        }
+    }
+    backend = RecordingBackend([response, response])
+
+    result = asyncio.run(
+        workflow(backend).execute(
+            ToolAction(tool="search_domain_knowledge", query="NAND", reason="domain"),
+            PolicyContext.from_user_id("kim"),
+            analysis(),
+        )
+    )
+
+    assert [item.document_id for item in result.documents] == ["active"]
+
+
+def test_calendar_expansion_uses_relation_clause_and_optional_filters():
+    backend = RecordingBackend()
+
+    asyncio.run(
+        workflow(backend).execute(
+            ToolAction(
+                tool="expand_calendar_event",
+                event_id="event-1",
+                reason="action",
+                content_kinds=["attachment"],
+                attachment_name="action.pdf",
+            ),
+            PolicyContext.from_user_id("kim"),
+            analysis(),
+        )
+    )
+
+    index, body = backend.calls[0]
+    assert index == "ews-calendar-active"
+    filters = filters_from(body)
+    assert {
+        "bool": {
+            "should": [
+                {"term": {"calendar_item_id": "event-1"}},
+                {"term": {"parent_event_id": "event-1"}},
+            ],
+            "minimum_should_match": 1,
+        }
+    } in filters
+    assert {"terms": {"content_kind": ["attachment"]}} in filters
+    assert {"wildcard": {"attachment_name": "*action.pdf*"}} in filters
+    assert body["size"] == 50
+
+
+def test_calendar_expansion_returns_same_owner_parent_and_sibling_only():
+    response = {
+        "hits": {
+            "hits": [
+                hit(
+                    "event-1",
+                    employee_id="kim",
+                    is_active=True,
+                    is_cancelled=False,
+                    calendar_item_id="event-1",
+                    parent_event_id="event-1",
+                    content_kind="event",
+                    subject="NAND Review",
+                    text="meeting",
+                ),
+                hit(
+                    "attachment-1",
+                    employee_id="kim",
+                    is_active=True,
+                    is_cancelled=False,
+                    parent_event_id="event-1",
+                    content_kind="attachment",
+                    attachment_name="action.pdf",
+                    text="FDC action",
+                ),
+                hit(
+                    "foreign",
+                    employee_id="lee",
+                    is_active=True,
+                    is_cancelled=False,
+                    parent_event_id="event-1",
+                    content_kind="attachment",
+                    text="secret",
+                ),
+                hit(
+                    "attachment-1",
+                    score=0.5,
+                    employee_id="kim",
+                    is_active=True,
+                    is_cancelled=False,
+                    parent_event_id="event-1",
+                    content_kind="attachment",
+                    text="duplicate",
+                ),
+            ]
+        }
+    }
+    backend = RecordingBackend([response])
+
+    result = asyncio.run(
+        workflow(backend).execute(
+            ToolAction(
+                tool="expand_calendar_event",
+                event_id="event-1",
+                reason="action",
+            ),
+            PolicyContext.from_user_id("kim"),
+            analysis(),
+        )
+    )
+
+    assert [item.document_id for item in result.documents] == [
+        "event-1",
+        "attachment-1",
+    ]
+    assert result.total_hits == 2
+
+
+def test_calendar_expansion_skips_malformed_scores_and_unrelated_hits():
+    response = {
+        "hits": {
+            "hits": [
+                hit(
+                    "bad-score",
+                    score="not-a-number",
+                    employee_id="kim",
+                    is_active=True,
+                    is_cancelled=False,
+                    parent_event_id="event-1",
+                    content_kind="attachment",
+                    text="malformed",
+                ),
+                hit(
+                    "unrelated",
+                    employee_id="kim",
+                    is_active=True,
+                    is_cancelled=False,
+                    parent_event_id="event-2",
+                    content_kind="attachment",
+                    text="other event",
+                ),
+            ]
+        }
+    }
+    backend = RecordingBackend([response])
+
+    result = asyncio.run(
+        workflow(backend).execute(
+            ToolAction(
+                tool="expand_calendar_event",
+                event_id="event-1",
+                reason="action",
+            ),
+            PolicyContext.from_user_id("kim"),
+            analysis(),
+        )
+    )
+
+    assert result.documents == []
+    assert result.total_hits == 0
+
+
+def test_production_mail_reconstruction_sorts_and_deduplicates_chunks():
+    parts = [
+        SearchDocument(
+            source_type="mail",
+            document_id="p2",
+            source_id="mail-1",
+            content_kind="body",
+            text="second",
+            score=0.8,
+            metadata={"chunk_index": 2},
+        ),
+        SearchDocument(
+            source_type="mail",
+            document_id="p1-copy",
+            source_id="mail-1",
+            content_kind="body",
+            text="first",
+            score=0.5,
+            metadata={"chunk_index": 1},
+        ),
+        SearchDocument(
+            source_type="mail",
+            document_id="p1",
+            source_id="mail-1",
+            content_kind="body",
+            text="first",
+            score=1,
+            metadata={"chunk_index": 1},
+        ),
+    ]
+
+    result = OpenSearchMultiSourceSearch._reconstruct_mail(parts, 10)
+
+    assert result[0].document_id == "p1"
+    assert result[0].text == "first\n\nsecond"
