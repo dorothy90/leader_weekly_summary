@@ -148,6 +148,26 @@ def test_structured_analyzer_failure_is_unavailable_without_keyword_fallback(
     assert analysis.source_requests == []
 
 
+def test_structured_analyzer_one_attempt_calls_failing_gateway_once():
+    llm = RaisingIntentLLM(ValueError("bad json"))
+    model = StructuredAgentModel(
+        llm,
+        timeout_seconds=0.01,
+        attempts=1,
+    )
+
+    analysis = asyncio.run(
+        model.analyze(
+            "이번주 일정알려줘",
+            ConversationMemory(),
+            "Asia/Seoul",
+        )
+    )
+
+    assert llm.calls == 1
+    assert analysis == QueryAnalysis.unavailable()
+
+
 def test_structured_analyzer_serializes_only_bounded_safe_memory():
     llm = FixedIntentLLM(IntentDecision(intent="general"))
     model = StructuredAgentModel(llm)

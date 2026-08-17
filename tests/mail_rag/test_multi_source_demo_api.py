@@ -372,6 +372,7 @@ assert isinstance(main.app.state.container.conversations, InMemoryConversationSt
     environment = {
         **os.environ,
         "MULTI_SOURCE_DEMO": "true",
+        "MANUS_API_KEY": "",
         "OPENROUTER_API_KEY": "",
         "MONGO_URI": "mongodb://127.0.0.1:1",
     }
@@ -401,7 +402,7 @@ def test_demo_cli_runs_canonical_scenario_without_external_services():
     result = subprocess.run(
         [sys.executable, "scripts/run_multi_source_demo.py"],
         cwd=ROOT,
-        env={**os.environ, "OPENROUTER_API_KEY": ""},
+        env={**os.environ, "MANUS_API_KEY": "", "OPENROUTER_API_KEY": ""},
         capture_output=True,
         text=True,
         check=False,
@@ -426,7 +427,7 @@ def test_demo_cli_weekly_calendar_offline_scenario_is_calendar_only():
             "weekly-calendar",
         ],
         cwd=ROOT,
-        env={**os.environ, "OPENROUTER_API_KEY": ""},
+        env={**os.environ, "MANUS_API_KEY": "", "OPENROUTER_API_KEY": ""},
         capture_output=True,
         text=True,
         check=False,
@@ -441,14 +442,14 @@ def test_free_form_demo_without_llm_key_fails_safely():
     result = subprocess.run(
         [sys.executable, "scripts/run_multi_source_demo.py", "이번주 일정 뭐야?"],
         cwd=ROOT,
-        env={**os.environ, "OPENROUTER_API_KEY": ""},
+        env={**os.environ, "MANUS_API_KEY": "", "OPENROUTER_API_KEY": ""},
         capture_output=True,
         text=True,
         check=False,
     )
 
     assert result.returncode == 2
-    assert "OPENROUTER_API_KEY" in result.stderr
+    assert "MANUS_API_KEY" in result.stderr
     assert "Traceback" not in result.stdout + result.stderr
 
 
@@ -463,7 +464,7 @@ def test_offline_demo_reports_invalid_request_without_traceback():
             "",
         ],
         cwd=ROOT,
-        env={**os.environ, "OPENROUTER_API_KEY": ""},
+        env={**os.environ, "MANUS_API_KEY": "", "OPENROUTER_API_KEY": ""},
         capture_output=True,
         text=True,
         check=False,

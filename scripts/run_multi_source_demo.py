@@ -42,9 +42,6 @@ CANONICAL_TOOLS = [
     "search_domain_knowledge",
 ]
 _SAFE_ERROR = "요청을 처리할 수 없습니다."
-_MISSING_LLM_KEY = (
-    "자유 형식 데모 질문에는 OPENROUTER_API_KEY 설정이 필요합니다."
-)
 _SCENARIO_NOW: dict[ScenarioName, datetime] = {
     "canonical": datetime(2026, 8, 16, 12, tzinfo=UTC),
     "weekly-calendar": datetime(2026, 8, 17, 0, tzinfo=UTC),
@@ -81,6 +78,16 @@ def _complete(body) -> bool:
         and not quality.get("limited_answer")
         and execution.get("status") == "succeeded"
     )
+
+
+def _missing_llm_key_message(settings: Settings) -> str:
+    endpoint = settings.resolve_llm_endpoint()
+    required = (
+        "MANUS_API_KEY"
+        if endpoint.provider == "manus"
+        else "OPENAI_COMPATIBLE_LLM_API_KEY"
+    )
+    return f"자유 형식 데모 질문에는 {required} 설정이 필요합니다."
 
 
 async def run(
@@ -180,8 +187,8 @@ def main() -> int:
         question = DEFAULT_QUESTION
     elif offline_scenario is not None:
         question = SCENARIO_QUESTIONS[offline_scenario][0]
-    elif not settings.openrouter_api_key.get_secret_value().strip():
-        print(_MISSING_LLM_KEY, file=sys.stderr)
+    elif not settings.resolve_llm_endpoint().api_key.get_secret_value().strip():
+        print(_missing_llm_key_message(settings), file=sys.stderr)
         return 2
 
     try:

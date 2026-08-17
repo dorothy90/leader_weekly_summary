@@ -17,6 +17,7 @@ from app.config.settings import Settings
 from pydantic import SecretStr
 container = build_container(Settings(
     mongo_uri='mongodb://127.0.0.1:1',
+    manus_api_key=SecretStr('test-manus-key'),
     openrouter_api_key=SecretStr('test-openrouter-key'),
 ))
 assert container.agentic is not None and container.jobs is not None

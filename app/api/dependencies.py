@@ -79,28 +79,68 @@ def build_opensearch_client(settings=None):
     )
 
 
-def build_ai_gateways(settings):
+def build_llm_gateway(settings):
+    import httpx
     from openai import AsyncOpenAI
 
     from app.llm.gateway import OpenAILLMGateway
+    from app.llm.manus import ManusLLMGateway
+
+    endpoint = settings.resolve_llm_endpoint()
+    api_key = endpoint.api_key.get_secret_value().strip()
+    if not api_key:
+        required = (
+            "MANUS_API_KEY"
+            if endpoint.provider == "manus"
+            else "OPENAI_COMPATIBLE_LLM_API_KEY"
+        )
+        raise RuntimeError(f"{required} is required")
+    if endpoint.provider == "manus":
+        client = httpx.AsyncClient(
+            base_url=endpoint.base_url.rstrip("/"),
+            headers={"x-manus-api-key": api_key},
+            timeout=endpoint.request_timeout_seconds,
+        )
+        return ManusLLMGateway(
+            client,
+            profile=endpoint.model,
+            poll_interval_seconds=endpoint.poll_interval_seconds,
+            task_timeout_seconds=endpoint.completion_timeout_seconds,
+        )
+    if not endpoint.base_url.strip() or not endpoint.model.strip():
+        raise RuntimeError("OpenAI-compatible LLM endpoint is incomplete")
+    return OpenAILLMGateway(
+        AsyncOpenAI(
+            api_key=api_key,
+            base_url=endpoint.base_url,
+            timeout=endpoint.request_timeout_seconds,
+        ),
+        endpoint.model,
+    )
+
+
+def build_embedding_gateway(settings):
+    from openai import AsyncOpenAI
+
     from app.retrieval.embedding import OpenAIEmbeddingGateway
 
-    llm_endpoint = settings.resolve_llm_endpoint()
-    embedding_endpoint = settings.resolve_embedding_endpoint()
-    llm_client = AsyncOpenAI(
-        api_key=llm_endpoint.api_key.get_secret_value(),
-        base_url=llm_endpoint.base_url,
-        timeout=llm_endpoint.timeout_seconds,
-    )
+    endpoint = settings.resolve_embedding_endpoint()
+    api_key = endpoint.api_key.get_secret_value().strip()
+    if not api_key:
+        raise RuntimeError("OPENROUTER_API_KEY is required")
     embedding_client = AsyncOpenAI(
-        api_key=embedding_endpoint.api_key.get_secret_value(),
-        base_url=embedding_endpoint.base_url,
-        timeout=embedding_endpoint.timeout_seconds,
+        api_key=api_key,
+        base_url=endpoint.base_url,
+        timeout=endpoint.timeout_seconds,
     )
-    return (
-        OpenAILLMGateway(llm_client, llm_endpoint.model),
-        OpenAIEmbeddingGateway(embedding_client, embedding_endpoint.model),
+    return OpenAIEmbeddingGateway(
+        embedding_client,
+        endpoint.model,
     )
+
+
+def build_ai_gateways(settings):
+    return build_llm_gateway(settings), build_embedding_gateway(settings)
 
 
 def build_container(settings=None, trace_sink=None) -> ServiceContainer:
@@ -121,6 +161,7 @@ def build_container(settings=None, trace_sink=None) -> ServiceContainer:
     current = settings or get_settings()
     traces = trace_sink if trace_sink is not None else NoOpTraceSink()
     llm, embeddings = build_ai_gateways(current)
+    llm_endpoint = current.resolve_llm_endpoint()
     opensearch_client = build_opensearch_client(current)
     search = AsyncOpenSearchGateway(opensearch_client)
     registry = SourceRegistry.from_settings(current)
@@ -128,7 +169,8 @@ def build_container(settings=None, trace_sink=None) -> ServiceContainer:
         OpenSearchMultiSourceSearch(search, embeddings, registry),
         StructuredAgentModel(
             llm,
-            timeout_seconds=current.openrouter_request_timeout_seconds,
+            timeout_seconds=llm_endpoint.completion_timeout_seconds,
+            attempts=1 if llm_endpoint.provider == "manus" else 2,
         ),
         timezone_name=current.default_user_timezone,
     )
@@ -161,13 +203,10 @@ def build_demo_container(
     from datetime import UTC, datetime
     from pathlib import Path
 
-    from openai import AsyncOpenAI
-
     from app.config.settings import get_settings
     from app.graphs.multi_source import MultiSourceAgenticWorkflow
     from app.llm.agentic import StructuredAgentModel
     from app.llm.demo_scenarios import UnavailableAnalyzer
-    from app.llm.gateway import OpenAILLMGateway
     from app.persistence.conversations import InMemoryConversationStore
     from app.persistence.research_jobs import InMemoryResearchJobStore
     from app.retrieval.multi_source import InMemoryMultiSourceSearch
@@ -186,17 +225,11 @@ def build_demo_container(
         endpoint = current.resolve_llm_endpoint()
         api_key = endpoint.api_key.get_secret_value().strip()
         if api_key:
-            llm = OpenAILLMGateway(
-                AsyncOpenAI(
-                    api_key=api_key,
-                    base_url=endpoint.base_url,
-                    timeout=endpoint.timeout_seconds,
-                ),
-                endpoint.model,
-            )
+            llm = build_llm_gateway(current)
             model = StructuredAgentModel(
                 llm,
-                timeout_seconds=current.openrouter_request_timeout_seconds,
+                timeout_seconds=endpoint.completion_timeout_seconds,
+                attempts=1 if endpoint.provider == "manus" else 2,
                 now=datetime(2026, 8, 17, 0, tzinfo=UTC),
             )
         else:

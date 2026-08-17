@@ -9,10 +9,57 @@ from app.domain.agentic import IntentDecision, QueryAnalysis, SourceRequest
 from app.llm.agentic import StructuredAgentModel
 from app.llm.demo_scenarios import StaticIntentAnalyzer, UnavailableAnalyzer
 from app.llm.gateway import OpenAILLMGateway
+from app.llm.manus import ManusLLMGateway
 from app.persistence.conversations import ConversationMemory
+from app.retrieval.embedding import OpenAIEmbeddingGateway
 
 
-def test_ai_gateways_use_separate_openrouter_clients_with_150_second_timeout(
+def test_ai_gateways_use_manus_for_llm_and_openrouter_for_embeddings(
+    monkeypatch,
+):
+    manus_clients = []
+    openai_clients = []
+
+    class FakeAsyncHTTPClient:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            manus_clients.append(self)
+
+    class FakeAsyncOpenAI:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            openai_clients.append(self)
+
+    monkeypatch.setattr("httpx.AsyncClient", FakeAsyncHTTPClient)
+    monkeypatch.setattr("openai.AsyncOpenAI", FakeAsyncOpenAI)
+    settings = Settings(
+        manus_api_key=SecretStr("manus-secret"),
+        openrouter_api_key=SecretStr("openrouter-secret"),
+    )
+
+    llm, embeddings = build_ai_gateways(settings)
+
+    assert isinstance(llm, ManusLLMGateway)
+    assert llm.client is manus_clients[0]
+    assert llm.profile == "manus-1.6-lite"
+    assert manus_clients[0].kwargs == {
+        "base_url": "https://api.manus.ai",
+        "headers": {"x-manus-api-key": "manus-secret"},
+        "timeout": 30.0,
+    }
+    assert isinstance(embeddings, OpenAIEmbeddingGateway)
+    assert [client.kwargs for client in openai_clients] == [
+        {
+            "api_key": "openrouter-secret",
+            "base_url": "https://openrouter.ai/api/v1",
+            "timeout": 150.0,
+        },
+    ]
+    assert embeddings.client is openai_clients[0]
+    assert embeddings.model == "qwen/qwen3-embedding-8b"
+
+
+def test_openai_compatible_selection_builds_existing_llm_gateway(
     monkeypatch,
 ):
     clients = []
@@ -24,58 +71,56 @@ def test_ai_gateways_use_separate_openrouter_clients_with_150_second_timeout(
 
     monkeypatch.setattr("openai.AsyncOpenAI", FakeAsyncOpenAI)
     settings = Settings(
-        openrouter_api_key=SecretStr("openrouter-secret"),
+        llm_provider="openai_compatible",
+        openai_compatible_llm_api_key=SecretStr("llm-secret"),
+        openai_compatible_llm_base_url="https://llm.example/v1",
+        openai_compatible_llm_model="future-model",
+        openrouter_api_key=SecretStr("embedding-secret"),
     )
 
     llm, embeddings = build_ai_gateways(settings)
 
-    assert [client.kwargs for client in clients] == [
-        {
-            "api_key": "openrouter-secret",
-            "base_url": "https://openrouter.ai/api/v1",
-            "timeout": 150.0,
-        },
-        {
-            "api_key": "openrouter-secret",
-            "base_url": "https://openrouter.ai/api/v1",
-            "timeout": 150.0,
-        },
-    ]
+    assert isinstance(llm, OpenAILLMGateway)
+    assert llm.model == "future-model"
     assert llm.client is clients[0]
-    assert embeddings.client is clients[1]
-    assert llm.client is not embeddings.client
-    assert llm.model == "google/gemma-4-26b-a4b-it:free"
+    assert clients[0].kwargs == {
+        "api_key": "llm-secret",
+        "base_url": "https://llm.example/v1",
+        "timeout": 150.0,
+    }
     assert embeddings.model == "qwen/qwen3-embedding-8b"
+    assert embeddings.client is clients[1]
 
 
-def test_demo_container_builds_structured_analyzer_for_configured_llm_key(
+def test_demo_container_builds_manus_analyzer_for_configured_llm_key(
     monkeypatch,
 ):
     clients = []
 
-    class FakeAsyncOpenAI:
+    class FakeAsyncHTTPClient:
         def __init__(self, **kwargs):
             self.kwargs = kwargs
             clients.append(self)
 
-    monkeypatch.setattr("openai.AsyncOpenAI", FakeAsyncOpenAI)
-    settings = Settings(openrouter_api_key=SecretStr("configured-key"))
+    monkeypatch.setattr("httpx.AsyncClient", FakeAsyncHTTPClient)
+    settings = Settings(manus_api_key=SecretStr("configured-key"))
 
     container = build_demo_container(settings)
 
     analyzer = container.agentic.analyzer
     assert isinstance(analyzer, StructuredAgentModel)
-    assert isinstance(analyzer.llm, OpenAILLMGateway)
+    assert isinstance(analyzer.llm, ManusLLMGateway)
     assert analyzer.llm.client is clients[0]
     assert clients[0].kwargs == {
-        "api_key": "configured-key",
-        "base_url": "https://openrouter.ai/api/v1",
-        "timeout": 150.0,
+        "base_url": "https://api.manus.ai",
+        "headers": {"x-manus-api-key": "configured-key"},
+        "timeout": 30.0,
     }
+    assert analyzer.attempts == 1
 
 
 def test_demo_container_without_llm_key_reports_unavailable_analyzer():
-    container = build_demo_container(Settings(openrouter_api_key=""))
+    container = build_demo_container(Settings(manus_api_key=""))
 
     assert isinstance(container.agentic.analyzer, UnavailableAnalyzer)
     status = asyncio.run(container.readiness.check())

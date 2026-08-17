@@ -34,9 +34,17 @@ class AgentAnalyzer(Protocol):
 
 
 class StructuredAgentModel:
-    def __init__(self, llm, *, timeout_seconds=150, now=None):
+    def __init__(
+        self,
+        llm,
+        *,
+        timeout_seconds=150,
+        attempts=2,
+        now=None,
+    ):
         self.llm = llm
         self.timeout_seconds = max(0.001, float(timeout_seconds))
+        self.attempts = max(1, int(attempts))
         self.now = now
 
     async def analyze(self, question, memory, timezone_name):
@@ -50,7 +58,7 @@ class StructuredAgentModel:
             {"question": question, "memory": safe_memory},
             ensure_ascii=False,
         )
-        for _attempt in range(2):
+        for _attempt in range(self.attempts):
             try:
                 decision = await asyncio.wait_for(
                     self.llm.complete_model(
