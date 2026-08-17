@@ -110,6 +110,48 @@ def test_intent_decision_forbids_tool_and_owner_fields_at_every_level():
         )
 
 
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"intent": "hostile"},
+        {"question_type": "mail_search"},
+        {"entities": {"product": "NAND"}},
+        {"source_requests": [{"source": "mail", "query": "NAND"}]},
+        {"time_scope": "current_week"},
+        {"exact_date": date(2026, 8, 17)},
+        {"event_reference": "previous_event"},
+        {"calendar_detail_required": True},
+        {
+            "start_at_utc": datetime(2026, 8, 16, 15, tzinfo=UTC),
+            "end_at_utc": datetime(2026, 8, 23, 15, tzinfo=UTC),
+        },
+        {"information_needs": ["mail evidence"]},
+    ],
+    ids=[
+        "intent",
+        "question-type",
+        "entities",
+        "source-requests",
+        "time-scope",
+        "exact-date",
+        "event-reference",
+        "calendar-detail",
+        "utc-range",
+        "information-needs",
+    ],
+)
+def test_unavailable_query_analysis_rejects_noncanonical_state(overrides):
+    payload = {
+        "analysis_status": "unavailable",
+        "intent": "analysis_unavailable",
+        "question_type": "general_chat",
+        **overrides,
+    }
+
+    with pytest.raises(ValidationError):
+        QueryAnalysis.model_validate(payload)
+
+
 def test_source_registry_uses_configured_aliases_and_no_physical_names():
     settings = Settings()
     registry = SourceRegistry.from_settings(settings)

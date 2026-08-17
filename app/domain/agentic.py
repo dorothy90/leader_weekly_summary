@@ -385,12 +385,16 @@ class QueryAnalysis(BaseModel):
         if self.start_at_utc and self.start_at_utc >= self.end_at_utc:
             raise ValueError("invalid UTC range")
         if self.analysis_status == "unavailable" and (
-            self.source_requests
+            self.intent != "analysis_unavailable"
+            or self.question_type != "general_chat"
+            or self.entities
+            or self.source_requests
             or self.time_scope != "none"
             or self.exact_date is not None
             or self.event_reference != "none"
             or self.calendar_detail_required
             or self.start_at_utc is not None
+            or self.information_needs
         ):
             raise ValueError("unavailable analysis cannot carry semantic decisions")
         return self
