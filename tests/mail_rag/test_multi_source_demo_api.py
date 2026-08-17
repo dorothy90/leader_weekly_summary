@@ -315,7 +315,7 @@ def test_demo_cli_custom_calendar_question_succeeds_without_canonical_tool_path(
         [
             sys.executable,
             "scripts/run_multi_source_demo.py",
-            "지난주 NAND 회의에서 Action 뭐였어?",
+            "2026-08-07 NAND Yield Review 회의에서 Action 뭐였어?",
         ],
         cwd=ROOT,
         env={**os.environ, "OPENROUTER_API_KEY": ""},
