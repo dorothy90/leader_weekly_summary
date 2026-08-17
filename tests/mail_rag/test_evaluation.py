@@ -488,18 +488,11 @@ def test_documentation_covers_security_architecture_budgets_and_runbooks():
         assert phrase in api
 
     for phrase in (
-        "Fast RAG and Deep Research are separate systems",
-        "six searches",
-        "two rewrites",
-        "one answer revision",
+        "`POST /v1/chat` has one execution path",
+        "`MultiSourceAgenticWorkflow`",
+        "typed agent policy",
+        "four agent iterations",
         "eight evidence objects",
-        "16,000 context tokens",
-        "eight initial sub-questions",
-        "four follow-up questions",
-        "12 searches",
-        "two rounds",
-        "four concurrent searches",
-        "32 evidence objects",
         "150-second",
         "backfill_user_id.py",
         "--apply",

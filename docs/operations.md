@@ -2,9 +2,12 @@
 
 ## Architecture and hard limits
 
-Fast RAG and Deep Research are separate systems and workflows that share owner-filtered retrieval and citation validation. Both execute synchronously through `POST /v1/chat`; a separate research worker is not required for chat requests. Fast RAG is bounded to six searches, two rewrites, one answer revision, eight evidence objects, and a configured 16,000 context tokens budget that is enforced conservatively as 16,000 UTF-8 bytes.
-
-Deep Research is bounded to eight initial sub-questions, four follow-up questions, 12 searches, two rounds, four concurrent searches, 32 evidence objects, 32,000 model-input bytes, one report revision, and an 8,000-byte report. Fast and Deep have no workflow-wide deadline; each OpenRouter request has a 150-second default safety limit. The optional compatibility worker retains its 180-second lease. These limits are safety ceilings, not production latency guarantees.
+`POST /v1/chat` has one execution path: `MultiSourceAgenticWorkflow`. The
+typed agent policy chooses among allowlisted Mail, Calendar, Wiki, statistics, and
+domain-knowledge tools; clients cannot choose a route or index. Execution is
+bounded to four agent iterations and eight evidence objects. Each OpenRouter
+request has a 150-second default safety limit. These limits are safety ceilings,
+not production latency guarantees.
 
 Every OpenSearch query and MongoDB lookup is scoped by exact request-body `user_id`. `team` is only a facet. Missing owners remain invisible; never infer an owner from team, index, mail text, or path.
 
@@ -95,40 +98,24 @@ MULTI_SOURCE_DEMO=true uvicorn app.api.main:app --host 127.0.0.1 --port 8000
 The CLI and alternate-question commands are documented in
 [`multi_source_demo.md`](multi_source_demo.md).
 
-The worker below is optional compatibility support for previously queued research
-jobs. Normal `POST /v1/chat` Deep requests do not enqueue jobs and do not require
-this process:
+`POST /v1/chat` never enqueues a research job and does not require a research
+worker. The `/v1/research/*` endpoints remain available for independently
+created legacy jobs; operating a legacy worker requires separate, explicit
+workflow wiring and is outside the direct chat service container.
 
-```bash
-python - <<'PY'
-import asyncio
-from app.api.dependencies import build_container
-from app.graphs.deep_research import DeepResearchWorkflow
-from app.workers.research import ResearchWorker
-
-async def main():
-    services = build_container()
-    workflow = DeepResearchWorkflow(
-        services.fast.retrieval,
-        services.fast.llm,
-        trace_sink=services.traces,
-    )
-    worker = ResearchWorker(services.jobs, workflow, trace_sink=services.traces)
-    while True:
-        if not await worker.run_once():
-            await asyncio.sleep(1)
-
-asyncio.run(main())
-PY
-```
-
-Terminate both processes gracefully during deployment. Running jobs are recovered after their lease expires; a stale worker cannot complete a job claimed under a newer lease token.
-
-Set `OPENROUTER_REQUEST_TIMEOUT_SECONDS` to the per-request LLM and embedding safety limit. Fast and Deep workflows do not impose an additional end-to-end deadline.
+Terminate API processes gracefully during deployment. Set
+`OPENROUTER_REQUEST_TIMEOUT_SECONDS` to the per-request LLM and embedding
+safety limit.
 
 ## RAG verification console
 
-The existing React/Vite frontend includes a development verification console at `/rag`. It calls the real FastAPI service and displays safe request/response JSON, HTTP status, latency, trace/conversation/job identifiers, citation status, references, disclosures, and Deep job events. It never authenticates callers and is not an authorization boundary; the upstream gateway must still bind the verified principal to request-body `user_id`.
+The existing React/Vite frontend includes a development verification console at
+`/rag`. It calls the real FastAPI service and displays safe request/response
+JSON, HTTP status, latency, trace/conversation identifiers, agent tool calls and
+judge decisions, citation status, references, disclosures, and execution node
+events. It never authenticates callers and is not an authorization boundary;
+the upstream gateway must still bind the verified principal to request-body
+`user_id`.
 
 Start the API as shown above, then start the frontend in another terminal:
 
@@ -145,11 +132,22 @@ cd frontend
 RAG_API_TARGET=http://127.0.0.1:8010 npm run dev:rag
 ```
 
-The console exposes Auto plus explicit Fast and Deep choices. Auto selects one executor; it never merges Fast and Deep. The inspector shows server-provided execution status, stage, safe error code, retryability, actual search/evidence counts, duration, retrieval mode, nullable citation state, references, disclosures, and an ordered Nodes timeline. Node diagnostics contain only timing, counts, fallback state, and exception class. Requests, responses, `user_id`, and event payloads remain in React memory only and are not written to browser storage.
+The console has no route or execution-mode selector. Every request uses the
+multi-source agent. The inspector shows server-provided execution status,
+stage, safe error code, retryability, actual search/evidence counts, duration,
+tool calls, judge decisions, retrieval mode, nullable citation state,
+references, disclosures, and an ordered Nodes timeline. Node diagnostics
+contain only timing, counts, fallback state, and exception class. Requests,
+responses, `user_id`, and event payloads remain in React memory only and are
+not written to browser storage.
 
-Mongo conversation records are dual-read compatible. Existing `messages` remain readable; new writes also include bounded `turns`. Only successful history-eligible turns are projected into model context. Limited/failed turns are retained for diagnostics and excluded from model history. No OpenSearch reindex or embedding migration is required for this change.
-
-Corpus inspection uses `size: 0` owner-filtered aggregations on `MAIL_CHILD_INDEX`. Verify every request body contains the authenticated principal's `user_id`; the application still depends on the upstream gateway to bind it. Diagnostic and corpus-info chat routes are deterministic and do not require a separate worker.
+Mongo conversation records are dual-read compatible. Existing `messages` remain
+readable; new writes also include bounded `turns`. Only successful
+history-eligible turns are projected into model context. Limited/failed turns
+are excluded from model history. No OpenSearch reindex or embedding migration
+is required for this change. Verify every request body contains the
+authenticated principal's `user_id`; the application still depends on the
+upstream gateway to bind it.
 
 ## Health and recovery
 

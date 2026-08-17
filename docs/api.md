@@ -10,10 +10,8 @@ All JSON requests reject undeclared fields. `user_id` is 1–128 characters afte
 
 ## POST /v1/chat
 
-Multi-source Agentic RAG does not add or rename any request field. The request
-remains `ChatRequest`, and existing clients can continue sending the same
-`user_id`, `message`, optional `conversation_id`, `filters`, and
-`response_mode` fields shown below.
+Every chat request invokes the same multi-source agent. The public request has
+no execution-mode or routing field.
 
 Request body:
 
@@ -26,21 +24,27 @@ Request body:
     "teams": ["YIELD팀"],
     "weeks": ["2026-27", "2026-28", "2026-29", "2026-30"],
     "mail_type": "weekly_report"
-  },
-  "response_mode": "auto"
+  }
 }
 ```
 
-`response_mode` is `auto`, `fast`, or `deep`. `mail_type` is `weekly_report`, `daily_report`, `other`, or null. Fast and Deep stay separate executors; `auto` only selects one route. The same synchronous endpoint returns the final result.
+`mail_type` is `weekly_report`, `daily_report`, `other`, or null. Supplying an
+undeclared field such as the removed `response_mode` returns validation error
+HTTP 422. The synchronous endpoint returns the final bounded agent result.
 
-The development RAG verification console can send `auto`, `fast`, or `deep`. It is available at the Vite frontend's `/rag` path and proxies API calls through `/api`. The console is a QA client, not an authentication or authorization layer.
+The development RAG verification console is available at the Vite frontend's
+`/rag` path and proxies API calls through `/api`. It has no execution-mode
+selector. The console is a QA client, not an authentication or authorization
+layer.
 
-Fast and Deep have no workflow-wide deadline. Each OpenRouter LLM or embedding request has the configured `OPENROUTER_REQUEST_TIMEOUT_SECONDS` safety limit, which defaults to 150 seconds.
+Each OpenRouter LLM or embedding request has the configured
+`OPENROUTER_REQUEST_TIMEOUT_SECONDS` safety limit, which defaults to 150
+seconds. Agent execution is also bounded by typed policy limits, including a
+maximum of four iterations and eight evidence objects.
 
 ```json
 {
   "conversation_id": "9fd...",
-  "mode": "fast_rag",
   "answer": "확인된 답변 [S1]",
   "references": [{
     "evidence_id": "S1",
@@ -58,6 +62,11 @@ Fast and Deep have no workflow-wide deadline. Each OpenRouter LLM or embedding r
   },
   "disclosures": [],
   "trace_id": "opaque-trace-id",
+  "agent_trace": {
+    "tool_calls": ["search_mail", "search_calendar"],
+    "judge_decisions": ["continue", "sufficient"],
+    "iteration_count": 2
+  },
   "execution": {
     "status": "succeeded",
     "failure_stage": null,
@@ -69,7 +78,7 @@ Fast and Deep have no workflow-wide deadline. Each OpenRouter LLM or embedding r
     "include_in_llm_history": true,
     "node_runs": [{
       "sequence": 1,
-      "node_name": "router.route",
+      "node_name": "multi_source.tool_executor",
       "status": "ok",
       "started_ms": 0,
       "duration_ms": 4180,
@@ -78,17 +87,14 @@ Fast and Deep have no workflow-wide deadline. Each OpenRouter LLM or embedding r
       "output": {"task_count": 1},
       "error_class": null
     }]
-  },
-  "job_id": null,
-  "status": null,
-  "plan_summary": null
+  }
 }
 ```
 
-Deep routing returns HTTP 200 after the bounded Deep workflow completes. `mode` is
-`deep_research`; `answer`, `references`, and `quality` are populated in the same
-response while `job_id`, `status`, and `plan_summary` remain null. General, Fast,
-and Deep therefore share one `POST /v1/chat` request-response contract.
+The response has no `mode`, `routing`, `job_id`, `status`, or `plan_summary`
+fields. `agent_trace` reports bounded tool names, judge decisions, and iteration
+count; it does not expose prompts or chain-of-thought. The independent research
+job endpoints below retain their own contract.
 
 `references[].source_type` now also accepts `domain_knowledge` and `calendar`,
 in addition to the existing `mail`, `wiki`, and `statistic` values. Both new
@@ -100,13 +106,19 @@ never substituted for `references[].document_id`. Missing or malformed
 relation IDs fail closed. Storage index names, raw query DSL, employee IDs, and
 private agent state are never included in the response.
 
-Automatic routing also has two deterministic system routes. Questions such as “왜 답변을 못했어?” use `diagnostic` and read the previous persisted execution state. Questions such as “뭐가 임베딩돼 있어?” use `corpus_info` and run exact-`user_id` OpenSearch aggregations for counts, teams, weeks, mail types, recent titles, and embedding-model metadata. Neither route asks the LLM to invent operational facts.
-
 `execution.status` is `succeeded`, `limited`, or `failed`. Completed execution failures still return HTTP 200 with `answer: null`; `failure_stage` and `error_code` explain the bounded failure. `quality.citation_valid` is null when citation validation did not run, and `retrieval_mode` is `not_started` when search never began. Embedding API failure continues with BM25 and includes the exact Korean fallback disclosure.
 
-`execution.node_runs` contains at most 64 request-correlated Router, Fast, Deep, embedding, and OpenSearch steps ordered by start sequence. It exposes timing, safe counts, retrieval mode, fallback state, attempt, and exception class only. It never contains raw questions, prompts, mail content, document IDs, credentials, exception messages, or reasoning.
+`execution.node_runs` contains at most 64 request-correlated multi-source agent,
+embedding, and OpenSearch steps ordered by start sequence. It exposes timing,
+safe counts, retrieval mode, fallback state, attempt, and exception class only.
+It never contains raw questions, prompts, mail content, document IDs,
+credentials, exception messages, or reasoning.
 
-Conversation storage writes a bounded turn envelope and compatibility messages. Only successful turns with `include_in_llm_history=true` are sent back to Router/General/Fast/Deep models. Limited and failed turns remain available for deterministic diagnostics but cannot contaminate later model context. Verified evidence may be reused only after exact owner validation and deduplication.
+Conversation storage writes a bounded turn envelope and compatibility messages.
+Only successful turns with `include_in_llm_history=true` are sent back to the
+multi-source agent. Limited and failed turns cannot contaminate later model
+context. Verified evidence may be reused only after exact owner validation and
+deduplication.
 
 ## Research job endpoints
 

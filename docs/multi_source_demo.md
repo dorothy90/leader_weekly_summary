@@ -45,8 +45,9 @@ MULTI_SOURCE_DEMO=true uvicorn app.api.main:app --host 127.0.0.1 --port 8000
 cd frontend && npm run dev
 ```
 
-Open the frontend's RAG console, use `user_id=kim`, and select Fast or Auto
-mode. No `.env` secrets are required. Verify the API before opening the
+Open the frontend's RAG console, use `user_id=kim`, and send a question. Every
+chat request enters the same multi-source agent; there is no execution-mode
+selector. No `.env` secrets are required. Verify the API before opening the
 frontend:
 
 ```bash
