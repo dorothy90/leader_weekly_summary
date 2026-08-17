@@ -20,7 +20,6 @@ from app.domain.agentic_policy import TypedAgentPolicy
 from app.domain.chat import ChatRequest, ChatResponse
 from app.domain.errors import AppError, ErrorCode
 from app.domain.policy import PolicyContext
-from app.graphs.fast_rag import FastRAGWorkflow
 from app.graphs.multi_source import (
     LIMIT_DISCLOSURE,
     MAX_ITERATIONS,
@@ -795,7 +794,7 @@ def test_answer_citations_and_evidence_are_grounded_and_normalized():
     assert "analysis" not in result.model_dump()
     assert "question_type" not in result.model_dump_json()
     assert "agent_memory" not in ChatResponse.model_fields
-    assert "agent_trace" not in ChatResponse.model_fields
+    assert "agent_trace" in ChatResponse.model_fields
 
 
 def test_graph_dedup_preserves_cross_source_storage_id_collisions():
@@ -1426,31 +1425,3 @@ def test_typed_source_request_controls_initial_query():
     assert search.calls[0][0].query == "NAND"
     assert len(search.calls) == 1
     assert {item.source_type for item in result.evidence} == {"mail"}
-
-
-def test_fast_rag_facade_delegates_without_entering_legacy_graph():
-    expected, _search = build()
-    expected_result = invoke(expected, "Cell Leakage가 뭐야?")
-
-    class AgenticSpy:
-        def __init__(self):
-            self.calls = []
-
-        async def invoke(self, request, policy, conversation):
-            self.calls.append((request, policy, conversation))
-            return expected_result
-
-    class FailIfCalled:
-        def __getattr__(self, name):
-            raise AssertionError(f"legacy dependency called: {name}")
-
-    spy = AgenticSpy()
-    workflow = FastRAGWorkflow(FailIfCalled(), FailIfCalled(), agentic=spy)
-    memory = ConversationMemory()
-    request = ChatRequest(user_id="kim", message="Cell Leakage가 뭐야?")
-    policy = PolicyContext.from_user_id("kim")
-
-    result = asyncio.run(workflow.invoke(request, policy, memory))
-
-    assert result == expected_result
-    assert spy.calls == [(request, policy, memory)]

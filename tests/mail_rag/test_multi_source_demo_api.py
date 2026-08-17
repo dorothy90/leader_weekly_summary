@@ -13,7 +13,6 @@ from app.api.dependencies import build_demo_container
 from app.api.main import create_app
 from app.config.settings import Settings
 from app.domain.agentic import IntentDecision, SourceRequest
-from app.domain.chat import ChatRequest
 from app.domain.policy import PolicyContext
 from app.graphs.multi_source import MultiSourceAgenticWorkflow
 from app.llm.demo_scenarios import StaticIntentAnalyzer, scenario_decisions
@@ -74,7 +73,6 @@ def canonical_demo_response():
             {
                 "user_id": "kim",
                 "message": CANONICAL_QUESTION,
-                "response_mode": "fast",
             },
         )
     )
@@ -129,45 +127,12 @@ def test_demo_container_accepts_injected_typed_analyzer_without_external_service
     )
 
     assert isinstance(container.conversations, InMemoryConversationStore)
-    assert container.fast.agentic.analyzer is static
-    assert isinstance(container.fast.agentic, MultiSourceAgenticWorkflow)
-    assert isinstance(container.fast.agentic.search, InMemoryMultiSourceSearch)
-    assert container.deep is None
-
-
-def test_demo_container_accepts_injected_router():
-    class InjectedRouter:
-        def __bool__(self):
-            return False
-
-    router = InjectedRouter()
-
-    container = build_demo_container(
-        Settings(openrouter_api_key=""),
-        agent_model=StaticIntentAnalyzer(
-            scenario_decisions("weekly-calendar"), now=NOW
-        ),
-        router=router,
-    )
-
-    assert container.router is router
-
-
-def test_default_demo_router_always_selects_fast_without_semantic_rules():
-    container = demo_container("weekly-calendar")
-
-    decision = asyncio.run(
-        container.router.route(
-            ChatRequest(
-                user_id="kim",
-                message="안녕하세요",
-                response_mode="auto",
-            )
-        )
-    )
-
-    assert decision.route == "fast"
-    assert decision.reason_code == "demo_fast"
+    assert container.agentic.analyzer is static
+    assert isinstance(container.agentic, MultiSourceAgenticWorkflow)
+    assert isinstance(container.agentic.search, InMemoryMultiSourceSearch)
+    assert not hasattr(container, "router")
+    assert not hasattr(container, "fast")
+    assert not hasattr(container, "deep")
 
 
 def test_demo_api_runs_canonical_flow_in_canonical_tool_order():
@@ -180,20 +145,24 @@ def test_demo_api_runs_canonical_flow_in_canonical_tool_order():
             {
                 "user_id": "kim",
                 "message": CANONICAL_QUESTION,
-                "response_mode": "fast",
             },
         )
     )
 
     assert response.status_code == 200
     body = response.json()
-    assert body["mode"] == "fast_rag"
+    assert body["agent_trace"]["tool_calls"] == [
+        "search_mail",
+        "search_calendar",
+        "expand_calendar_event",
+        "search_domain_knowledge",
+    ]
     assert {item["source_type"] for item in body["references"]} == {
         "mail",
         "calendar",
         "domain_knowledge",
     }
-    assert [action.tool for action, _owner in container.fast.agentic.search.calls] == [
+    assert [action.tool for action, _owner in container.agentic.search.calls] == [
         "search_mail",
         "search_calendar",
         "expand_calendar_event",
@@ -214,7 +183,6 @@ def test_demo_api_returns_all_current_week_events_for_generic_schedule_question(
             {
                 "user_id": "kim",
                 "message": "이번주 일정알려줘",
-                "response_mode": "fast",
             },
         )
     )
@@ -231,9 +199,9 @@ def test_demo_api_returns_all_current_week_events_for_generic_schedule_question(
     assert body["quality"]["citation_valid"] is True
     assert body["quality"]["limited_answer"] is False
     assert [
-        action.tool for action, _owner in container.fast.agentic.search.calls
+        action.tool for action, _owner in container.agentic.search.calls
     ] == ["search_calendar"]
-    assert container.fast.agentic.search.calls[0][0].query == "일정"
+    assert container.agentic.search.calls[0][0].query == "일정"
 
 
 @pytest.mark.parametrize(
@@ -255,7 +223,6 @@ def test_demo_api_retrieves_beginning_and_end_of_month_events(
             {
                 "user_id": "kim",
                 "message": f"{day} 일정 알려줘",
-                "response_mode": "fast",
             },
         )
     )
@@ -275,7 +242,6 @@ def test_demo_api_follow_up_uses_saved_raw_event_reference():
             {
                 "user_id": "kim",
                 "message": "NAND Yield Review 회의 찾아줘",
-                "response_mode": "fast",
             },
         )
     )
@@ -293,23 +259,22 @@ def test_demo_api_follow_up_uses_saved_raw_event_reference():
                 "user_id": "kim",
                 "conversation_id": conversation_id,
                 "message": "그 회의에서 Action 뭐였어?",
-                "response_mode": "fast",
             },
         )
     )
 
     assert follow_up.status_code == 200
     assert "FDC" in follow_up.json()["answer"]
-    action = container.fast.agentic.search.calls[-1][0]
+    action = container.agentic.search.calls[-1][0]
     assert action.tool == "expand_calendar_event"
     assert action.event_id == "event-kim-1"
-    assert container.fast.agentic.search.calls[-1][1] == "kim"
+    assert container.agentic.search.calls[-1][1] == "kim"
     assert [
-        item.tool for item, _owner in container.fast.agentic.search.calls
+        item.tool for item, _owner in container.agentic.search.calls
     ] == ["search_calendar", "expand_calendar_event"]
 
 
-def test_demo_api_public_response_does_not_expose_private_agent_state():
+def test_demo_api_public_response_exposes_only_bounded_agent_trace():
     app = create_app(demo_container("event-action"))
 
     response = asyncio.run(
@@ -318,7 +283,6 @@ def test_demo_api_public_response_does_not_expose_private_agent_state():
             {
                 "user_id": "kim",
                 "message": "NAND Yield Review 회의에서 Action 뭐였어?",
-                "response_mode": "fast",
             },
         )
     )
@@ -328,24 +292,25 @@ def test_demo_api_public_response_does_not_expose_private_agent_state():
     assert response.status_code == 200
     assert set(body) == {
         "conversation_id",
-        "mode",
         "answer",
         "references",
         "quality",
         "disclosures",
         "trace_id",
-        "routing",
-        "job_id",
-        "status",
-        "plan_summary",
+        "agent_trace",
         "execution",
     }
+    assert set(body["agent_trace"]) == {
+        "tool_calls",
+        "judge_decisions",
+        "iteration_count",
+    }
+    assert len(body["agent_trace"]["tool_calls"]) <= 8
+    assert len(body["agent_trace"]["judge_decisions"]) <= 8
+    assert body["agent_trace"]["iteration_count"] <= 4
     for private_name in (
         "agent_memory",
-        "agent_trace",
         "analysis",
-        "tool_calls",
-        "iteration_count",
         "previous_event_reference",
     ):
         assert private_name not in serialized
@@ -359,7 +324,6 @@ def test_demo_api_rejects_cross_user_conversation_reuse_without_leaking_it():
             {
                 "user_id": "kim",
                 "message": "NAND Yield Review 회의 찾아줘",
-                "response_mode": "fast",
             },
         )
     )
@@ -372,7 +336,6 @@ def test_demo_api_rejects_cross_user_conversation_reuse_without_leaking_it():
                 "user_id": "lee",
                 "conversation_id": conversation_id,
                 "message": "그 회의에서 Action 뭐였어?",
-                "response_mode": "fast",
             },
         )
     )

@@ -8,11 +8,9 @@ from pydantic import ValidationError
 
 from app.api.dependencies import ServiceContainer
 from app.api.main import create_app
-from app.domain.chat import ChatRequest
 from app.domain.evidence import SearchTask
 from app.domain.policy import PolicyContext
 from app.graphs.deep_research import DeepResearchWorkflow
-from app.graphs.fast_rag import FastRAGWorkflow
 from app.observability.tracing import TraceEvent, hash_trace_value
 from app.retrieval.service import RetrievalService
 from app.workers.research import ResearchWorker
@@ -138,9 +136,7 @@ def test_api_emits_content_safe_trace_event():
     sink = RecordingTraceSink()
     app = create_app(
         ServiceContainer(
-            router=None,
-            fast=None,
-            deep=None,
+            agentic=None,
             conversations=None,
             jobs=None,
             traces=sink,
@@ -213,16 +209,7 @@ def test_retrieval_emits_only_hashes_counts_mode_and_error_class():
     )
 
 
-def test_fast_and_deep_workflows_emit_safe_terminal_events():
-    class FastGraph:
-        async def ainvoke(self, state):
-            return {
-                "answer": "확인 가능한 근거가 없어 답변할 수 없습니다.",
-                "evidence": [],
-                "sufficient": False,
-                "retrieval_mode": "hybrid",
-            }
-
+def test_deep_workflow_emits_safe_terminal_event():
     class DeepGraph:
         async def ainvoke(self, state):
             return {
@@ -232,17 +219,6 @@ def test_fast_and_deep_workflows_emit_safe_terminal_events():
                 "rounds": 1,
                 "citation_valid": False,
             }
-
-    fast_sink = RecordingTraceSink()
-    fast = FastRAGWorkflow(None, None, trace_sink=fast_sink)
-    fast.graph = FastGraph()
-    asyncio.run(
-        fast.invoke(
-            ChatRequest(user_id="kim", message="private fast question"),
-            PolicyContext.from_user_id("kim"),
-            None,
-        )
-    )
 
     deep_sink = RecordingTraceSink()
     deep = DeepResearchWorkflow(None, None, trace_sink=deep_sink)
@@ -254,37 +230,9 @@ def test_fast_and_deep_workflows_emit_safe_terminal_events():
         )
     )
 
-    assert fast_sink.events[-1].node_name == "fast_rag.invoke"
-    assert fast_sink.events[-1].route == "fast"
     assert deep_sink.events[-1].node_name == "deep_research.invoke"
     assert deep_sink.events[-1].route == "deep"
-    _assert_safe_events(fast_sink, "kim", "private fast question")
     _assert_safe_events(deep_sink, "kim", "private deep question")
-
-
-def test_fast_general_path_emits_safe_trace_event():
-    class LLM:
-        model = "model-v1"
-        system = None
-
-        async def complete_text(self, system, user):
-            self.system = system
-            return "사용 안내"
-
-    sink = RecordingTraceSink()
-    llm = LLM()
-    result = asyncio.run(
-        FastRAGWorkflow(None, llm, trace_sink=sink).respond_general(
-            ChatRequest(user_id="kim", message="private greeting")
-        )
-    )
-
-    assert result.answer == "사용 안내"
-    assert "weekly mail assistant" in llm.system.casefold()
-    assert "do not claim to be chatgpt" in llm.system.casefold()
-    assert sink.events[-1].node_name == "fast_rag.general"
-    assert sink.events[-1].route == "general"
-    _assert_safe_events(sink, "kim", "private greeting", "model-v1")
 
 
 def test_worker_emits_error_class_without_exception_or_job_payload():

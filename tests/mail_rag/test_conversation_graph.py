@@ -54,8 +54,6 @@ def test_conversation_state_uses_messages_as_the_canonical_history():
     limited = TurnRecord(
         user_content="장례식장 정보 알려줘",
         assistant_content="일반 선택 기준을 안내합니다.",
-        route="fast",
-        executed_system="fast_rag",
         execution=ExecutionMetadata(
             status="limited",
             failure_stage="retrieval",
@@ -126,16 +124,12 @@ def test_prior_evidence_is_success_only_owner_scoped_and_deduplicated():
             TurnRecord(
                 user_content="질문",
                 assistant_content="답변 [S1]",
-                route="fast",
-                executed_system="fast_rag",
                 execution=ExecutionMetadata(status="succeeded"),
                 cited_evidence=[good],
             ),
             TurnRecord(
                 user_content="실패 질문",
                 assistant_content=None,
-                route="fast",
-                executed_system="fast_rag",
                 execution=ExecutionMetadata(
                     status="failed", include_in_llm_history=False
                 ),

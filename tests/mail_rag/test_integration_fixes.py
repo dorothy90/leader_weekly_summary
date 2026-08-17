@@ -19,7 +19,7 @@ container = build_container(Settings(
     mongo_uri='mongodb://127.0.0.1:1',
     openrouter_api_key=SecretStr('test-openrouter-key'),
 ))
-assert container.fast is not None and container.jobs is not None
+assert container.agentic is not None and container.jobs is not None
 """
     result = subprocess.run(
         [sys.executable, "-c", code], capture_output=True, text=True, check=False
@@ -32,7 +32,12 @@ def test_ready_checks_dependencies_but_health_is_liveness():
         async def check(self):
             return {"mongo": "ready", "opensearch": "ready", "aliases": "ready"}
 
-    container = ServiceContainer(None, None, None, None, None, readiness=Ready())
+    container = ServiceContainer(
+        agentic=None,
+        conversations=None,
+        jobs=None,
+        readiness=Ready(),
+    )
 
     async def exercise():
         transport = httpx.ASGITransport(app=create_app(container))

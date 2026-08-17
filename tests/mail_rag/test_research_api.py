@@ -47,9 +47,7 @@ class ASGIClient:
 
 def container(jobs):
     return ServiceContainer(
-        router=None,
-        fast=None,
-        deep=None,
+        agentic=None,
         conversations=None,
         jobs=jobs,
     )

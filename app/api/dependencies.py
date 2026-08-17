@@ -4,15 +4,12 @@ from typing import Any
 
 @dataclass(frozen=True)
 class ServiceContainer:
-    router: Any
-    fast: Any
-    deep: Any
+    agentic: Any
     conversations: Any
     jobs: Any
     mail_content: Any = None
     traces: Any = None
     readiness: Any = None
-    corpus_info: Any = None
 
 
 class DependencyReadiness:
@@ -107,25 +104,18 @@ def build_ai_gateways(settings):
 
 
 def build_container(settings=None, trace_sink=None) -> ServiceContainer:
-    """Build synchronous Fast and distinct persistent Deep services."""
+    """Build the direct multi-source chat service and shared persistence."""
     from motor.motor_asyncio import AsyncIOMotorClient
 
     from app.config.settings import get_settings
     from app.content.mail import MailContentStore
-    from app.graphs.conversation import contextualize_request
-    from app.graphs.deep_research import DeepResearchWorkflow
-    from app.graphs.fast_rag import FastRAGWorkflow
     from app.graphs.multi_source import MultiSourceAgenticWorkflow
-    from app.graphs.router import route_request
     from app.llm.agentic import StructuredAgentModel
     from app.observability.tracing import NoOpTraceSink
-    from app.observability.node_runs import record_node
     from app.persistence.conversations import MongoConversationStore
     from app.persistence.research_jobs import MongoResearchJobStore
     from app.retrieval.opensearch import AsyncOpenSearchGateway
-    from app.retrieval.corpus_info import CorpusInfoService
     from app.retrieval.multi_source_opensearch import OpenSearchMultiSourceSearch
-    from app.retrieval.service import RetrievalService
     from app.retrieval.source_registry import SourceRegistry
 
     current = settings or get_settings()
@@ -133,14 +123,6 @@ def build_container(settings=None, trace_sink=None) -> ServiceContainer:
     llm, embeddings = build_ai_gateways(current)
     opensearch_client = build_opensearch_client(current)
     search = AsyncOpenSearchGateway(opensearch_client)
-    retrieval = RetrievalService(
-        search,
-        embeddings,
-        current.mail_child_index,
-        current.mail_parent_index,
-        current.wiki_index,
-        trace_sink=traces,
-    )
     registry = SourceRegistry.from_settings(current)
     agentic = MultiSourceAgenticWorkflow(
         OpenSearchMultiSourceSearch(search, embeddings, registry),
@@ -154,38 +136,8 @@ def build_container(settings=None, trace_sink=None) -> ServiceContainer:
     database = mongo_client[current.mongo_db]
     jobs = MongoResearchJobStore(database.research_jobs)
 
-    class RouterService:
-        async def route(self, request, conversation=None):
-            return await route_request(
-                request,
-                llm,
-                conversation,
-                timeout_seconds=current.openrouter_request_timeout_seconds,
-            )
-
-        async def contextualize_request(self, request, conversation=None):
-            history = len(getattr(conversation, "messages", None) or [])
-            async with record_node(
-                "router.contextualize",
-                input_metrics={"history_messages": min(20, history)},
-            ):
-                return await contextualize_request(llm, request, conversation)
-
     return ServiceContainer(
-        router=RouterService(),
-        fast=FastRAGWorkflow(
-            retrieval,
-            llm,
-            trace_sink=traces,
-            model_step_timeout_seconds=current.openrouter_request_timeout_seconds,
-            general_timeout_seconds=current.openrouter_request_timeout_seconds,
-            agentic=agentic,
-        ),
-        deep=DeepResearchWorkflow(
-            retrieval,
-            llm,
-            trace_sink=traces,
-        ),
+        agentic=agentic,
         conversations=MongoConversationStore(database.conversations),
         jobs=jobs,
         mail_content=MailContentStore(current.mail_content_root),
@@ -194,14 +146,10 @@ def build_container(settings=None, trace_sink=None) -> ServiceContainer:
             opensearch_client,
             mongo_client,
             [
-                current.mail_child_index,
-                current.mail_parent_index,
-                current.wiki_index,
                 current.mail_index_alias,
                 current.calendar_index_alias,
             ],
         ),
-        corpus_info=CorpusInfoService(search, current.mail_child_index),
     )
 
 
@@ -209,7 +157,6 @@ def build_demo_container(
     settings=None,
     *,
     agent_model=None,
-    router=None,
 ) -> ServiceContainer:
     from datetime import UTC, datetime
     from pathlib import Path
@@ -217,8 +164,6 @@ def build_demo_container(
     from openai import AsyncOpenAI
 
     from app.config.settings import get_settings
-    from app.domain.chat import RouteDecision
-    from app.graphs.fast_rag import FastRAGWorkflow
     from app.graphs.multi_source import MultiSourceAgenticWorkflow
     from app.llm.agentic import StructuredAgentModel
     from app.llm.demo_scenarios import UnavailableAnalyzer
@@ -267,22 +212,8 @@ def build_demo_container(
         timezone_name=current.default_user_timezone,
     )
 
-    class DemoRouter:
-        async def route(self, request, conversation=None):
-            return RouteDecision(
-                route="fast",
-                reason_code="demo_fast",
-                confidence=1,
-                estimated_searches=1,
-            )
-
-        async def contextualize_request(self, request, conversation=None):
-            return request
-
     return ServiceContainer(
-        router=router if router is not None else DemoRouter(),
-        fast=FastRAGWorkflow(None, model, agentic=agentic),
-        deep=None,
+        agentic=agentic,
         conversations=InMemoryConversationStore(),
         jobs=InMemoryResearchJobStore(),
         readiness=DemoReadiness(model_status),

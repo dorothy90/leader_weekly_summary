@@ -63,7 +63,7 @@ def test_demo_container_builds_structured_analyzer_for_configured_llm_key(
 
     container = build_demo_container(settings)
 
-    analyzer = container.fast.agentic.analyzer
+    analyzer = container.agentic.analyzer
     assert isinstance(analyzer, StructuredAgentModel)
     assert isinstance(analyzer.llm, OpenAILLMGateway)
     assert analyzer.llm.client is clients[0]
@@ -77,11 +77,11 @@ def test_demo_container_builds_structured_analyzer_for_configured_llm_key(
 def test_demo_container_without_llm_key_reports_unavailable_analyzer():
     container = build_demo_container(Settings(openrouter_api_key=""))
 
-    assert isinstance(container.fast.agentic.analyzer, UnavailableAnalyzer)
+    assert isinstance(container.agentic.analyzer, UnavailableAnalyzer)
     status = asyncio.run(container.readiness.check())
     assert status["agent_model"] == "unavailable"
     analysis = asyncio.run(
-        container.fast.agentic.analyzer.analyze(
+        container.agentic.analyzer.analyze(
             "free-form question",
             object(),
             "Asia/Seoul",

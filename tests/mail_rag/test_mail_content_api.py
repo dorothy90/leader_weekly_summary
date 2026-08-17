@@ -1,18 +1,37 @@
+import asyncio
 import json
+
+import httpx
 
 from app.api.dependencies import ServiceContainer
 from app.api.main import create_app
 from app.content.mail import MailContentStore, mail_content_id, owner_storage_key
-from tests.mail_rag.test_chat_api import ASGIClient
+
+
+class ASGIClient:
+    def __init__(self, app):
+        self.app = app
+
+    def post(self, path, **kwargs):
+        async def send():
+            transport = httpx.ASGITransport(
+                app=self.app,
+                raise_app_exceptions=False,
+            )
+            async with httpx.AsyncClient(
+                transport=transport,
+                base_url="http://testserver",
+            ) as session:
+                return await session.post(path, **kwargs)
+
+        return asyncio.run(send())
 
 
 def _client(root):
     return ASGIClient(
         create_app(
             ServiceContainer(
-                router=None,
-                fast=None,
-                deep=None,
+                agentic=None,
                 conversations=None,
                 jobs=None,
                 mail_content=MailContentStore(root),
