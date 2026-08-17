@@ -14,11 +14,6 @@ interface ConversationPanelProps {
 
 const terminalRetry = new Set(['failed', 'cancelled'])
 const cancellable = new Set(['queued', 'running', 'cancelling'])
-const modeLabels = {
-  auto: 'Auto',
-  fast: 'Fast 강제',
-  deep: 'Deep 강제',
-} as const
 const SOURCE_LABELS: Record<ChatReference['source_type'], string> = {
   mail: '메일',
   wiki: 'Wiki',
@@ -57,18 +52,24 @@ function TurnResult({ turn }: { turn: ConversationTurn }) {
         </div>
       ) : null}
       {chat ? (
-        <div className="routing-flow" aria-label="라우팅 결과">
-          <div className="routing-steps">
-            <span>요청 {modeLabels[chat.routing.requested_mode]}</span>
-            <i aria-hidden="true">→</i>
-            <span>Router {chat.routing.route}</span>
-            <i aria-hidden="true">→</i>
-            <span>실행 {chat.routing.executed_system}</span>
-          </div>
-          <small>
-            {chat.routing.reason_code} · 신뢰도 {Math.round(chat.routing.confidence * 100)}%
-            {' · '}예상 검색 {chat.routing.estimated_searches}회
-          </small>
+        <div className="agent-execution" aria-label="에이전트 실행">
+          {chat.agent_trace?.tool_calls.length ? (
+            <div className="agent-steps" aria-label="도구 호출">
+              {chat.agent_trace.tool_calls.map((tool, index) => (
+                <span key={`${tool}-${index}`}>{tool}</span>
+              ))}
+            </div>
+          ) : null}
+          {chat.agent_trace?.judge_decisions.length ? (
+            <div className="agent-steps" aria-label="에이전트 판단">
+              {chat.agent_trace.judge_decisions.map((decision, index) => (
+                <span key={`${decision}-${index}`}>{decision}</span>
+              ))}
+            </div>
+          ) : null}
+          {chat.agent_trace ? (
+            <small>에이전트 반복 {chat.agent_trace.iteration_count}회</small>
+          ) : null}
           {chat.execution ? (
             <small>
               상태 {chat.execution.status} · 실제 검색 {chat.execution.search_count}회 · 근거 {chat.execution.evidence_count}개 · {chat.execution.duration_ms}ms
@@ -98,7 +99,7 @@ function TurnResult({ turn }: { turn: ConversationTurn }) {
       {result ? (
         <div className="message is-assistant">
           <p className="answer-text">{result}</p>
-          {chat?.quality && chat.routing.executed_system === 'fast_rag' ? (
+          {chat?.quality ? (
             <div className="quality-row" aria-label="답변 품질">
               <span className={chat.quality.citation_valid === false ? 'is-bad' : 'is-good'}>
                 {chat.quality.citation_valid === null ? '인용 미실행' : chat.quality.citation_valid ? '인용 유효' : '인용 실패'}
@@ -154,17 +155,9 @@ export function ConversationPanel({
   const latestJob = latest?.job
   const resultTitle = latestJob
     ? 'Deep Research'
-    : latest?.chat?.routing.executed_system === 'general'
-      ? 'General response'
-      : latest?.chat?.routing.executed_system === 'diagnostic'
-        ? 'Execution diagnostic'
-        : latest?.chat?.routing.executed_system === 'corpus_info'
-          ? 'Corpus information'
-      : latest?.chat?.routing.executed_system === 'clarification'
-        ? 'Clarification'
-        : latest?.chat
-          ? 'Fast answer'
-          : 'Conversation'
+    : latest?.chat
+      ? 'Multi-source answer'
+      : 'Conversation'
   const sendDisabled = requesting || !canSend || !message.trim()
 
   useEffect(() => {

@@ -24,20 +24,6 @@ type InspectableExchange = ApiExchange<ChatResponse | ResearchJobResponse>
 
 const terminal = new Set<ResearchStatus>(['completed', 'failed', 'cancelled'])
 
-const initialJob = (response: ChatResponse): ResearchJobResponse | undefined => {
-  if (!response.job_id || !response.status) return undefined
-  return {
-    job_id: response.job_id,
-    status: response.status,
-    progress: 0,
-    plan_summary: response.plan_summary ?? '',
-    result_markdown: null,
-    references: [],
-    disclosures: response.disclosures,
-    error_code: null,
-  }
-}
-
 export function RagLabApp({ service, pollIntervalMs = 2000 }: RagLabAppProps) {
   const [mobileView, setMobileView] = useState<'request' | 'result' | 'inspector'>('result')
   const [settings, setSettings] = useState<RagRequestSettings>()
@@ -189,7 +175,6 @@ export function RagLabApp({ service, pollIntervalMs = 2000 }: RagLabAppProps) {
       message,
       ...(settings.conversationId ? { conversation_id: settings.conversationId } : {}),
       filters: settings.filters,
-      response_mode: settings.mode,
     }
     const next = await service.sendChat(payload)
     if (runId !== activeRun.current) return
@@ -201,15 +186,10 @@ export function RagLabApp({ service, pollIntervalMs = 2000 }: RagLabAppProps) {
     }
     setConversationId(next.response.conversation_id)
     setConversationOwner(settings.userId)
-    const created = initialJob(next.response)
     updateTurn(turnId, {
       pending: false,
       chat: next.response,
-      ...(created ? { job: created } : {}),
     })
-    if (!created) return
-    setActiveJob(created)
-    void trackJob(created.job_id, settings.userId, runId, turnId)
   }
 
   const jobAction = async (action: 'cancel' | 'retry') => {

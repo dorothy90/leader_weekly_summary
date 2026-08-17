@@ -17,18 +17,17 @@ describe('RequestPanel', () => {
 
     expect(screen.queryByLabelText('질문')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '실행' })).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Auto' })).toHaveAttribute(
-      'aria-pressed',
-      'true',
-    )
+    expect(screen.queryByRole('group', { name: '실행 시스템' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Auto' })).not.toBeInTheDocument()
     await waitFor(() =>
       expect(onSettingsChange).toHaveBeenLastCalledWith(
-        expect.objectContaining({ mode: 'auto', userId: '' }),
+        expect.objectContaining({ userId: '' }),
       ),
     )
+    expect(onSettingsChange.mock.calls.at(-1)?.[0]).not.toHaveProperty('mode')
   })
 
-  it('emits normalized owner, mode, and retrieval filters', async () => {
+  it('emits normalized owner and retrieval filters', async () => {
     const user = userEvent.setup()
     const onSettingsChange = vi.fn()
     render(
@@ -40,7 +39,6 @@ describe('RequestPanel', () => {
     )
 
     await user.type(screen.getByLabelText('user_id'), ' kim ')
-    await user.click(screen.getByRole('button', { name: 'Deep 강제' }))
     await user.type(screen.getByLabelText('팀 필터'), 'YIELD, 품질')
     await user.type(screen.getByLabelText('주차 필터'), '2026-31, 2026-32')
     await user.selectOptions(screen.getByLabelText('메일 유형'), 'weekly_report')
@@ -48,7 +46,6 @@ describe('RequestPanel', () => {
     await waitFor(() =>
       expect(onSettingsChange).toHaveBeenLastCalledWith({
         userId: 'kim',
-        mode: 'deep',
         filters: {
           teams: ['YIELD', '품질'],
           weeks: ['2026-31', '2026-32'],

@@ -193,8 +193,7 @@ a:focus-visible {
 }
 
 .rag-request-panel .field { gap: 6px; }
-.rag-request-panel .field > span,
-.mode-fieldset legend { font-size: 10px; }
+.rag-request-panel .field > span { font-size: 10px; }
 
 .rag-request-panel input,
 .rag-request-panel select,
@@ -217,43 +216,6 @@ a:focus-visible {
 .rag-request-panel textarea:focus {
   border-color: var(--signal-blue);
   box-shadow: 0 0 0 3px rgb(83 105 218 / 10%);
-}
-
-.mode-fieldset {
-  padding: 0;
-  margin: 0;
-  border: 0;
-}
-
-.mode-fieldset legend {
-  margin-bottom: 6px;
-  color: #34383f;
-  font-weight: 700;
-}
-
-.mode-switch {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 4px;
-  padding: 4px;
-  background: #eef0f4;
-  border-radius: 8px;
-}
-
-.mode-switch button {
-  min-height: 40px;
-  color: var(--muted);
-  background: transparent;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 11px;
-  font-weight: 800;
-}
-
-.mode-switch button.is-active {
-  color: #fff;
-  background: #35415c;
-  box-shadow: 0 2px 8px rgb(38 49 73 / 16%);
 }
 
 .field-help {
@@ -342,7 +304,7 @@ a:focus-visible {
 .message.is-system { background: #fbfcfe; }
 .answer-text { margin: 0; white-space: pre-wrap; }
 
-.routing-flow {
+.agent-execution {
   width: min(100%, 760px);
   padding: 10px 12px;
   margin: 0 0 14px;
@@ -353,14 +315,14 @@ a:focus-visible {
   border-radius: 9px;
 }
 
-.routing-steps {
+.agent-steps {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 7px;
 }
 
-.routing-steps span {
+.agent-steps span {
   padding: 4px 7px;
   color: #39445e;
   background: #fff;
@@ -369,13 +331,7 @@ a:focus-visible {
   font: 750 10px ui-monospace, "SFMono-Regular", Consolas, monospace;
 }
 
-.routing-steps i {
-  color: #8a92a5;
-  font-style: normal;
-  font-size: 11px;
-}
-
-.routing-flow > small {
+.agent-execution > small {
   display: block;
   margin-top: 7px;
   color: #747d91;

@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 
 import type {
-  ExecutionMode,
   RagRequestSettings,
   RetrievalFilters,
   SafeApiError,
@@ -25,12 +24,6 @@ const splitValues = (value: string) =>
     ),
   )
 
-const executionModes: Array<{ value: ExecutionMode; label: string }> = [
-  { value: 'auto', label: 'Auto' },
-  { value: 'fast', label: 'Fast 강제' },
-  { value: 'deep', label: 'Deep 강제' },
-]
-
 export function RequestPanel({
   onSettingsChange,
   conversationId,
@@ -39,7 +32,6 @@ export function RequestPanel({
   apiError,
 }: RequestPanelProps) {
   const [userId, setUserId] = useState('')
-  const [mode, setMode] = useState<ExecutionMode>('auto')
   const [teams, setTeams] = useState('')
   const [weeks, setWeeks] = useState('')
   const [mailType, setMailType] = useState<RetrievalFilters['mail_type']>()
@@ -56,7 +48,6 @@ export function RequestPanel({
     }
     onSettingsChange({
       userId: userId.trim(),
-      mode,
       ...(conversationId.trim() ? { conversationId: conversationId.trim() } : {}),
       filters: {
         teams: splitValues(teams),
@@ -64,7 +55,7 @@ export function RequestPanel({
         ...(mailType ? { mail_type: mailType } : {}),
       },
     })
-  }, [conversationId, mailType, mode, normalizedWeeks, onSettingsChange, teams, userId, weekError])
+  }, [conversationId, mailType, normalizedWeeks, onSettingsChange, teams, userId, weekError])
 
   return (
     <form className="rag-request-panel" onSubmit={(event) => event.preventDefault()} noValidate>
@@ -88,23 +79,6 @@ export function RequestPanel({
           placeholder="kim"
         />
       </label>
-
-      <fieldset className="mode-fieldset">
-        <legend>실행 시스템</legend>
-        <div className="mode-switch">
-          {executionModes.map(({ value, label }) => (
-            <button
-              key={value}
-              type="button"
-              aria-pressed={mode === value}
-              className={mode === value ? 'is-active' : ''}
-              onClick={() => setMode(value)}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      </fieldset>
 
       <label className="field">
         <span>conversation_id <small>자동 입력</small></span>

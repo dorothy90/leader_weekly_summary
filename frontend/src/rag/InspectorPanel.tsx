@@ -19,7 +19,7 @@ interface InspectorPanelProps {
 }
 
 const isChatResponse = (value: InspectableResponse | undefined): value is ChatResponse =>
-  Boolean(value && 'mode' in value)
+  Boolean(value && 'conversation_id' in value && 'trace_id' in value)
 
 const requestOwner = (exchange: ApiExchange<unknown> | undefined) => {
   const body = exchange?.request.body
@@ -135,19 +135,16 @@ export function InspectorPanel({
               <div className="metric-grid">
                 <div className="metric"><small>HTTP</small><strong>{exchange.status}</strong></div>
                 <div className="metric"><small>Latency</small><strong>{exchange.durationMs} ms</strong></div>
-                <div className="metric"><small>Mode</small><strong>{chat?.mode ?? 'deep_research'}</strong></div>
+                <div className="metric"><small>Agent iterations</small><strong>{chat?.agent_trace?.iteration_count ?? '해당 없음'}</strong></div>
                 <div className="metric"><small>References</small><strong>{job?.references.length ?? response?.references.length ?? 0}</strong></div>
               </div>
               <dl className="trace-list">
                 <div><dt>trace_id</dt><dd>{chat?.trace_id ?? '서버 미제공'}</dd></div>
                 <div><dt>conversation</dt><dd>{chat?.conversation_id ?? '서버 미제공'}</dd></div>
-                <div><dt>job_id</dt><dd>{chat?.job_id ?? job?.job_id ?? '해당 없음'}</dd></div>
-                <div><dt>requested</dt><dd>{chat?.routing.requested_mode ?? '서버 미제공'}</dd></div>
-                <div><dt>route</dt><dd>{chat?.routing.route ?? '서버 미제공'}</dd></div>
-                <div><dt>executed</dt><dd>{chat?.routing.executed_system ?? '서버 미제공'}</dd></div>
-                <div><dt>reason</dt><dd>{chat?.routing.reason_code ?? '서버 미제공'}</dd></div>
-                <div><dt>confidence</dt><dd>{chat ? `${Math.round(chat.routing.confidence * 100)}%` : '서버 미제공'}</dd></div>
-                <div><dt>searches</dt><dd>{chat?.routing.estimated_searches ?? '서버 미제공'}</dd></div>
+                {job ? <div><dt>job_id</dt><dd>{job.job_id}</dd></div> : null}
+                <div><dt>tools</dt><dd>{chat?.agent_trace?.tool_calls.join(' → ') || '서버 미제공'}</dd></div>
+                <div><dt>judge</dt><dd>{chat?.agent_trace?.judge_decisions.join(' → ') || '서버 미제공'}</dd></div>
+                <div><dt>iterations</dt><dd>{chat?.agent_trace?.iteration_count ?? '서버 미제공'}</dd></div>
                 <div><dt>retrieval</dt><dd>{chat?.quality?.retrieval_mode ?? '서버 미제공'}</dd></div>
                 <div><dt>citation</dt><dd>{chat?.quality ? String(chat.quality.citation_valid) : '서버 미제공'}</dd></div>
                 <div><dt>status</dt><dd>{chat?.execution?.status ?? '서버 미제공'}</dd></div>
