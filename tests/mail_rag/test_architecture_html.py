@@ -82,3 +82,32 @@ def test_architecture_html_is_offline_and_contains_no_secret_examples():
     assert "x-trace-id" not in text
     assert "mongodb://" not in text
     assert "@example.com" not in text
+
+
+def test_llm_stage_controls_are_accessible_and_progressively_enhanced():
+    parser = parsed_artifact()
+    text = artifact_text()
+    stage_buttons = [
+        item for item in parser.buttons if item.get("data-stage")
+    ]
+
+    assert len(stage_buttons) == 4
+    assert all(
+        item.get("aria-controls") == "stage-detail"
+        for item in stage_buttons
+    )
+    assert stage_buttons[0].get("aria-pressed") == "true"
+    assert all(item.get("type") == "button" for item in stage_buttons)
+    assert 'id="show-all-prompts"' in text
+    assert 'id="stage-detail"' in text
+    assert "selectStage" in text
+    assert "renderAllPrompts" in text
+
+
+def test_architecture_html_has_mobile_and_reduced_motion_rules():
+    text = artifact_text()
+
+    assert "@media (max-width: 760px)" in text
+    assert "@media (prefers-reduced-motion: reduce)" in text
+    assert "overflow-wrap: anywhere" in text
+    assert ":focus-visible" in text
