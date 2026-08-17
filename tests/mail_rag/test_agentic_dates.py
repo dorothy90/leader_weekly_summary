@@ -67,3 +67,34 @@ def test_rule_based_analyzer_extracts_explicit_iso_date_from_question():
     assert result.time_expression == "2026-08-18"
     assert result.start_at_utc == datetime(2026, 8, 17, 15, tzinfo=UTC)
     assert result.end_at_utc == datetime(2026, 8, 18, 15, tzinfo=UTC)
+
+
+def test_entity_free_calendar_plan_uses_stable_schedule_query():
+    model = RuleBasedAgentModel(now=datetime(2026, 8, 17, tzinfo=UTC))
+    memory = ConversationMemory()
+    question = "이번주 일정알려줘"
+    query_analysis = asyncio.run(
+        model.analyze(question, memory, "Asia/Seoul")
+    )
+    action = asyncio.run(
+        model.plan(question, query_analysis, [], memory)
+    )
+
+    assert query_analysis.question_type == "calendar_search"
+    assert action.tool == "search_calendar"
+    assert action.query == "일정"
+
+
+def test_entity_bearing_calendar_plan_keeps_extracted_entity_query():
+    model = RuleBasedAgentModel(now=datetime(2026, 8, 17, tzinfo=UTC))
+    memory = ConversationMemory()
+    question = "이번주 NAND 일정 알려줘"
+    query_analysis = asyncio.run(
+        model.analyze(question, memory, "Asia/Seoul")
+    )
+    action = asyncio.run(
+        model.plan(question, query_analysis, [], memory)
+    )
+
+    assert action.tool == "search_calendar"
+    assert action.query == "NAND"

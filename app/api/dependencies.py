@@ -225,7 +225,7 @@ def build_demo_container(settings=None) -> ServiceContainer:
         / "corpus.json"
     )
     search = InMemoryMultiSourceSearch.from_path(fixture, registry)
-    model = RuleBasedAgentModel(now=datetime(2026, 8, 16, 12, tzinfo=UTC))
+    model = RuleBasedAgentModel(now=datetime(2026, 8, 17, 0, tzinfo=UTC))
     agentic = MultiSourceAgenticWorkflow(
         search,
         model,

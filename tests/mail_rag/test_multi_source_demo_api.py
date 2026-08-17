@@ -6,6 +6,7 @@ import subprocess
 import sys
 
 import httpx
+import pytest
 
 from app.api.dependencies import build_demo_container
 from app.api.main import create_app
@@ -124,6 +125,68 @@ def test_demo_api_runs_canonical_flow_in_canonical_tool_order():
     ]
     assert "FDC" in body["answer"]
     assert body["quality"]["citation_valid"] is True
+
+
+def test_demo_api_returns_all_current_week_events_for_generic_schedule_question():
+    container = build_demo_container()
+    app = create_app(container)
+
+    response = asyncio.run(
+        post(
+            app,
+            {
+                "user_id": "kim",
+                "message": "이번주 일정알려줘",
+                "response_mode": "fast",
+            },
+        )
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert {item["document_id"] for item in body["references"]} == {
+        "event-kim-20260817",
+        "event-kim-20260818",
+        "event-kim-20260819",
+        "event-kim-20260820",
+        "event-kim-20260821",
+    }
+    assert body["quality"]["citation_valid"] is True
+    assert body["quality"]["limited_answer"] is False
+    assert [
+        action.tool for action, _owner in container.fast.agentic.search.calls
+    ] == ["search_calendar"]
+    assert container.fast.agentic.search.calls[0][0].query == "일정"
+
+
+@pytest.mark.parametrize(
+    ("day", "expected_event_id"),
+    [
+        ("2026-08-03", "event-kim-20260803"),
+        ("2026-08-31", "event-kim-20260831"),
+    ],
+)
+def test_demo_api_retrieves_beginning_and_end_of_month_events(
+    day,
+    expected_event_id,
+):
+    app = create_app(build_demo_container())
+
+    response = asyncio.run(
+        post(
+            app,
+            {
+                "user_id": "kim",
+                "message": f"{day} 일정 알려줘",
+                "response_mode": "fast",
+            },
+        )
+    )
+
+    assert response.status_code == 200
+    assert {
+        item["document_id"] for item in response.json()["references"]
+    } == {expected_event_id}
 
 
 def test_demo_api_follow_up_uses_saved_raw_event_reference():

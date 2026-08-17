@@ -106,7 +106,11 @@ class RuleBasedAgentModel:
             for key in ("product", "issue", "meeting", "person")
             if key in analysis.entities
         ]
-        return " ".join(dict.fromkeys(values)) or question
+        if values:
+            return " ".join(dict.fromkeys(values))
+        if analysis.question_type == "calendar_search":
+            return "일정"
+        return question
 
     @staticmethod
     def _required_sources(analysis):
