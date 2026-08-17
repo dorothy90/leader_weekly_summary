@@ -15,11 +15,11 @@ python scripts/run_multi_source_demo.py
 python scripts/run_multi_source_demo.py "지난주 NAND 회의에서 Action 뭐였어?"
 ```
 
-The canonical run exits with status 0, shows the exact tool order
-`search_mail`, `search_calendar`, `expand_calendar_event`, and
-`search_domain_knowledge`, and prints cited Mail, Calendar, and Domain
-evidence. A custom question exits with status 0 when it returns a grounded,
-non-limited answer; it does not have to use the canonical four-tool path.
+The canonical offline scenario exits with status 0, shows the scripted tool order
+`search_mail`, `search_calendar`, and `search_domain_knowledge`, and prints cited
+Mail, Calendar, and Domain evidence. A custom question uses the configured LLM for
+routing, planning, evidence judging, and answer generation; it does not have to use
+the canonical three-tool path.
 
 ## August 2026 dummy coverage
 

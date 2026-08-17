@@ -5,7 +5,7 @@ from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-LLMProvider = Literal["manus", "openai_compatible"]
+LLMProvider = Literal["openrouter", "manus", "openai_compatible"]
 ManusProfile = Literal[
     "manus-1.6",
     "manus-1.6-lite",
@@ -36,7 +36,7 @@ class EmbeddingEndpointConfig:
 class AISettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    llm_provider: LLMProvider = "manus"
+    llm_provider: LLMProvider = "openrouter"
     manus_api_key: SecretStr = SecretStr("")
     manus_base_url: str = "https://api.manus.ai"
     manus_agent_profile: ManusProfile = "manus-1.6-lite"
@@ -55,6 +55,7 @@ class AISettings(BaseSettings):
 
     openrouter_api_key: SecretStr = SecretStr("")
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    openrouter_llm_model: str = "openrouter/free"
     openrouter_embedding_model: str = "qwen/qwen3-embedding-8b"
     openrouter_request_timeout_seconds: int = Field(
         default=150,
@@ -63,6 +64,17 @@ class AISettings(BaseSettings):
     )
 
     def resolve_llm_endpoint(self) -> LLMEndpointConfig:
+        if self.llm_provider == "openrouter":
+            timeout = float(self.openrouter_request_timeout_seconds)
+            return LLMEndpointConfig(
+                provider="openrouter",
+                api_key=self.openrouter_api_key,
+                base_url=self.openrouter_base_url,
+                model=self.openrouter_llm_model,
+                request_timeout_seconds=timeout,
+                completion_timeout_seconds=timeout,
+                poll_interval_seconds=0.0,
+            )
         if self.llm_provider == "manus":
             return LLMEndpointConfig(
                 provider="manus",

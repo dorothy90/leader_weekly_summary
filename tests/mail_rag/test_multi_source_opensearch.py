@@ -17,6 +17,7 @@ from app.domain.agentic import (
     SourceRequest,
     ToolAction,
 )
+from app.domain.agentic_policy import TypedAgentPolicy
 from app.domain.chat import BM25_FALLBACK_DISCLOSURE, ChatRequest
 from app.domain.evidence import RetrievalFilters
 from app.domain.errors import AppError, ErrorCode
@@ -80,6 +81,7 @@ def analysis(**updates):
 class SequencedIntentAnalyzer:
     def __init__(self, *decisions):
         self.decisions = list(decisions)
+        self.policy = TypedAgentPolicy()
 
     async def analyze(self, question, memory, timezone_name):
         decision = self.decisions.pop(0)
@@ -87,6 +89,58 @@ class SequencedIntentAnalyzer:
             decision,
             timezone_name=timezone_name,
         )
+
+    async def plan(self, question, analysis, observations, memory):
+        del question
+        return self.policy.next_action(analysis, observations, memory)
+
+    async def judge(
+        self,
+        question,
+        analysis,
+        observations,
+        documents,
+        memory,
+        iteration_count,
+    ):
+        del question
+        decision = self.policy.judge(
+            analysis,
+            observations,
+            documents,
+            memory,
+            iteration_count,
+        )
+        if (
+            not decision.sufficient
+            and decision.recommended_action is None
+            and analysis.calendar_detail_required
+        ):
+            event = next(
+                (
+                    item
+                    for item in documents
+                    if item.source_type == "calendar"
+                    and item.content_kind == "event"
+                    and item.source_id
+                ),
+                None,
+            )
+            if event is not None:
+                return decision.model_copy(
+                    update={
+                        "recommended_action": ToolAction(
+                            tool="expand_calendar_event",
+                            event_id=event.source_id,
+                            reason="scripted test expansion",
+                        )
+                    }
+                )
+        return decision
+
+    async def answer(self, question, analysis, documents, missing, memory):
+        del question, analysis, memory
+        return self.policy.answer(documents, missing)
 
 
 def filters_from(body):

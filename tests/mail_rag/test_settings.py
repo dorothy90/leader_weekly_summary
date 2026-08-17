@@ -3,14 +3,36 @@ from pydantic import SecretStr
 from app.config.settings import Settings
 
 
-def test_manus_llm_and_openrouter_embedding_defaults_are_independent():
+def test_openrouter_free_llm_and_embedding_defaults_share_provider_settings():
     settings = Settings(
-        manus_api_key=SecretStr("manus-secret"),
         openrouter_api_key=SecretStr("openrouter-secret"),
     )
 
     llm = settings.resolve_llm_endpoint()
     embedding = settings.resolve_embedding_endpoint()
+
+    assert llm.provider == "openrouter"
+    assert llm.base_url == "https://openrouter.ai/api/v1"
+    assert llm.model == "openrouter/free"
+    assert llm.api_key.get_secret_value() == "openrouter-secret"
+    assert llm.request_timeout_seconds == 150
+    assert llm.completion_timeout_seconds == 150
+    assert llm.poll_interval_seconds == 0
+    assert embedding.provider == "openrouter"
+    assert embedding.base_url == "https://openrouter.ai/api/v1"
+    assert embedding.model == "qwen/qwen3-embedding-8b"
+    assert embedding.api_key.get_secret_value() == "openrouter-secret"
+    assert "openrouter-secret" not in repr(llm)
+    assert "openrouter-secret" not in repr(embedding)
+
+
+def test_manus_llm_can_still_be_selected_explicitly():
+    settings = Settings(
+        llm_provider="manus",
+        manus_api_key=SecretStr("manus-secret"),
+    )
+
+    llm = settings.resolve_llm_endpoint()
 
     assert llm.provider == "manus"
     assert llm.base_url == "https://api.manus.ai"
@@ -19,12 +41,6 @@ def test_manus_llm_and_openrouter_embedding_defaults_are_independent():
     assert llm.request_timeout_seconds == 30
     assert llm.completion_timeout_seconds == 150
     assert llm.poll_interval_seconds == 2
-    assert embedding.provider == "openrouter"
-    assert embedding.base_url == "https://openrouter.ai/api/v1"
-    assert embedding.model == "qwen/qwen3-embedding-8b"
-    assert embedding.api_key.get_secret_value() == "openrouter-secret"
-    assert "manus-secret" not in repr(llm)
-    assert "openrouter-secret" not in repr(embedding)
 
 
 def test_openai_compatible_llm_can_be_selected_without_changing_embedding():
@@ -53,6 +69,7 @@ def test_openai_compatible_llm_can_be_selected_without_changing_embedding():
 
 def test_endpoint_overrides_remain_independent():
     settings = Settings(
+        llm_provider="manus",
         manus_api_key=SecretStr("m-key"),
         manus_base_url="https://manus.example",
         manus_agent_profile="manus-1.6-max",

@@ -555,6 +555,7 @@ class AgentMemoryUpdate(BaseModel):
 class AgentTrace(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    llm_calls: list[BoundedModelText] = Field(default_factory=list, max_length=16)
     tool_calls: list[BoundedModelText] = Field(default_factory=list, max_length=8)
     judge_decisions: list[BoundedModelText] = Field(default_factory=list, max_length=8)
     iteration_count: int = Field(default=0, ge=0, le=4)

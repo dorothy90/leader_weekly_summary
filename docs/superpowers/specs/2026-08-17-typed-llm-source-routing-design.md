@@ -1,9 +1,9 @@
 # Typed LLM Source Routing Design
 
 **Date:** 2026-08-17
-**Status:** Approved for written review
-**Scope:** Multi-source natural-language analysis, source planning, deterministic
-sufficiency checks, demo dependency wiring, and tests. Retrieval backends and the
+**Status:** Superseded by the all-LLM semantic pipeline
+**Scope:** Multi-source natural-language routing, planning, sufficiency judging,
+answer generation, demo dependency wiring, and tests. Retrieval backends and the
 August fixture corpus remain unchanged.
 
 ## Problem
@@ -28,10 +28,11 @@ a safe limited response.
 
 ## Chosen Approach
 
-Introduce a narrow structured analysis contract and a deterministic typed policy.
-The LLM converts natural language to that contract. Server code validates it,
-resolves dates, maps logical sources to allowlisted tools, enforces action bounds,
-and checks evidence completeness without performing intent inference.
+Use one structured model adapter for every semantic stage. The LLM converts natural
+language to a validated intent, selects one allowlisted tool at a time, judges the
+retrieved evidence, and generates the cited answer. Server code validates those
+outputs, resolves dates, injects access controls, and enforces action bounds without
+making semantic decisions.
 
 This replaces the production use of `RuleBasedAgentModel`; it does not replace
 deterministic security, date arithmetic, event expansion, citation validation, or
@@ -77,20 +78,17 @@ must never select a source or tool.
 2. The validated decision is converted to `QueryAnalysis`. Server code maps the
    typed `time_scope` to the existing half-open UTC range using the configured user
    timezone. It never searches the original question for relative-date text.
-3. Source discovery reads only `source_requests[].source`.
-4. Planning selects the next unattempted source request in declared order and maps
-   its logical source through the fixed allowlist to `search_mail`,
-   `search_calendar`, or `search_domain_knowledge`.
-5. A `previous_event` decision uses the same-owner stable event reference from
-   memory and emits `expand_calendar_event`; no Korean reference-phrase list is
-   consulted.
-6. `calendar_detail_required` causes at most one deterministic expansion of the
-   first authorized stable Calendar event.
-7. Judging compares requested source literals with the normalized evidence source
-   types. It never scans `information_needs`, the question, titles, or text for
-   intent keywords.
-8. Answer fallback remains extractive and citation-bound, but it receives typed
-   missing sources rather than re-inferring requirements from text.
+3. Source discovery exposes the validated logical sources without choosing tools.
+4. The planner LLM receives the question, analysis, bounded observations, and safe
+   memory, then returns one validated `ToolAction` or `null`.
+5. The executor rejects non-allowlisted, duplicate, over-budget, or unauthorized
+   actions and injects physical aliases and owner filters itself.
+6. The judge LLM receives normalized evidence and returns sufficiency, missing
+   information, and at most one validated recommended action.
+7. A recommended action loops through the executor and judge within the fixed
+   iteration bound.
+8. The answer LLM receives only normalized authorized evidence and emits cited
+   prose; citation IDs are validated by the server.
 
 ## Model Failure and Safe Fallback
 
@@ -99,9 +97,9 @@ bounded retry count, return an analysis-unavailable result with no source reques
 The graph performs zero searches, marks execution limited, and returns a sanitized
 message explaining that the question could not be structured safely.
 
-Planning or judging output that is invalid, selects an undeclared source, repeats an
-action, or exceeds the action bound is rejected by the deterministic policy. It may
-reduce the answer to a limited result but may not broaden retrieval.
+Planning or judging output that is invalid, repeats an action, or exceeds the action
+bound is rejected by fail-closed server validation. It may reduce the answer to a
+limited result but may not broaden retrieval.
 
 Date arithmetic, owner filters, alias selection, cancellation checks, stable-event
 authorization, metadata limits, evidence normalization, and citation validation
@@ -109,10 +107,10 @@ remain deterministic fail-closed controls.
 
 ## Production and Demo Wiring
 
-Production continues using the configured LLM gateway, but no keyword baseline is
-created or merged. The structured model interprets the question once; planning and
-judging then use the typed deterministic policy. The graph uses that same policy
-whether analysis is production- or test-provided.
+Production uses the configured LLM gateway for four semantic stages: routing,
+planning, judging, and answer generation. No keyword baseline or typed semantic
+policy is created or merged. Replanning repeats the judge stage only when the model
+requests another validated tool action.
 
 Arbitrary natural-language demo questions require a configured LLM. This is an
 intentional change from the secret-free free-form demo: semantic understanding

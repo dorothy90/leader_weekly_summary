@@ -14,48 +14,41 @@ from app.persistence.conversations import ConversationMemory
 from app.retrieval.embedding import OpenAIEmbeddingGateway
 
 
-def test_ai_gateways_use_manus_for_llm_and_openrouter_for_embeddings(
+def test_ai_gateways_use_openrouter_free_for_llm_and_embeddings(
     monkeypatch,
 ):
-    manus_clients = []
-    openai_clients = []
-
-    class FakeAsyncHTTPClient:
-        def __init__(self, **kwargs):
-            self.kwargs = kwargs
-            manus_clients.append(self)
+    clients = []
 
     class FakeAsyncOpenAI:
         def __init__(self, **kwargs):
             self.kwargs = kwargs
-            openai_clients.append(self)
+            clients.append(self)
 
-    monkeypatch.setattr("httpx.AsyncClient", FakeAsyncHTTPClient)
     monkeypatch.setattr("openai.AsyncOpenAI", FakeAsyncOpenAI)
     settings = Settings(
-        manus_api_key=SecretStr("manus-secret"),
         openrouter_api_key=SecretStr("openrouter-secret"),
     )
 
     llm, embeddings = build_ai_gateways(settings)
 
-    assert isinstance(llm, ManusLLMGateway)
-    assert llm.client is manus_clients[0]
-    assert llm.profile == "manus-1.6-lite"
-    assert manus_clients[0].kwargs == {
-        "base_url": "https://api.manus.ai",
-        "headers": {"x-manus-api-key": "manus-secret"},
-        "timeout": 30.0,
-    }
+    assert isinstance(llm, OpenAILLMGateway)
+    assert llm.client is clients[0]
+    assert llm.model == "openrouter/free"
+    assert llm.native_structured_output is True
     assert isinstance(embeddings, OpenAIEmbeddingGateway)
-    assert [client.kwargs for client in openai_clients] == [
+    assert [client.kwargs for client in clients] == [
+        {
+            "api_key": "openrouter-secret",
+            "base_url": "https://openrouter.ai/api/v1",
+            "timeout": 150.0,
+        },
         {
             "api_key": "openrouter-secret",
             "base_url": "https://openrouter.ai/api/v1",
             "timeout": 150.0,
         },
     ]
-    assert embeddings.client is openai_clients[0]
+    assert embeddings.client is clients[1]
     assert embeddings.model == "qwen/qwen3-embedding-8b"
 
 
@@ -82,6 +75,7 @@ def test_openai_compatible_selection_builds_existing_llm_gateway(
 
     assert isinstance(llm, OpenAILLMGateway)
     assert llm.model == "future-model"
+    assert llm.native_structured_output is False
     assert llm.client is clients[0]
     assert clients[0].kwargs == {
         "api_key": "llm-secret",
@@ -103,7 +97,10 @@ def test_demo_container_builds_manus_analyzer_for_configured_llm_key(
             clients.append(self)
 
     monkeypatch.setattr("httpx.AsyncClient", FakeAsyncHTTPClient)
-    settings = Settings(manus_api_key=SecretStr("configured-key"))
+    settings = Settings(
+        llm_provider="manus",
+        manus_api_key=SecretStr("configured-key"),
+    )
 
     container = build_demo_container(settings)
 
@@ -120,7 +117,7 @@ def test_demo_container_builds_manus_analyzer_for_configured_llm_key(
 
 
 def test_demo_container_without_llm_key_reports_unavailable_analyzer():
-    container = build_demo_container(Settings(manus_api_key=""))
+    container = build_demo_container(Settings(openrouter_api_key=""))
 
     assert isinstance(container.agentic.analyzer, UnavailableAnalyzer)
     status = asyncio.run(container.readiness.check())

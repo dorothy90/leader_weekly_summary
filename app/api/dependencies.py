@@ -89,11 +89,11 @@ def build_llm_gateway(settings):
     endpoint = settings.resolve_llm_endpoint()
     api_key = endpoint.api_key.get_secret_value().strip()
     if not api_key:
-        required = (
-            "MANUS_API_KEY"
-            if endpoint.provider == "manus"
-            else "OPENAI_COMPATIBLE_LLM_API_KEY"
-        )
+        required = {
+            "openrouter": "OPENROUTER_API_KEY",
+            "manus": "MANUS_API_KEY",
+            "openai_compatible": "OPENAI_COMPATIBLE_LLM_API_KEY",
+        }[endpoint.provider]
         raise RuntimeError(f"{required} is required")
     if endpoint.provider == "manus":
         client = httpx.AsyncClient(
@@ -116,6 +116,7 @@ def build_llm_gateway(settings):
             timeout=endpoint.request_timeout_seconds,
         ),
         endpoint.model,
+        native_structured_output=endpoint.provider == "openrouter",
     )
 
 

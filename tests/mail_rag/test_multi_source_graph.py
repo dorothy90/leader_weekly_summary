@@ -46,11 +46,64 @@ class StaticIntentAnalyzer:
     def __init__(self, decision, *, now=NOW):
         self.decision = decision
         self.now = now
+        self.policy = TypedAgentPolicy()
 
     async def analyze(self, question, memory, timezone_name):
         return QueryAnalysis.from_intent(
             self.decision, now=self.now, timezone_name=timezone_name
         )
+
+    async def plan(self, question, analysis, observations, memory):
+        del question
+        return self.policy.next_action(analysis, observations, memory)
+
+    async def judge(
+        self,
+        question,
+        analysis,
+        observations,
+        documents,
+        memory,
+        iteration_count,
+    ):
+        del question
+        decision = self.policy.judge(
+            analysis,
+            observations,
+            documents,
+            memory,
+            iteration_count,
+        )
+        if (
+            not decision.sufficient
+            and decision.recommended_action is None
+            and analysis.calendar_detail_required
+        ):
+            event = next(
+                (
+                    item
+                    for item in documents
+                    if item.source_type == "calendar"
+                    and item.content_kind == "event"
+                    and item.source_id
+                ),
+                None,
+            )
+            if event is not None:
+                return decision.model_copy(
+                    update={
+                        "recommended_action": ToolAction(
+                            tool="expand_calendar_event",
+                            event_id=event.source_id,
+                            reason="scripted test expansion",
+                        )
+                    }
+                )
+        return decision
+
+    async def answer(self, question, analysis, documents, missing, memory):
+        del question, analysis, memory
+        return self.policy.answer(documents, missing)
 
 
 def analyzer(*requests, **decision_fields):
@@ -85,9 +138,73 @@ class RaisingIntentLLM:
         raise self.failure
 
 
+class StageLLM:
+    def __init__(self):
+        self.schemas = []
+
+    async def complete_model(self, system, user, schema):
+        self.schemas.append(schema.__name__)
+        if schema.__name__ == "PlanningDecision":
+            return {
+                "action": {
+                    "tool": "search_calendar",
+                    "query": "이번 주 일정",
+                    "reason": "일정 근거 검색",
+                },
+                "reason": "calendar evidence required",
+            }
+        if schema.__name__ == "JudgeDecision":
+            return {
+                "sufficient": True,
+                "reason": "calendar evidence found",
+                "missing_information": [],
+                "recommended_action": None,
+            }
+        if schema.__name__ == "AnswerDecision":
+            return {"answer": "이번 주 일정입니다. [S1]"}
+        raise AssertionError(schema)
+
+
 class UnavailableAnalyzer:
     async def analyze(self, question, memory, timezone_name):
         return QueryAnalysis.unavailable()
+
+
+class AsyncPolicyAdapter:
+    def __init__(self, intent_analyzer, policy):
+        self.intent_analyzer = intent_analyzer
+        self.policy = policy
+
+    async def analyze(self, question, memory, timezone_name):
+        return await self.intent_analyzer.analyze(
+            question, memory, timezone_name
+        )
+
+    async def plan(self, question, analysis, observations, memory):
+        del question
+        return self.policy.next_action(analysis, observations, memory)
+
+    async def judge(
+        self,
+        question,
+        analysis,
+        observations,
+        documents,
+        memory,
+        iteration_count,
+    ):
+        del question
+        return self.policy.judge(
+            analysis,
+            observations,
+            documents,
+            memory,
+            iteration_count,
+        )
+
+    async def answer(self, question, analysis, documents, missing, memory):
+        del question, analysis, memory
+        return self.policy.answer(documents, missing)
 
 
 class RecordingSearch:
@@ -188,6 +305,136 @@ def test_structured_analyzer_serializes_only_bounded_safe_memory():
         },
         "current_topic": "trusted topic",
     }
+
+
+def test_structured_agent_uses_llm_for_plan_judge_and_answer():
+    llm = StageLLM()
+    model = StructuredAgentModel(llm, attempts=1)
+    query_analysis = QueryAnalysis.from_intent(
+        IntentDecision(
+            intent="weekly_schedule",
+            source_requests=[
+                SourceRequest(source="calendar", query="이번 주 일정")
+            ],
+            time_scope="current_week",
+        ),
+        now=NOW,
+        timezone_name="Asia/Seoul",
+    )
+    document = SearchDocument(
+        source_type="calendar",
+        document_id="event-kim-20260817",
+        source_id="event-kim-20260817",
+        parent_event_id="event-kim-20260817",
+        content_kind="event",
+        title="NAND 수율 점검 일정",
+        text="NAND 수율 점검 회의",
+        score=1.0,
+    )
+
+    action = asyncio.run(
+        model.plan("이번 주 일정 뭐야?", query_analysis, [], ConversationMemory())
+    )
+    decision = asyncio.run(
+        model.judge(
+            "이번 주 일정 뭐야?",
+            query_analysis,
+            [],
+            [document],
+            ConversationMemory(),
+            1,
+        )
+    )
+    answer = asyncio.run(
+        model.answer(
+            "이번 주 일정 뭐야?",
+            query_analysis,
+            [document],
+            [],
+            ConversationMemory(),
+        )
+    )
+
+    assert action.tool == "search_calendar"
+    assert decision.sufficient is True
+    assert answer == "이번 주 일정입니다. [S1]"
+    assert llm.schemas == ["PlanningDecision", "JudgeDecision", "AnswerDecision"]
+
+
+def test_graph_uses_agent_for_every_semantic_stage():
+    class RecordingAgent:
+        def __init__(self):
+            self.calls = []
+
+        async def analyze(self, question, memory, timezone_name):
+            self.calls.append("routing")
+            return QueryAnalysis.from_intent(
+                IntentDecision(
+                    intent="weekly_schedule",
+                    source_requests=[
+                        SourceRequest(source="calendar", query="이번 주 일정")
+                    ],
+                    time_scope="current_week",
+                ),
+                now=NOW,
+                timezone_name=timezone_name,
+            )
+
+        async def plan(self, question, analysis, observations, memory):
+            self.calls.append("planner")
+            return ToolAction(
+                tool="search_calendar",
+                query="이번 주 일정",
+                reason="LLM selected calendar",
+            )
+
+        async def judge(
+            self,
+            question,
+            analysis,
+            observations,
+            documents,
+            memory,
+            iteration_count,
+        ):
+            self.calls.append("judge")
+            return JudgeDecision(
+                sufficient=True,
+                reason="calendar evidence is sufficient",
+            )
+
+        async def answer(self, question, analysis, documents, missing, memory):
+            self.calls.append("answer")
+            return "이번 주 일정입니다. [S1]"
+
+    class CalendarSearch:
+        async def execute(self, action, policy, analysis, request_filters=None):
+            return SearchResult(
+                tool=action.tool,
+                query=action.query,
+                documents=[
+                    SearchDocument(
+                        source_type="calendar",
+                        document_id="event-kim-20260817",
+                        source_id="event-kim-20260817",
+                        parent_event_id="event-kim-20260817",
+                        content_kind="event",
+                        title="NAND 수율 점검 일정",
+                        text="NAND 수율 점검 회의",
+                        score=1.0,
+                    )
+                ],
+                total_hits=1,
+                retrieval_mode="deterministic",
+            )
+
+    agent = RecordingAgent()
+    workflow = MultiSourceAgenticWorkflow(CalendarSearch(), agent)
+
+    result = invoke(workflow, "이번 주 일정 뭐야?")
+
+    assert agent.calls == ["routing", "planner", "judge", "answer"]
+    assert result.answer == "이번 주 일정입니다. [S1]"
 
 
 @pytest.mark.parametrize("server_owned_field", ["owner", "index", "tool"])
@@ -294,7 +541,7 @@ def invoke(workflow, message, memory=None):
     )
 
 
-def test_mail_calendar_expand_domain_canonical_flow():
+def test_mail_calendar_domain_canonical_flow_avoids_redundant_expansion():
     workflow, search = build()
 
     result = invoke(workflow, QUESTION)
@@ -303,7 +550,6 @@ def test_mail_calendar_expand_domain_canonical_flow():
     assert tools == [
         "search_mail",
         "search_calendar",
-        "expand_calendar_event",
         "search_domain_knowledge",
     ]
     assert "FDC" in result.answer
@@ -653,8 +899,10 @@ def test_duplicate_search_is_blocked_without_a_duplicate_backend_call():
     )
     workflow = MultiSourceAgenticWorkflow(
         search,
-        analyzer(SourceRequest(source="mail", query="NAND")),
-        policy=RepeatingPolicy(),
+        AsyncPolicyAdapter(
+            analyzer(SourceRequest(source="mail", query="NAND")),
+            RepeatingPolicy(),
+        ),
     )
 
     result = invoke(workflow, "NAND 메일 찾아줘")
@@ -708,8 +956,10 @@ def test_semantic_iteration_limit_is_exactly_four_and_disclosed():
     )
     workflow = MultiSourceAgenticWorkflow(
         search,
-        analyzer(SourceRequest(source="mail", query="missing")),
-        policy=ExhaustingPolicy(),
+        AsyncPolicyAdapter(
+            analyzer(SourceRequest(source="mail", query="missing")),
+            ExhaustingPolicy(),
+        ),
     )
 
     result = invoke(workflow, "NAND 메일 찾아줘")
@@ -759,8 +1009,12 @@ def test_unique_event_expansions_cannot_bypass_the_total_action_bound():
     )
     workflow = MultiSourceAgenticWorkflow(
         search,
-        analyzer(SourceRequest(source="calendar", query="missing-calendar")),
-        policy=ExpandingPolicy(),
+        AsyncPolicyAdapter(
+            analyzer(
+                SourceRequest(source="calendar", query="missing-calendar")
+            ),
+            ExpandingPolicy(),
+        ),
     )
 
     result = invoke(workflow, "그 회의 Action 알려줘")
@@ -1034,8 +1288,10 @@ def test_hostile_policy_output_is_sanitized_from_answer_trace_and_memory():
     )
     workflow = MultiSourceAgenticWorkflow(
         search,
-        analyzer(SourceRequest(source="mail", query="NAND")),
-        policy=HostileJudgePolicy(),
+        AsyncPolicyAdapter(
+            analyzer(SourceRequest(source="mail", query="NAND")),
+            HostileJudgePolicy(),
+        ),
     )
 
     result = invoke(workflow, "NAND 메일 찾아줘")

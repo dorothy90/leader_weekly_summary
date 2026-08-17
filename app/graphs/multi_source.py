@@ -20,7 +20,6 @@ from app.domain.agentic import (
     normalize_stable_event_id,
     search_document_identity,
 )
-from app.domain.agentic_policy import TypedAgentPolicy
 from app.domain.chat import (
     ChatRequest,
     ExecutionMetadata,
@@ -88,12 +87,11 @@ class MultiSourceAgenticWorkflow:
         search: MultiSourceSearch,
         analyzer: AgentAnalyzer,
         *,
-        policy: TypedAgentPolicy | None = None,
         timezone_name: str | None = None,
     ):
         self.search = search
         self.analyzer = analyzer
-        self.policy = policy or TypedAgentPolicy()
+        self.agent = analyzer
         self.timezone_name = (
             timezone_name or Settings().default_user_timezone
         )
@@ -151,25 +149,41 @@ class MultiSourceAgenticWorkflow:
             state["conversation"],
             self.timezone_name,
         )
-        return {"analysis": QueryAnalysis.model_validate(analysis)}
+        trace = AgentTrace.model_validate(state.get("trace") or {})
+        return {
+            "analysis": QueryAnalysis.model_validate(analysis),
+            "trace": trace.model_copy(
+                update={"llm_calls": [*trace.llm_calls, "routing"][-16:]}
+            ),
+        }
 
     async def _source_discovery(self, state: MultiSourceState) -> dict:
         return {
-            "candidates": self.policy.required_sources(state["analysis"])
+            "candidates": [
+                item.source for item in state["analysis"].source_requests
+            ]
         }
 
     async def _planner(self, state: MultiSourceState) -> dict:
-        action = self.policy.next_action(
-            state["analysis"],
+        analysis = QueryAnalysis.model_validate(state["analysis"])
+        if analysis.analysis_status != "ready":
+            return {"current_action": None}
+        action = await self.agent.plan(
+            state["request"].message,
+            analysis,
             state.get("observations", []),
             state["conversation"],
         )
+        trace = AgentTrace.model_validate(state.get("trace") or {})
         return {
             "current_action": (
                 ToolAction.model_validate(action)
                 if action is not None
                 else None
-            )
+            ),
+            "trace": trace.model_copy(
+                update={"llm_calls": [*trace.llm_calls, "planner"][-16:]}
+            ),
         }
 
     async def _execute_source(
@@ -246,60 +260,6 @@ class MultiSourceAgenticWorkflow:
         iteration_count = state.get("iteration_count", 0) + semantic_increment
         tool_calls = [*trace.tool_calls, action.tool]
 
-        documents = list(result.documents)
-        if (
-            action.tool == "search_calendar"
-            and analysis.calendar_detail_required
-            and len(tool_calls) < MAX_ITERATIONS
-        ):
-            event_ids = list(
-                dict.fromkeys(
-                    relation_id
-                    for item in documents
-                    if (relation_id := self._calendar_relation_id(item))
-                    is not None
-                )
-            )
-            for event_id in event_ids[:1]:
-                expansion = ToolAction(
-                    tool="expand_calendar_event",
-                    event_id=event_id,
-                    reason="회의 내용 요구에 따른 deterministic 확장",
-                )
-                expansion_fingerprint = expansion.fingerprint(analysis)
-                if expansion_fingerprint in fingerprints:
-                    continue
-                expanded = await self._execute_source(
-                    expansion,
-                    state,
-                    analysis,
-                )
-                fingerprints.add(expansion_fingerprint)
-                tool_calls.append(expansion.tool)
-                documents.extend(expanded.documents)
-                deduplicated = self._deduplicate_documents(documents)
-                result = result.model_copy(
-                    update={
-                        "documents": deduplicated,
-                        "total_hits": len(deduplicated),
-                        "disclosures": list(
-                            dict.fromkeys(
-                                [*result.disclosures, *expanded.disclosures]
-                            )
-                        )[:4],
-                        "retrieval_mode": self._combine_retrieval_modes(
-                            result.retrieval_mode,
-                            expanded.retrieval_mode,
-                        ),
-                        "error_code": (
-                            result.error_code or expanded.error_code
-                        ),
-                        "retryable": (
-                            result.retryable or expanded.retryable
-                        ),
-                    }
-                )
-
         return {
             "current_result": result,
             "fingerprints": sorted(fingerprints),
@@ -354,15 +314,25 @@ class MultiSourceAgenticWorkflow:
         }
 
     async def _judge(self, state: MultiSourceState) -> dict:
-        decision = JudgeDecision.model_validate(
-            self.policy.judge(
-                state["analysis"],
-                state.get("observations", []),
-                state.get("documents", []),
-                state["conversation"],
-                state.get("iteration_count", 0),
+        analysis = QueryAnalysis.model_validate(state["analysis"])
+        if analysis.analysis_status != "ready":
+            decision = JudgeDecision(
+                sufficient=False,
+                reason="analysis unavailable",
+                missing_information=[],
+                recommended_action=None,
             )
-        )
+        else:
+            decision = JudgeDecision.model_validate(
+                await self.agent.judge(
+                    state["request"].message,
+                    analysis,
+                    state.get("observations", []),
+                    state.get("documents", []),
+                    state["conversation"],
+                    state.get("iteration_count", 0),
+                )
+            )
         trace = AgentTrace.model_validate(state.get("trace") or {})
         safe_reason = sanitize_text(decision.reason)[:500] or "judge_result_redacted"
         return {
@@ -372,17 +342,19 @@ class MultiSourceAgenticWorkflow:
                     "judge_decisions": [
                         *trace.judge_decisions,
                         safe_reason,
-                    ][-8:]
+                    ][-8:],
+                    "llm_calls": (
+                        [*trace.llm_calls, "judge"][-16:]
+                        if analysis.analysis_status == "ready"
+                        else trace.llm_calls
+                    ),
                 }
             ),
         }
 
     async def _replanner(self, state: MultiSourceState) -> dict:
-        action = self.policy.next_action(
-            state["analysis"],
-            state.get("observations", []),
-            state["conversation"],
-        )
+        decision = JudgeDecision.model_validate(state["judge_result"])
+        action = decision.recommended_action
         return {
             "current_action": (
                 ToolAction.model_validate(action) if action is not None else None
@@ -412,7 +384,15 @@ class MultiSourceAgenticWorkflow:
         ]
         decision = JudgeDecision.model_validate(state["judge_result"])
         missing = self._safe_missing_information(decision.missing_information)
-        answer = sanitize_text(self.policy.answer(documents, missing))
+        answer = sanitize_text(
+            await self.agent.answer(
+                state["request"].message,
+                analysis,
+                documents,
+                missing,
+                state["conversation"],
+            )
+        )
         if missing and "확인하지 못한 항목:" not in answer:
             answer = (
                 f"{answer}\n\n확인하지 못한 항목: "
@@ -429,13 +409,12 @@ class MultiSourceAgenticWorkflow:
             validation = self.validator.validate(
                 answer, evidence, state["policy"]
             )
-            if not validation.valid:
-                answer = self.policy.answer(documents, missing)
-                answer = self.validator.normalize(sanitize_text(answer), evidence)
-                validation = self.validator.validate(
-                    answer, evidence, state["policy"]
-                )
             citation_valid = validation.valid
+
+        trace = AgentTrace.model_validate(state.get("trace") or {})
+        trace = trace.model_copy(
+            update={"llm_calls": [*trace.llm_calls, "answer"][-16:]}
+        )
 
         limited = bool(
             not evidence
@@ -453,7 +432,6 @@ class MultiSourceAgenticWorkflow:
             if LIMIT_DISCLOSURE not in answer:
                 answer = f"{answer}\n\n{LIMIT_DISCLOSURE}".strip()
 
-        trace = AgentTrace.model_validate(state.get("trace") or {})
         source_error_code = state.get("source_error_code")
         if source_error_code:
             execution = ExecutionMetadata(
@@ -505,6 +483,7 @@ class MultiSourceAgenticWorkflow:
             "limited_answer": limited,
             "disclosures": disclosures[:4],
             "execution": execution,
+            "trace": trace,
         }
 
     async def _save_memory(self, state: MultiSourceState) -> dict:
@@ -528,10 +507,10 @@ class MultiSourceAgenticWorkflow:
             ),
             None,
         )
-        deterministic_missing = self._safe_missing_information(
-            self.policy.missing_information(analysis, documents)
+        judged_missing = self._safe_missing_information(
+            JudgeDecision.model_validate(state["judge_result"]).missing_information
         )
-        unresolved = deterministic_missing or list(
+        unresolved = judged_missing or list(
             state["conversation"].unresolved_information
         )
         trace = AgentTrace.model_validate(state.get("trace") or {})

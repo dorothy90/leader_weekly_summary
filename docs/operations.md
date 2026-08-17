@@ -5,10 +5,10 @@
 `POST /v1/chat` has one execution path: `MultiSourceAgenticWorkflow`. The
 typed agent policy chooses among allowlisted Mail, Calendar, Wiki, statistics, and
 domain-knowledge tools; clients cannot choose a route or index. Execution is
-bounded to four agent iterations and eight evidence objects. Manus analysis
-uses one task attempt with a 150-second completion limit; OpenRouter embedding
-requests have a 150-second default safety limit. These limits are safety
-ceilings, not production latency guarantees.
+bounded to four agent iterations and eight evidence objects. OpenRouter free
+analysis uses two bounded attempts; OpenRouter LLM and embedding requests have
+a 150-second default safety limit. These limits are safety ceilings, not
+production latency guarantees.
 
 Every OpenSearch query and MongoDB lookup is scoped by exact request-body `user_id`. `team` is only a facet. Missing owners remain invisible; never infer an owner from team, index, mail text, or path.
 
@@ -70,28 +70,23 @@ first verifies a same-owner, active, non-cancelled parent event by its validated
 canonical ID without applying requested attachment/output filters. It queries
 the related bundle only after that parent gate succeeds.
 
-`MANUS_API_KEY`, `OPENROUTER_API_KEY`, a reachable `MONGO_URI`, and reachable
-Manus, OpenRouter, and OpenSearch endpoints are required for normal service
-operation. The default split AI configuration is:
+`OPENROUTER_API_KEY`, a reachable `MONGO_URI`, and reachable OpenRouter and
+OpenSearch endpoints are required for normal service operation. The default
+AI configuration is:
 
 ```dotenv
-LLM_PROVIDER=manus
-MANUS_API_KEY=<secret>
-MANUS_BASE_URL=https://api.manus.ai
-MANUS_AGENT_PROFILE=manus-1.6-lite
-MANUS_REQUEST_TIMEOUT_SECONDS=30
-MANUS_TASK_TIMEOUT_SECONDS=150
-MANUS_POLL_INTERVAL_SECONDS=2
+LLM_PROVIDER=openrouter
 OPENROUTER_API_KEY=<secret>
 OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+OPENROUTER_LLM_MODEL=openrouter/free
 OPENROUTER_EMBEDDING_MODEL=qwen/qwen3-embedding-8b
 OPENROUTER_REQUEST_TIMEOUT_SECONDS=150
 ```
 
-The application never silently falls back from Manus to another LLM. A Manus
-failure produces the existing bounded unavailable-analysis response. To switch
-later to an OpenAI-compatible LLM without changing the OpenRouter embedding
-provider, configure:
+The application never silently falls back from OpenRouter to Manus, keyword
+routing, or another LLM. A failed free-model analysis produces the existing
+bounded unavailable-analysis response. To switch later to an OpenAI-compatible
+LLM without changing the OpenRouter embedding provider, configure:
 
 ```dotenv
 LLM_PROVIDER=openai_compatible
@@ -137,9 +132,8 @@ created legacy jobs; operating a legacy worker requires separate, explicit
 workflow wiring and is outside the direct chat service container.
 
 Terminate API processes gracefully during deployment. Set
-`MANUS_REQUEST_TIMEOUT_SECONDS` for individual Manus HTTP requests,
-`MANUS_TASK_TIMEOUT_SECONDS` for the complete asynchronous task, and
-`OPENROUTER_REQUEST_TIMEOUT_SECONDS` for embedding requests.
+`OPENROUTER_REQUEST_TIMEOUT_SECONDS` for LLM and embedding requests. Manus
+timeout settings apply only when `LLM_PROVIDER=manus` is explicitly selected.
 
 ## RAG verification console
 
@@ -196,15 +190,17 @@ curl --fail --silent http://127.0.0.1:8000/ready
 `/ready` returns success only after MongoDB ping, OpenSearch cluster health,
 and configured alias checks pass, including `MAIL_INDEX_ALIAS` and
 `CALENDAR_INDEX_ALIAS`. With `MULTI_SOURCE_DEMO=true`, readiness instead
-reports the in-memory OpenSearch, Mongo, alias, and rule-based agent
+reports the in-memory OpenSearch, Mongo, alias, and configured agent-model
 dependencies as ready without external probes. Before production cutover,
 also verify one controlled embedding and LLM request without logging inputs or
 outputs.
 
 Use `MultiSource_Production_Environment_Test.ipynb` with the project Python
-kernel to run the safe configuration, Manus Lite, and OpenRouter embedding
-checks independently before the full application check. Clear every notebook
-output and execution count before committing the file.
+kernel to run the real OpenRouter free LLM, embedding, and multi-index
+application path. A successful simple schedule turn reports the ordered LLM stages
+`routing`, `planner`, `judge`, and `answer` in `agent_trace.llm_calls`. Replanning
+adds another judge call for each extra tool round. Clear every notebook output and
+execution count before committing the file.
 
 For a failed or cancelled job, call `POST /v1/research/{job_id}/retry` with the verified owner in the body. For a stuck running job, first confirm that no worker still owns its lease; the worker will reclaim it after expiry. Do not edit lease tokens or job owners manually. Cancellation is requested through the API so queued/running transitions remain consistent.
 

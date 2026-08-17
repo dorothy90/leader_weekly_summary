@@ -1,0 +1,28 @@
+{
+  "cases": [
+    {
+      "question": "이번주 일정알려줘",
+      "expected_sources": ["calendar"],
+      "expected_time_scope": "current_week",
+      "calendar_detail_required": false
+    },
+    {
+      "question": "이번주 일정 뭐야?",
+      "expected_sources": ["calendar"],
+      "expected_time_scope": "current_week",
+      "calendar_detail_required": false
+    },
+    {
+      "question": "이번주 일정이 뭔지 알려줘",
+      "expected_sources": ["calendar"],
+      "expected_time_scope": "current_week",
+      "calendar_detail_required": false
+    },
+    {
+      "question": "이번 주 스케줄 보여줘",
+      "expected_sources": ["calendar"],
+      "expected_time_scope": "current_week",
+      "calendar_detail_required": false
+    }
+  ]
+}

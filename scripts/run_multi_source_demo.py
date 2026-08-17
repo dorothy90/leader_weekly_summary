@@ -38,7 +38,6 @@ SCENARIO_QUESTIONS: dict[ScenarioName, tuple[str, ...]] = {
 CANONICAL_TOOLS = [
     "search_mail",
     "search_calendar",
-    "expand_calendar_event",
     "search_domain_knowledge",
 ]
 _SAFE_ERROR = "요청을 처리할 수 없습니다."
@@ -82,11 +81,11 @@ def _complete(body) -> bool:
 
 def _missing_llm_key_message(settings: Settings) -> str:
     endpoint = settings.resolve_llm_endpoint()
-    required = (
-        "MANUS_API_KEY"
-        if endpoint.provider == "manus"
-        else "OPENAI_COMPATIBLE_LLM_API_KEY"
-    )
+    required = {
+        "openrouter": "OPENROUTER_API_KEY",
+        "manus": "MANUS_API_KEY",
+        "openai_compatible": "OPENAI_COMPATIBLE_LLM_API_KEY",
+    }[endpoint.provider]
     return f"자유 형식 데모 질문에는 {required} 설정이 필요합니다."
 
 

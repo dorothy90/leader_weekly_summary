@@ -154,7 +154,6 @@ def test_demo_api_runs_canonical_flow_in_canonical_tool_order():
     assert body["agent_trace"]["tool_calls"] == [
         "search_mail",
         "search_calendar",
-        "expand_calendar_event",
         "search_domain_knowledge",
     ]
     assert {item["source_type"] for item in body["references"]} == {
@@ -165,7 +164,6 @@ def test_demo_api_runs_canonical_flow_in_canonical_tool_order():
     assert [action.tool for action, _owner in container.agentic.search.calls] == [
         "search_mail",
         "search_calendar",
-        "expand_calendar_event",
         "search_domain_knowledge",
     ]
     assert "FDC" in body["answer"]
@@ -301,10 +299,12 @@ def test_demo_api_public_response_exposes_only_bounded_agent_trace():
         "execution",
     }
     assert set(body["agent_trace"]) == {
+        "llm_calls",
         "tool_calls",
         "judge_decisions",
         "iteration_count",
     }
+    assert len(body["agent_trace"]["llm_calls"]) <= 16
     assert len(body["agent_trace"]["tool_calls"]) <= 8
     assert len(body["agent_trace"]["judge_decisions"]) <= 8
     assert body["agent_trace"]["iteration_count"] <= 4
@@ -413,7 +413,7 @@ def test_demo_cli_runs_canonical_scenario_without_external_services():
     assert "Sources:" in result.stdout
     assert (
         "Tool calls: search_mail -> search_calendar -> "
-        "expand_calendar_event -> search_domain_knowledge"
+        "search_domain_knowledge"
     ) in result.stdout
     assert "Traceback" not in result.stdout + result.stderr
 
@@ -449,7 +449,7 @@ def test_free_form_demo_without_llm_key_fails_safely():
     )
 
     assert result.returncode == 2
-    assert "MANUS_API_KEY" in result.stderr
+    assert "OPENROUTER_API_KEY" in result.stderr
     assert "Traceback" not in result.stdout + result.stderr
 
 

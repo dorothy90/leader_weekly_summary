@@ -2,7 +2,13 @@ from collections import deque
 from datetime import date, datetime
 from typing import Iterable, Literal
 
-from app.domain.agentic import IntentDecision, QueryAnalysis, SourceRequest
+from app.domain.agentic import (
+    IntentDecision,
+    QueryAnalysis,
+    SourceRequest,
+    ToolAction,
+)
+from app.domain.agentic_policy import TypedAgentPolicy
 
 
 ScenarioName = Literal[
@@ -85,6 +91,7 @@ class StaticIntentAnalyzer:
             IntentDecision.model_validate(decision) for decision in decisions
         )
         self.now = now
+        self.policy = TypedAgentPolicy()
 
     async def analyze(self, question, memory, timezone_name):
         del question, memory
@@ -95,6 +102,58 @@ class StaticIntentAnalyzer:
             now=self.now,
             timezone_name=timezone_name,
         )
+
+    async def plan(self, question, analysis, observations, memory):
+        del question
+        return self.policy.next_action(analysis, observations, memory)
+
+    async def judge(
+        self,
+        question,
+        analysis,
+        observations,
+        documents,
+        memory,
+        iteration_count,
+    ):
+        del question
+        decision = self.policy.judge(
+            analysis,
+            observations,
+            documents,
+            memory,
+            iteration_count,
+        )
+        if (
+            not decision.sufficient
+            and decision.recommended_action is None
+            and analysis.calendar_detail_required
+        ):
+            event = next(
+                (
+                    item
+                    for item in documents
+                    if item.source_type == "calendar"
+                    and item.content_kind == "event"
+                    and item.source_id
+                ),
+                None,
+            )
+            if event is not None:
+                return decision.model_copy(
+                    update={
+                        "recommended_action": ToolAction(
+                            tool="expand_calendar_event",
+                            event_id=event.source_id,
+                            reason="scripted demo expansion",
+                        )
+                    }
+                )
+        return decision
+
+    async def answer(self, question, analysis, documents, missing, memory):
+        del question, analysis, memory
+        return self.policy.answer(documents, missing)
 
 
 class UnavailableAnalyzer:

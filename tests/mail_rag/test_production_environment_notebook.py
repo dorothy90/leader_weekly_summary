@@ -72,15 +72,16 @@ def test_production_notebook_uses_the_real_route_free_application_path():
         'client.get("/ready")',
         'client.post("/v1/chat"',
         '"conversation_id": conversation_id',
-        '"MANUS_API_KEY configured"',
         '"OPENROUTER_API_KEY configured"',
-        'assert llm_endpoint.model == "manus-1.6-lite"',
-        "build_llm_gateway(settings)",
-        "complete_model_with_diagnostics",
-        '"actual_profile"',
-        '"credit_usage"',
-        "embedding_gateway.embed",
-        '"vector_dimension"',
+        'assert llm_endpoint.provider == "openrouter"',
+        'assert llm_endpoint.model == "openrouter/free"',
+        'QUESTION = "이번 주 일정 뭐야?"',
+        'required_tools = {"search_calendar"}',
+        "required_tools <= set(chat_body[\"agent_trace\"][\"tool_calls\"])",
+        'required_llm_calls = ["routing", "planner", "judge", "answer"]',
+        'chat_body["agent_trace"]["llm_calls"] == required_llm_calls',
+        'required_source_types = {"calendar"}',
+        'chat_body["quality"]["citation_valid"] is True',
     ):
         assert required in source
 
@@ -92,6 +93,10 @@ def test_production_notebook_uses_the_real_route_free_application_path():
         "OPENROUTER_API_KEY=",
         '"task_id"',
         '"task_url"',
+        "ManusLLMGateway",
+        "build_llm_gateway(settings)",
+        "complete_model_with_diagnostics",
+        "embedding_gateway.embed",
     ):
         assert forbidden not in source
     assert 'obsolete_fields = {"response_mode", "mode", "routing"}' in source
