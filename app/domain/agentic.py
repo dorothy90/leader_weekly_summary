@@ -1,4 +1,4 @@
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 import json
 import re
 from typing import Annotated, Literal
@@ -16,12 +16,37 @@ from pydantic import (
 )
 
 SourceName = Literal["domain_knowledge", "mail", "calendar"]
+TimeScope = Literal[
+    "none",
+    "yesterday",
+    "previous_week",
+    "current_week",
+    "previous_month",
+    "exact_date",
+]
+EventReferenceMode = Literal["none", "previous_event"]
+AnalysisStatus = Literal["ready", "unavailable"]
 ToolName = Literal[
     "search_domain_knowledge",
     "search_mail",
     "search_calendar",
     "expand_calendar_event",
 ]
+
+_RESERVED_ENTITY_KEYS = {
+    "employeeid",
+    "userid",
+    "owner",
+    "ownerid",
+    "tenantid",
+    "index",
+    "indexname",
+    "tool",
+    "filter",
+    "acl",
+    "opensearchdsl",
+    "querydsl",
+}
 
 MAX_EVENT_ID_LENGTH = 256
 STABLE_EVENT_ID_PATTERN = r"^[A-Za-z0-9_.:@+-]+$"
@@ -190,7 +215,7 @@ def _require_utc(value: datetime) -> datetime:
 class ResolvedTimeRange(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    expression: str = Field(min_length=1, max_length=100)
+    scope: TimeScope
     start_at_utc: datetime
     end_at_utc: datetime
 
@@ -206,9 +231,66 @@ class ResolvedTimeRange(BaseModel):
         return self
 
 
+class SourceRequest(BaseModel):
+    model_config = ConfigDict(
+        frozen=True,
+        extra="forbid",
+        str_strip_whitespace=True,
+    )
+
+    source: SourceName
+    query: str = Field(min_length=1, max_length=1000)
+
+
+class IntentDecision(BaseModel):
+    model_config = ConfigDict(
+        frozen=True,
+        extra="forbid",
+        str_strip_whitespace=True,
+    )
+
+    intent: str = Field(min_length=1, max_length=100)
+    source_requests: list[SourceRequest] = Field(
+        default_factory=list,
+        max_length=3,
+    )
+    entities: dict[EntityKey, EntityValue] = Field(
+        default_factory=dict,
+        max_length=16,
+    )
+    time_scope: TimeScope = "none"
+    exact_date: date | None = None
+    event_reference: EventReferenceMode = "none"
+    calendar_detail_required: StrictBool = False
+    information_needs: list[BoundedModelText] = Field(
+        default_factory=list,
+        max_length=8,
+    )
+
+    @model_validator(mode="after")
+    def validate_semantics(self):
+        sources = [item.source for item in self.source_requests]
+        if len(sources) != len(set(sources)):
+            raise ValueError("source_requests must contain unique sources")
+        if (self.time_scope == "exact_date") != (self.exact_date is not None):
+            raise ValueError("exact_date must be present only for exact_date scope")
+        calendar_requested = "calendar" in sources
+        if self.calendar_detail_required and not calendar_requested:
+            raise ValueError("calendar detail requires a calendar source")
+        if self.event_reference == "previous_event" and not calendar_requested:
+            raise ValueError("previous event requires a calendar source")
+        normalized_keys = {
+            re.sub(r"[^a-z0-9]", "", key.casefold()) for key in self.entities
+        }
+        if normalized_keys & _RESERVED_ENTITY_KEYS:
+            raise ValueError("entities contain a server-owned key")
+        return self
+
+
 class QueryAnalysis(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
+    analysis_status: AnalysisStatus = "ready"
     intent: str = Field(min_length=1, max_length=100)
     question_type: Literal[
         "general_chat",
@@ -218,17 +300,76 @@ class QueryAnalysis(BaseModel):
         "multi_source",
         "follow_up",
     ]
+    source_requests: list[SourceRequest] = Field(
+        default_factory=list,
+        max_length=3,
+    )
     entities: dict[EntityKey, EntityValue] = Field(
         default_factory=dict,
         max_length=16,
     )
-    time_expression: str | None = Field(default=None, max_length=100)
+    time_scope: TimeScope = "none"
+    exact_date: date | None = None
+    event_reference: EventReferenceMode = "none"
+    calendar_detail_required: StrictBool = False
     start_at_utc: datetime | None = None
     end_at_utc: datetime | None = None
     information_needs: list[BoundedModelText] = Field(
         default_factory=list,
         max_length=8,
     )
+
+    @classmethod
+    def unavailable(cls) -> "QueryAnalysis":
+        return cls(
+            analysis_status="unavailable",
+            intent="analysis_unavailable",
+            question_type="general_chat",
+        )
+
+    @classmethod
+    def from_intent(
+        cls,
+        decision: IntentDecision,
+        *,
+        now: datetime | None = None,
+        timezone_name: str = "Asia/Seoul",
+    ) -> "QueryAnalysis":
+        from app.retrieval.dates import resolve_time_scope
+
+        resolved = resolve_time_scope(
+            decision.time_scope,
+            exact_date=decision.exact_date,
+            now=now,
+            timezone_name=timezone_name,
+        )
+        sources = [item.source for item in decision.source_requests]
+        if decision.event_reference == "previous_event":
+            question_type = "follow_up"
+        elif len(sources) > 1:
+            question_type = "multi_source"
+        elif not sources:
+            question_type = "general_chat"
+        else:
+            question_type = {
+                "mail": "mail_search",
+                "calendar": "calendar_search",
+                "domain_knowledge": "domain_knowledge",
+            }[sources[0]]
+        return cls(
+            analysis_status="ready",
+            intent=decision.intent,
+            question_type=question_type,
+            source_requests=decision.source_requests,
+            entities=decision.entities,
+            time_scope=decision.time_scope,
+            exact_date=decision.exact_date,
+            event_reference=decision.event_reference,
+            calendar_detail_required=decision.calendar_detail_required,
+            start_at_utc=resolved.start_at_utc if resolved else None,
+            end_at_utc=resolved.end_at_utc if resolved else None,
+            information_needs=decision.information_needs,
+        )
 
     @field_validator("start_at_utc", "end_at_utc")
     @classmethod
@@ -238,11 +379,20 @@ class QueryAnalysis(BaseModel):
         return _require_utc(value)
 
     @model_validator(mode="after")
-    def validate_time_pair(self):
+    def validate_analysis_state(self):
         if (self.start_at_utc is None) != (self.end_at_utc is None):
             raise ValueError("UTC range requires both endpoints")
         if self.start_at_utc and self.start_at_utc >= self.end_at_utc:
             raise ValueError("invalid UTC range")
+        if self.analysis_status == "unavailable" and (
+            self.source_requests
+            or self.time_scope != "none"
+            or self.exact_date is not None
+            or self.event_reference != "none"
+            or self.calendar_detail_required
+            or self.start_at_utc is not None
+        ):
+            raise ValueError("unavailable analysis cannot carry semantic decisions")
         return self
 
 

@@ -1,100 +1,38 @@
-import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 import pytest
 
-from app.llm.agentic import RuleBasedAgentModel
-from app.persistence.conversations import ConversationMemory
-from app.retrieval.dates import resolve_time_range
+from app.retrieval.dates import resolve_time_scope
 
 
-NOW = datetime(2026, 8, 16, 12, 0, tzinfo=UTC)
+NOW = datetime(2026, 8, 17, 12, 0, tzinfo=UTC)
 
 
-def test_last_week_uses_seoul_calendar_and_half_open_utc_range():
-    resolved = resolve_time_range("지난주", now=NOW, timezone_name="Asia/Seoul")
-    assert resolved.expression == "지난주"
-    assert resolved.start_at_utc == datetime(2026, 8, 2, 15, tzinfo=UTC)
-    assert resolved.end_at_utc == datetime(2026, 8, 9, 15, tzinfo=UTC)
+def test_current_week_resolves_to_seoul_half_open_range():
+    resolved = resolve_time_scope(
+        "current_week", now=NOW, timezone_name="Asia/Seoul"
+    )
+
+    assert resolved.start_at_utc == datetime(2026, 8, 16, 15, tzinfo=UTC)
+    assert resolved.end_at_utc == datetime(2026, 8, 23, 15, tzinfo=UTC)
 
 
-def test_this_week_uses_seoul_monday_and_half_open_utc_range():
-    resolved = resolve_time_range("이번주", now=NOW, timezone_name="Asia/Seoul")
-    assert resolved.expression == "이번주"
-    assert resolved.start_at_utc == datetime(2026, 8, 9, 15, tzinfo=UTC)
-    assert resolved.end_at_utc == datetime(2026, 8, 16, 15, tzinfo=UTC)
-
-
-def test_yesterday_and_last_month_are_deterministic():
-    yesterday = resolve_time_range("어제", now=NOW)
-    last_month = resolve_time_range("지난달", now=NOW)
-    assert yesterday.start_at_utc == datetime(2026, 8, 14, 15, tzinfo=UTC)
-    assert yesterday.end_at_utc == datetime(2026, 8, 15, 15, tzinfo=UTC)
-    assert last_month.start_at_utc == datetime(2026, 6, 30, 15, tzinfo=UTC)
-    assert last_month.end_at_utc == datetime(2026, 7, 31, 15, tzinfo=UTC)
-
-
-def test_unknown_time_expression_does_not_guess():
-    assert resolve_time_range("최근 적당한 때", now=NOW) is None
-
-
-def test_naive_now_is_rejected_instead_of_using_host_timezone():
-    with pytest.raises(ValueError, match="timezone-aware"):
-        resolve_time_range("어제", now=datetime(2026, 8, 16, 12, 0))
-
-
-def test_explicit_iso_date_uses_local_day_as_half_open_utc_range():
-    resolved = resolve_time_range(
-        "2026-08-18",
+def test_exact_date_resolves_to_one_local_calendar_day():
+    resolved = resolve_time_scope(
+        "exact_date",
+        exact_date=date(2026, 8, 7),
         now=NOW,
         timezone_name="Asia/Seoul",
     )
 
-    assert resolved.expression == "2026-08-18"
-    assert resolved.start_at_utc == datetime(2026, 8, 17, 15, tzinfo=UTC)
-    assert resolved.end_at_utc == datetime(2026, 8, 18, 15, tzinfo=UTC)
+    assert resolved.start_at_utc == datetime(2026, 8, 6, 15, tzinfo=UTC)
+    assert resolved.end_at_utc == datetime(2026, 8, 7, 15, tzinfo=UTC)
 
 
-def test_rule_based_analyzer_extracts_explicit_iso_date_from_question():
-    result = asyncio.run(
-        RuleBasedAgentModel(now=NOW).analyze(
-            "2026-08-18 NAND 메일 찾아줘",
-            ConversationMemory(),
-            "Asia/Seoul",
-        )
-    )
-
-    assert result.time_expression == "2026-08-18"
-    assert result.start_at_utc == datetime(2026, 8, 17, 15, tzinfo=UTC)
-    assert result.end_at_utc == datetime(2026, 8, 18, 15, tzinfo=UTC)
+def test_none_scope_has_no_range():
+    assert resolve_time_scope("none", now=NOW) is None
 
 
-def test_entity_free_calendar_plan_uses_stable_schedule_query():
-    model = RuleBasedAgentModel(now=datetime(2026, 8, 17, tzinfo=UTC))
-    memory = ConversationMemory()
-    question = "이번주 일정알려줘"
-    query_analysis = asyncio.run(
-        model.analyze(question, memory, "Asia/Seoul")
-    )
-    action = asyncio.run(
-        model.plan(question, query_analysis, [], memory)
-    )
-
-    assert query_analysis.question_type == "calendar_search"
-    assert action.tool == "search_calendar"
-    assert action.query == "일정"
-
-
-def test_entity_bearing_calendar_plan_keeps_extracted_entity_query():
-    model = RuleBasedAgentModel(now=datetime(2026, 8, 17, tzinfo=UTC))
-    memory = ConversationMemory()
-    question = "이번주 NAND 일정 알려줘"
-    query_analysis = asyncio.run(
-        model.analyze(question, memory, "Asia/Seoul")
-    )
-    action = asyncio.run(
-        model.plan(question, query_analysis, [], memory)
-    )
-
-    assert action.tool == "search_calendar"
-    assert action.query == "NAND"
+def test_exact_date_scope_requires_date():
+    with pytest.raises(ValueError, match="exact_date"):
+        resolve_time_scope("exact_date", now=NOW)

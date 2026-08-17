@@ -1,4 +1,4 @@
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta, timezone
 import json
 
 import pytest
@@ -9,15 +9,105 @@ from app.domain.agentic import (
     AgentMemoryUpdate,
     AgentTrace,
     EventReference,
+    IntentDecision,
     JudgeDecision,
     Observation,
     QueryAnalysis,
     ResolvedTimeRange,
     SearchDocument,
     SearchResult,
+    SourceRequest,
     ToolAction,
 )
 from app.retrieval.source_registry import SourceRegistry
+
+
+NOW = datetime(2026, 8, 17, 12, 0, tzinfo=UTC)
+
+
+def test_intent_decision_accepts_unique_bounded_logical_sources():
+    decision = IntentDecision(
+        intent="weekly_schedule",
+        source_requests=[SourceRequest(source="calendar", query="팀 일정")],
+        time_scope="current_week",
+        calendar_detail_required=False,
+    )
+
+    analysis = QueryAnalysis.from_intent(
+        decision, now=NOW, timezone_name="Asia/Seoul"
+    )
+
+    assert analysis.analysis_status == "ready"
+    assert analysis.question_type == "calendar_search"
+    assert [item.source for item in analysis.source_requests] == ["calendar"]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "intent": "duplicate",
+            "source_requests": [
+                {"source": "calendar", "query": "일정"},
+                {"source": "calendar", "query": "회의"},
+            ],
+        },
+        {
+            "intent": "bad_exact_date",
+            "source_requests": [{"source": "calendar", "query": "일정"}],
+            "time_scope": "exact_date",
+        },
+        {
+            "intent": "bad_detail",
+            "source_requests": [{"source": "mail", "query": "NAND"}],
+            "calendar_detail_required": True,
+        },
+        {
+            "intent": "owner_injection",
+            "source_requests": [{"source": "mail", "query": "NAND"}],
+            "entities": {"employee_id": "lee"},
+        },
+        {
+            "intent": "index_injection",
+            "source_requests": [{"source": "mail", "query": "NAND"}],
+            "entities": {"index_name": "ews-mail-v1"},
+        },
+        {
+            "intent": "oversized_query",
+            "source_requests": [{"source": "mail", "query": "x" * 1001}],
+        },
+        {
+            "intent": "oversized_needs",
+            "information_needs": [f"need-{index}" for index in range(9)],
+        },
+        {
+            "intent": "coerced_boolean",
+            "source_requests": [{"source": "calendar", "query": "일정"}],
+            "calendar_detail_required": "false",
+        },
+    ],
+)
+def test_intent_decision_rejects_inconsistent_or_server_owned_fields(payload):
+    with pytest.raises(ValidationError):
+        IntentDecision.model_validate(payload)
+
+
+def test_intent_decision_forbids_tool_and_owner_fields_at_every_level():
+    with pytest.raises(ValidationError):
+        IntentDecision.model_validate(
+            {
+                "intent": "hostile",
+                "source_requests": [
+                    {
+                        "source": "mail",
+                        "query": "NAND",
+                        "tool": "search_mail",
+                        "owner": "lee",
+                    }
+                ],
+                "employee_id": "lee",
+            }
+        )
 
 
 def test_source_registry_uses_configured_aliases_and_no_physical_names():
@@ -77,14 +167,19 @@ def test_search_result_is_normalized_and_bounded():
 
 
 def test_query_analysis_accepts_backend_resolved_utc_range():
-    analysis = QueryAnalysis(
-        intent="knowledge_query",
-        question_type="multi_source",
-        entities={"product": "NAND"},
-        time_expression="지난주",
-        start_at_utc=datetime(2026, 8, 2, 15, tzinfo=UTC),
-        end_at_utc=datetime(2026, 8, 9, 15, tzinfo=UTC),
-        information_needs=["관련 메일", "관련 회의"],
+    analysis = QueryAnalysis.from_intent(
+        IntentDecision(
+            intent="knowledge_query",
+            source_requests=[
+                SourceRequest(source="mail", query="NAND"),
+                SourceRequest(source="calendar", query="NAND"),
+            ],
+            entities={"product": "NAND"},
+            time_scope="previous_week",
+            information_needs=["관련 메일", "관련 회의"],
+        ),
+        now=NOW,
+        timezone_name="Asia/Seoul",
     )
     assert analysis.start_at_utc < analysis.end_at_utc
 
@@ -96,7 +191,7 @@ def test_utc_range_contracts_reject_naive_datetimes(contract):
         "end_at_utc": datetime(2026, 8, 9, 15),
     }
     if contract is ResolvedTimeRange:
-        fields["expression"] = "지난주"
+        fields["scope"] = "previous_week"
     else:
         fields.update(intent="knowledge_query", question_type="multi_source")
 
