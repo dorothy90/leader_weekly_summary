@@ -6,10 +6,11 @@ from pydantic import ValidationError
 
 from app.domain.chat import (
     ChatRequest,
+    ChatResponse,
     ExecutionMetadata,
     QualityStatus,
-    RoutingDiagnostics,
 )
+from app.domain.agentic import AgentTrace
 from app.domain.evidence import Evidence
 from app.domain.policy import PolicyContext
 from app.domain.research import ResearchJob, ResearchStatus
@@ -40,19 +41,32 @@ def test_chat_request_keeps_user_id_in_body_and_normalizes_weeks():
     assert request.filters.weeks == ["2026-08"]
 
 
-def test_routing_diagnostics_and_not_used_retrieval_are_bounded():
-    routing = RoutingDiagnostics(
-        requested_mode="auto",
-        route="general",
-        executed_system="general",
-        reason_code="deterministic_general",
-        confidence=1,
-        estimated_searches=0,
-    )
-    quality = QualityStatus(citation_valid=True, retrieval_mode="not_used")
+def test_chat_contract_is_single_entry_and_rejects_response_mode():
+    request = ChatRequest(user_id="kim", message="이번 주 일정")
 
-    assert routing.route == "general"
-    assert quality.retrieval_mode == "not_used"
+    assert "response_mode" not in request.model_dump()
+    with pytest.raises(ValidationError):
+        ChatRequest(user_id="kim", message="질문", response_mode="fast")
+
+
+def test_chat_response_exposes_agent_trace_without_route_envelope():
+    response = ChatResponse(
+        conversation_id="conversation-1",
+        answer="답변",
+        references=[],
+        quality=QualityStatus(citation_valid=None, retrieval_mode="deterministic"),
+        disclosures=[],
+        trace_id="trace-1",
+        agent_trace=AgentTrace(
+            tool_calls=[],
+            judge_decisions=["no_action"],
+        ),
+    )
+    dumped = response.model_dump()
+
+    assert "mode" not in dumped
+    assert "routing" not in dumped
+    assert dumped["agent_trace"]["judge_decisions"] == ["no_action"]
 
 
 def test_quality_status_accepts_deterministic_retrieval_mode():

@@ -93,9 +93,6 @@ def _sanitize_memory(
                     "trace_id": (
                         opaque_identifier(turn.trace_id) if turn.trace_id else None
                     ),
-                    "reason_code": (
-                        sanitize_text(turn.reason_code) if turn.reason_code else None
-                    ),
                     "disclosures": [
                         safe
                         for item in turn.disclosures
@@ -162,11 +159,8 @@ class TurnRecord(BaseModel):
 
     user_content: str = Field(min_length=1, max_length=4000)
     assistant_content: str | None = Field(default=None, max_length=8000)
-    route: str = Field(min_length=1, max_length=32)
-    executed_system: str = Field(min_length=1, max_length=32)
     execution: ExecutionMetadata
     trace_id: str | None = Field(default=None, max_length=128)
-    reason_code: str | None = Field(default=None, max_length=128)
     quality: QualityStatus | None = None
     disclosures: list[str] = Field(default_factory=list, max_length=4)
     cited_evidence: list[Evidence] = Field(default_factory=list, max_length=8)

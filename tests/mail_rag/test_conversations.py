@@ -88,8 +88,6 @@ def test_conversation_persists_bounded_turn_execution_envelope():
     failed = TurnRecord(
         user_content="반도체",
         assistant_content=None,
-        route="fast",
-        executed_system="fast_rag",
         execution=ExecutionMetadata(
             status="failed",
             failure_stage="planning",
@@ -123,8 +121,6 @@ def test_conversation_rejects_cross_owner_turn_evidence():
     turn = TurnRecord(
         user_content="질문",
         assistant_content="답변",
-        route="fast",
-        executed_system="fast_rag",
         execution=ExecutionMetadata(status="succeeded"),
         cited_evidence=[foreign],
     )

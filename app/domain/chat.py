@@ -4,7 +4,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.domain.agentic import AgentMemoryUpdate, AgentTrace
 from app.domain.evidence import Evidence, RetrievalFilters
-from app.domain.research import ResearchStatus
 from app.observability.node_runs import NodeRun
 
 BM25_FALLBACK_DISCLOSURE = (
@@ -51,30 +50,6 @@ class ChatRequest(BaseModel):
         pattern=r"^[A-Za-z0-9_.:-]+$",
     )
     filters: RetrievalFilters = Field(default_factory=RetrievalFilters)
-    response_mode: Literal["auto", "fast", "deep"] = "auto"
-
-
-class RouteDecision(BaseModel):
-    route: Literal["fast", "deep", "clarify", "general", "diagnostic", "corpus_info"]
-    reason_code: str
-    confidence: float = Field(ge=0, le=1)
-    estimated_searches: int = Field(ge=0, le=24)
-    clarification_question: str | None = None
-    requested_output: Literal["answer", "table", "report", "presentation"] = "answer"
-
-
-class RoutingDiagnostics(BaseModel):
-    requested_mode: Literal["auto", "fast", "deep"]
-    route: Literal["fast", "deep", "clarify", "general", "diagnostic", "corpus_info"]
-    executed_system: Literal[
-        "general", "fast_rag", "deep_research", "clarification", "diagnostic", "corpus_info"
-    ]
-    reason_code: str = Field(min_length=1, max_length=128)
-    confidence: float = Field(ge=0, le=1)
-    estimated_searches: int = Field(ge=0, le=24)
-    context_used: bool = False
-    history_message_count: int = Field(default=0, ge=0, le=20)
-    history_trimmed: bool = False
 
 
 class ExecutionMetadata(BaseModel):
@@ -136,14 +111,10 @@ class ChatReference(BaseModel):
 
 class ChatResponse(BaseModel):
     conversation_id: str
-    mode: Literal["fast_rag", "deep_research", "diagnostic", "corpus_info"]
     answer: str | None = None
     references: list[ChatReference] = Field(default_factory=list)
     quality: QualityStatus | None = None
     disclosures: list[str] = Field(default_factory=list)
     trace_id: str
-    routing: RoutingDiagnostics
-    job_id: str | None = None
-    status: ResearchStatus | None = None
-    plan_summary: str | None = None
+    agent_trace: AgentTrace | None = None
     execution: ExecutionMetadata | None = None
