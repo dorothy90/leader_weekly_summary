@@ -10,13 +10,18 @@ from opensearchpy.exceptions import (
 )
 
 from app.config.settings import Settings
-from app.domain.agentic import QueryAnalysis, SearchDocument, ToolAction
+from app.domain.agentic import (
+    IntentDecision,
+    QueryAnalysis,
+    SearchDocument,
+    SourceRequest,
+    ToolAction,
+)
 from app.domain.chat import BM25_FALLBACK_DISCLOSURE, ChatRequest
 from app.domain.evidence import RetrievalFilters
 from app.domain.errors import AppError, ErrorCode
 from app.domain.policy import PolicyContext
 from app.graphs.multi_source import MultiSourceAgenticWorkflow
-from app.llm.agentic import RuleBasedAgentModel
 from app.persistence.conversations import (
     ConversationMemory,
     apply_agent_memory_update,
@@ -51,13 +56,37 @@ def workflow(backend, *, settings=None, embeddings=None):
 
 
 def analysis(**updates):
-    values = {
-        "intent": "knowledge_query",
-        "question_type": "multi_source",
-        "information_needs": [],
-    }
-    values.update(updates)
-    return QueryAnalysis(**values)
+    question_type = updates.pop("question_type", "multi_source")
+    sources = {
+        "domain_knowledge": ["domain_knowledge"],
+        "mail_search": ["mail"],
+        "calendar_search": ["calendar"],
+        "multi_source": ["mail", "calendar", "domain_knowledge"],
+    }.get(question_type, [])
+    base = QueryAnalysis.from_intent(
+        IntentDecision(
+            intent="test",
+            source_requests=[
+                SourceRequest(source=source, query="test")
+                for source in sources
+            ],
+        )
+    )
+    return QueryAnalysis.model_validate(
+        {**base.model_dump(), **updates}
+    )
+
+
+class SequencedIntentAnalyzer:
+    def __init__(self, *decisions):
+        self.decisions = list(decisions)
+
+    async def analyze(self, question, memory, timezone_name):
+        decision = self.decisions.pop(0)
+        return QueryAnalysis.from_intent(
+            decision,
+            timezone_name=timezone_name,
+        )
 
 
 def filters_from(body):
@@ -531,7 +560,26 @@ def test_production_calendar_uses_stable_event_id_for_memory_and_follow_up():
 
     backend = ProductionShapedBackend()
     search = workflow(backend)
-    agent = MultiSourceAgenticWorkflow(search, RuleBasedAgentModel())
+    agent = MultiSourceAgenticWorkflow(
+        search,
+        SequencedIntentAnalyzer(
+            IntentDecision(
+                intent="calendar_detail",
+                source_requests=[
+                    SourceRequest(source="calendar", query="NAND Yield Review")
+                ],
+                calendar_detail_required=True,
+            ),
+            IntentDecision(
+                intent="calendar_follow_up",
+                source_requests=[
+                    SourceRequest(source="calendar", query="NAND Yield Review")
+                ],
+                event_reference="previous_event",
+                calendar_detail_required=True,
+            ),
+        ),
+    )
     policy = PolicyContext.from_user_id("kim")
 
     first = asyncio.run(

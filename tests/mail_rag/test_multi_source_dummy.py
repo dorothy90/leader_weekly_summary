@@ -4,7 +4,13 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from app.config.settings import Settings
-from app.domain.agentic import QueryAnalysis, SearchDocument, ToolAction
+from app.domain.agentic import (
+    IntentDecision,
+    QueryAnalysis,
+    SearchDocument,
+    SourceRequest,
+    ToolAction,
+)
 from app.domain.policy import PolicyContext
 from app.retrieval.multi_source import InMemoryMultiSourceSearch, StoredDocument
 from app.retrieval.source_registry import SourceRegistry
@@ -130,13 +136,25 @@ def service():
 
 
 def analysis(**updates):
-    values = {
-        "intent": "knowledge_query",
-        "question_type": "multi_source",
-        "information_needs": [],
-    }
-    values.update(updates)
-    return QueryAnalysis(**values)
+    question_type = updates.pop("question_type", "multi_source")
+    sources = {
+        "domain_knowledge": ["domain_knowledge"],
+        "mail_search": ["mail"],
+        "calendar_search": ["calendar"],
+        "multi_source": ["mail", "calendar", "domain_knowledge"],
+    }.get(question_type, [])
+    base = QueryAnalysis.from_intent(
+        IntentDecision(
+            intent="test",
+            source_requests=[
+                SourceRequest(source=source, query="test")
+                for source in sources
+            ],
+        )
+    )
+    return QueryAnalysis.model_validate(
+        {**base.model_dump(), **updates}
+    )
 
 
 def run(action, owner="kim", query_analysis=None):

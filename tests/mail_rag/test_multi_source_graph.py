@@ -1,5 +1,6 @@
 import asyncio
 from datetime import UTC, datetime
+import json
 import re
 from pathlib import Path
 
@@ -7,12 +8,15 @@ import pytest
 
 from app.config.settings import Settings
 from app.domain.agentic import (
+    IntentDecision,
     JudgeDecision,
     QueryAnalysis,
     SearchDocument,
     SearchResult,
+    SourceRequest,
     ToolAction,
 )
+from app.domain.agentic_policy import TypedAgentPolicy
 from app.domain.chat import ChatRequest, ChatResponse
 from app.domain.errors import AppError, ErrorCode
 from app.domain.policy import PolicyContext
@@ -22,12 +26,11 @@ from app.graphs.multi_source import (
     MAX_ITERATIONS,
     MultiSourceAgenticWorkflow,
 )
-from app.llm.agentic import RuleBasedAgentModel, StructuredAgentModel
+from app.llm.agentic import StructuredAgentModel
 from app.persistence.conversations import (
     ConversationMemory,
     apply_agent_memory_update,
 )
-from app.retrieval.dates import resolve_time_range
 from app.retrieval.multi_source import InMemoryMultiSourceSearch
 from app.retrieval.source_registry import SourceRegistry
 
@@ -40,12 +43,226 @@ QUESTION = (
 NOW = datetime(2026, 8, 16, 12, tzinfo=UTC)
 
 
-def build():
+class StaticIntentAnalyzer:
+    def __init__(self, decision, *, now=NOW):
+        self.decision = decision
+        self.now = now
+
+    async def analyze(self, question, memory, timezone_name):
+        return QueryAnalysis.from_intent(
+            self.decision, now=self.now, timezone_name=timezone_name
+        )
+
+
+def analyzer(*requests, **decision_fields):
+    return StaticIntentAnalyzer(
+        IntentDecision(
+            source_requests=list(requests),
+            intent="test",
+            **decision_fields,
+        )
+    )
+
+
+class FixedIntentLLM:
+    def __init__(self, decision):
+        self.decision = decision
+        self.schemas = []
+        self.users = []
+
+    async def complete_model(self, system, user, schema):
+        self.schemas.append(schema)
+        self.users.append(user)
+        return self.decision
+
+
+class RaisingIntentLLM:
+    def __init__(self, failure):
+        self.failure = failure
+        self.calls = 0
+
+    async def complete_model(self, system, user, schema):
+        self.calls += 1
+        raise self.failure
+
+
+class UnavailableAnalyzer:
+    async def analyze(self, question, memory, timezone_name):
+        return QueryAnalysis.unavailable()
+
+
+class RecordingSearch:
+    def __init__(self):
+        self.calls = []
+
+    async def execute(
+        self, action, policy, analysis, request_filters=None
+    ):
+        self.calls.append((action, policy.user_id))
+        return SearchResult(
+            tool=action.tool,
+            query=action.query,
+            retrieval_mode="deterministic",
+        )
+
+
+def test_structured_analyzer_requests_intent_decision_and_does_not_add_sources():
+    llm = FixedIntentLLM(
+        IntentDecision(
+            intent="weekly_schedule",
+            source_requests=[
+                SourceRequest(source="calendar", query="팀 일정")
+            ],
+            time_scope="current_week",
+        )
+    )
+    model = StructuredAgentModel(llm, now=NOW)
+
+    analysis = asyncio.run(
+        model.analyze(
+            "메일 기술 원인 뭐야 같은 단어가 있어도 모델 결정만 사용",
+            ConversationMemory(),
+            "Asia/Seoul",
+        )
+    )
+
+    assert llm.schemas == [IntentDecision]
+    assert [item.source for item in analysis.source_requests] == ["calendar"]
+    assert analysis.time_scope == "current_week"
+
+
+@pytest.mark.parametrize("failure", [ValueError("bad json"), TimeoutError()])
+def test_structured_analyzer_failure_is_unavailable_without_keyword_fallback(
+    failure,
+):
+    llm = RaisingIntentLLM(failure)
+    model = StructuredAgentModel(llm, timeout_seconds=0.01)
+
+    analysis = asyncio.run(
+        model.analyze(
+            "이번주 일정알려줘", ConversationMemory(), "Asia/Seoul"
+        )
+    )
+
+    assert llm.calls == 2
+    assert analysis.analysis_status == "unavailable"
+    assert analysis.source_requests == []
+
+
+def test_structured_analyzer_serializes_only_bounded_safe_memory():
+    llm = FixedIntentLLM(IntentDecision(intent="general"))
+    model = StructuredAgentModel(llm)
+    memory = ConversationMemory(
+        entities={f"key-{index}": f"value-{index}" for index in range(20)},
+        current_topic="trusted topic",
+        search_history=["search_mail"],
+        retrieved_source_refs=["private-doc"],
+        unresolved_information=["secret gap"],
+    )
+
+    asyncio.run(model.analyze("질문", memory, "Asia/Seoul"))
+
+    serialized = json.loads(llm.users[0])["memory"]
+    assert serialized == {
+        "entities": {
+            f"key-{index}": f"value-{index}" for index in range(4, 20)
+        },
+        "current_topic": "trusted topic",
+    }
+
+
+@pytest.mark.parametrize("server_owned_field", ["owner", "index", "tool"])
+def test_structured_analyzer_rejects_server_owned_output_after_two_attempts(
+    server_owned_field,
+):
+    llm = FixedIntentLLM(
+        {
+            "intent": "hostile",
+            "source_requests": [],
+            server_owned_field: "attacker-controlled",
+        }
+    )
+    model = StructuredAgentModel(llm)
+
+    analysis = asyncio.run(
+        model.analyze("질문", ConversationMemory(), "Asia/Seoul")
+    )
+
+    assert llm.schemas == [IntentDecision, IntentDecision]
+    assert analysis == QueryAnalysis.unavailable()
+
+
+def test_unavailable_analysis_performs_zero_searches_and_returns_limited_result():
+    search = RecordingSearch()
+    workflow = MultiSourceAgenticWorkflow(search, UnavailableAnalyzer())
+
+    result = invoke(workflow, "이번주 일정 뭐야?")
+
+    assert search.calls == []
+    assert result.evidence == []
+    assert result.quality.limited_answer is True
+    assert result.execution.status == "limited"
+    assert result.execution.failure_stage == "planning"
+    assert result.execution.error_code == "ANALYSIS_UNAVAILABLE"
+    assert "질문을 안전하게 구조화하지 못했습니다" in result.answer
+
+
+def test_calendar_only_typed_decision_never_adds_domain_search():
+    class CalendarSearch(RecordingSearch):
+        async def execute(
+            self, action, policy, analysis, request_filters=None
+        ):
+            self.calls.append((action, policy.user_id))
+            return SearchResult(
+                tool=action.tool,
+                query=action.query,
+                documents=[
+                    SearchDocument(
+                        source_type="calendar",
+                        document_id="event-storage-1",
+                        source_id="event-1",
+                        parent_event_id="event-1",
+                        content_kind="event",
+                        title="팀 일정",
+                        text="이번 주 팀 일정입니다.",
+                        score=1.0,
+                    )
+                ],
+                total_hits=1,
+                retrieval_mode="deterministic",
+            )
+
+    search = CalendarSearch()
+    workflow = MultiSourceAgenticWorkflow(
+        search,
+        analyzer(
+            SourceRequest(source="calendar", query="팀 일정"),
+            time_scope="current_week",
+            information_needs=["뭐야 기술 원인 메일"],
+        ),
+    )
+
+    result = invoke(workflow, "문구는 정책 입력이 아니다")
+
+    assert [action.tool for action, _owner in search.calls] == [
+        "search_calendar"
+    ]
+    assert result.quality.limited_answer is False
+
+
+def build(intent_analyzer=None):
     search = InMemoryMultiSourceSearch.from_path(
         Path("fixtures/multi_source_demo/corpus.json"),
         SourceRegistry.from_settings(Settings()),
     )
-    return MultiSourceAgenticWorkflow(search, RuleBasedAgentModel(now=NOW)), search
+    intent_analyzer = intent_analyzer or analyzer(
+        SourceRequest(source="mail", query="NAND Cell Leakage"),
+        SourceRequest(source="calendar", query="NAND Yield Review"),
+        SourceRequest(source="domain_knowledge", query="Cell Leakage"),
+        time_scope="previous_week",
+        calendar_detail_required=True,
+    )
+    return MultiSourceAgenticWorkflow(search, intent_analyzer), search
 
 
 def invoke(workflow, message, memory=None):
@@ -84,12 +301,24 @@ def test_mail_calendar_expand_domain_canonical_flow():
 
 def test_domain_mail_and_calendar_single_source_questions():
     cases = [
-        ("Cell Leakage가 뭐야?", ["search_domain_knowledge"]),
-        ("NAND 관련 메일 찾아줘", ["search_mail"]),
-        ("NAND Yield Review 회의 언제 했어?", ["search_calendar"]),
+        (
+            "Cell Leakage가 뭐야?",
+            "domain_knowledge",
+            "Cell Leakage",
+            ["search_domain_knowledge"],
+        ),
+        ("NAND 관련 메일 찾아줘", "mail", "NAND", ["search_mail"]),
+        (
+            "NAND Yield Review 회의 언제 했어?",
+            "calendar",
+            "NAND Yield Review",
+            ["search_calendar"],
+        ),
     ]
-    for question, expected in cases:
-        workflow, search = build()
+    for question, source, query, expected in cases:
+        workflow, search = build(
+            analyzer(SourceRequest(source=source, query=query))
+        )
 
         result = invoke(workflow, question)
 
@@ -98,7 +327,13 @@ def test_domain_mail_and_calendar_single_source_questions():
 
 
 def test_follow_up_expands_previous_event_before_semantic_search():
-    workflow, search = build()
+    workflow, search = build(
+        analyzer(
+            SourceRequest(source="calendar", query="NAND Yield Review"),
+            event_reference="previous_event",
+            calendar_detail_required=True,
+        )
+    )
     memory = ConversationMemory.model_validate(
         {
             "previous_event_reference": {
@@ -162,7 +397,13 @@ def test_stale_saved_event_falls_back_to_calendar_search_within_bound():
         }
     )
     search = StaleEventSearch()
-    workflow = MultiSourceAgenticWorkflow(search, RuleBasedAgentModel())
+    workflow = MultiSourceAgenticWorkflow(
+        search,
+        analyzer(
+            SourceRequest(source="calendar", query="NAND Yield Review"),
+            event_reference="previous_event",
+        ),
+    )
 
     result = invoke(workflow, "그 회의 언제였어?", memory)
 
@@ -173,19 +414,7 @@ def test_stale_saved_event_falls_back_to_calendar_search_within_bound():
     ]
 
 
-def test_structured_planner_cannot_override_saved_event_id_for_follow_up():
-    class FuzzyCalendarLLM:
-        def __init__(self):
-            self.calls = 0
-
-        async def complete_model(self, system, user, schema):
-            self.calls += 1
-            return {
-                "tool": "search_calendar",
-                "query": "NAND Yield Review",
-                "reason": "fuzzy search",
-            }
-
+def test_typed_policy_authorizes_only_the_saved_event_id_for_follow_up():
     memory = ConversationMemory.model_validate(
         {
             "previous_event_reference": {
@@ -194,35 +423,26 @@ def test_structured_planner_cannot_override_saved_event_id_for_follow_up():
             }
         }
     )
-    fallback = RuleBasedAgentModel(now=NOW)
-    analysis = asyncio.run(
-        fallback.analyze("그 회의에서 Action 뭐였어?", memory, "Asia/Seoul")
+    analysis = QueryAnalysis.from_intent(
+        IntentDecision(
+            intent="follow_up",
+            source_requests=[
+                SourceRequest(source="calendar", query="NAND Yield Review")
+            ],
+            event_reference="previous_event",
+            calendar_detail_required=True,
+        ),
+        now=NOW,
+        timezone_name="Asia/Seoul",
     )
-    llm = FuzzyCalendarLLM()
-    model = StructuredAgentModel(llm, fallback=fallback, now=NOW)
 
-    action = asyncio.run(
-        model.plan("그 회의에서 Action 뭐였어?", analysis, [], memory)
-    )
+    action = TypedAgentPolicy().next_action(analysis, [], memory)
 
     assert action.tool == "expand_calendar_event"
     assert action.event_id == "event-kim-1"
-    assert llm.calls == 0
 
 
-def test_raw_same_event_reference_overrides_misclassified_structured_analysis():
-    class FuzzyCalendarLLM:
-        def __init__(self):
-            self.calls = 0
-
-        async def complete_model(self, system, user, schema):
-            self.calls += 1
-            return {
-                "tool": "search_calendar",
-                "query": "NAND Yield Review",
-                "reason": "fuzzy search",
-            }
-
+def test_raw_same_event_words_do_not_override_typed_event_reference():
     memory = ConversationMemory.model_validate(
         {
             "previous_event_reference": {
@@ -231,21 +451,22 @@ def test_raw_same_event_reference_overrides_misclassified_structured_analysis():
             }
         }
     )
-    analysis = QueryAnalysis(
-        intent="knowledge_query",
-        question_type="calendar_search",
-        information_needs=["관련 회의"],
+    analysis = QueryAnalysis.from_intent(
+        IntentDecision(
+            intent="calendar",
+            source_requests=[
+                SourceRequest(source="calendar", query="NAND Yield Review")
+            ],
+            event_reference="none",
+        ),
+        now=NOW,
+        timezone_name="Asia/Seoul",
     )
-    llm = FuzzyCalendarLLM()
-    model = StructuredAgentModel(llm, fallback=RuleBasedAgentModel(now=NOW))
 
-    action = asyncio.run(
-        model.plan("해당 회의 Action이 뭐였어?", analysis, [], memory)
-    )
+    action = TypedAgentPolicy().next_action(analysis, [], memory)
 
-    assert action.tool == "expand_calendar_event"
-    assert action.event_id == "event-kim-1"
-    assert llm.calls == 0
+    assert action.tool == "search_calendar"
+    assert action.event_id is None
 
 
 def test_calendar_event_without_requested_action_is_not_judged_sufficient():
@@ -277,7 +498,13 @@ def test_calendar_event_without_requested_action_is_not_judged_sufficient():
             )
 
     search = EventOnlySearch()
-    workflow = MultiSourceAgenticWorkflow(search, RuleBasedAgentModel())
+    workflow = MultiSourceAgenticWorkflow(
+        search,
+        analyzer(
+            SourceRequest(source="calendar", query="NAND"),
+            calendar_detail_required=True,
+        ),
+    )
 
     result = invoke(workflow, "NAND 회의에서 Action 뭐였어?")
 
@@ -289,7 +516,7 @@ def test_calendar_event_without_requested_action_is_not_judged_sufficient():
     assert "확인하지 못한 항목" in result.answer
 
 
-def test_model_sufficiency_cannot_override_a_missing_required_source():
+def test_typed_policy_keeps_a_missing_required_source_unresolved():
     class EmptySearch:
         def __init__(self):
             self.calls = []
@@ -304,17 +531,11 @@ def test_model_sufficiency_cannot_override_a_missing_required_source():
                 retrieval_mode="deterministic",
             )
 
-    class SelfApprovingJudge(RuleBasedAgentModel):
-        async def judge(self, state):
-            return JudgeDecision(
-                sufficient=True,
-                reason="model says complete",
-                missing_information=[],
-                recommended_action=None,
-            )
-
     search = EmptySearch()
-    workflow = MultiSourceAgenticWorkflow(search, SelfApprovingJudge())
+    workflow = MultiSourceAgenticWorkflow(
+        search,
+        analyzer(SourceRequest(source="mail", query="NAND")),
+    )
 
     result = invoke(workflow, "NAND 메일 찾아줘")
 
@@ -324,19 +545,24 @@ def test_model_sufficiency_cannot_override_a_missing_required_source():
     assert result.quality.limited_answer is True
 
 
-def test_question_type_requires_its_source_when_model_omits_information_needs():
-    analysis = QueryAnalysis(
-        intent="knowledge_query",
-        question_type="mail_search",
-        information_needs=[],
+def test_information_needs_do_not_change_typed_required_sources():
+    analysis = QueryAnalysis.from_intent(
+        IntentDecision(
+            intent="mail",
+            source_requests=[SourceRequest(source="mail", query="NAND")],
+            information_needs=["기술 원인 일정"],
+        ),
+        now=NOW,
+        timezone_name="Asia/Seoul",
     )
 
-    missing = RuleBasedAgentModel.deterministic_missing(analysis, [])
+    policy = TypedAgentPolicy()
 
-    assert missing == ["관련 메일"]
+    assert policy.required_sources(analysis) == ["mail"]
+    assert policy.missing_information(analysis, []) == ["관련 메일"]
 
 
-def test_model_sufficiency_cannot_override_missing_calendar_action_detail():
+def test_typed_policy_does_not_accept_event_as_calendar_detail():
     class EventOnlySearch:
         async def execute(
             self, action, policy, analysis, request_filters=None
@@ -360,42 +586,57 @@ def test_model_sufficiency_cannot_override_missing_calendar_action_detail():
                 retrieval_mode="deterministic",
             )
 
-    class SelfApprovingJudge(RuleBasedAgentModel):
-        async def judge(self, state):
-            return JudgeDecision(
-                sufficient=True,
-                reason="model says complete",
-                missing_information=[],
-                recommended_action=None,
-            )
-
     workflow = MultiSourceAgenticWorkflow(
-        EventOnlySearch(), SelfApprovingJudge()
+        EventOnlySearch(),
+        analyzer(
+            SourceRequest(source="calendar", query="NAND"),
+            calendar_detail_required=True,
+        ),
     )
 
     result = invoke(workflow, "NAND 회의에서 Action 뭐였어?")
 
-    assert result.agent_memory.unresolved_information == ["관련 회의와 Action"]
+    assert result.agent_memory.unresolved_information == ["관련 회의 상세 내용"]
     assert result.quality.limited_answer is True
     assert result.execution.status == "limited"
 
 
 def test_duplicate_search_is_blocked_without_a_duplicate_backend_call():
-    class RepeatingModel(RuleBasedAgentModel):
-        async def judge(self, state):
-            action = state["current_action"]
-            return {
-                "sufficient": False,
-                "reason": "repeat",
-                "missing_information": ["never complete"],
-                "recommended_action": action.model_dump(),
-            }
+    class RepeatingPolicy(TypedAgentPolicy):
+        @staticmethod
+        def next_action(analysis, observations, memory):
+            return ToolAction(
+                tool="search_mail",
+                query="NAND",
+                reason="repeat",
+            )
+
+        def judge(
+            self,
+            analysis,
+            observations,
+            documents,
+            memory,
+            iteration_count,
+        ):
+            return JudgeDecision(
+                sufficient=False,
+                reason="repeat",
+                missing_information=["never complete"],
+                recommended_action=self.next_action(
+                    analysis, observations, memory
+                ),
+            )
 
     search = InMemoryMultiSourceSearch.from_path(
         Path("fixtures/multi_source_demo/corpus.json"),
         SourceRegistry.from_settings(Settings()),
     )
-    workflow = MultiSourceAgenticWorkflow(search, RepeatingModel())
+    workflow = MultiSourceAgenticWorkflow(
+        search,
+        analyzer(SourceRequest(source="mail", query="NAND")),
+        policy=RepeatingPolicy(),
+    )
 
     result = invoke(workflow, "NAND 메일 찾아줘")
 
@@ -416,24 +657,29 @@ def test_duplicate_search_is_blocked_without_a_duplicate_backend_call():
 
 
 def test_semantic_iteration_limit_is_exactly_four_and_disclosed():
-    class ExhaustingModel(RuleBasedAgentModel):
-        async def plan(self, question, analysis, observations, memory):
+    class ExhaustingPolicy(TypedAgentPolicy):
+        @staticmethod
+        def next_action(analysis, observations, memory):
             return ToolAction(
                 tool="search_mail",
-                query="missing-0",
+                query=f"missing-{len(observations)}",
                 reason="bounded search",
             )
 
-        async def judge(self, state):
-            next_index = state["iteration_count"]
+        def judge(
+            self,
+            analysis,
+            observations,
+            documents,
+            memory,
+            iteration_count,
+        ):
             return JudgeDecision(
                 sufficient=False,
                 reason="still missing",
                 missing_information=["never complete"],
-                recommended_action=ToolAction(
-                    tool="search_mail",
-                    query=f"missing-{next_index}",
-                    reason="bounded search",
+                recommended_action=self.next_action(
+                    analysis, observations, memory
                 ),
             )
 
@@ -441,7 +687,11 @@ def test_semantic_iteration_limit_is_exactly_four_and_disclosed():
         Path("fixtures/multi_source_demo/corpus.json"),
         SourceRegistry.from_settings(Settings()),
     )
-    workflow = MultiSourceAgenticWorkflow(search, ExhaustingModel())
+    workflow = MultiSourceAgenticWorkflow(
+        search,
+        analyzer(SourceRequest(source="mail", query="missing")),
+        policy=ExhaustingPolicy(),
+    )
 
     result = invoke(workflow, "NAND 메일 찾아줘")
 
@@ -452,24 +702,35 @@ def test_semantic_iteration_limit_is_exactly_four_and_disclosed():
 
 
 def test_unique_event_expansions_cannot_bypass_the_total_action_bound():
-    class ExpandingModel(RuleBasedAgentModel):
-        async def plan(self, question, analysis, observations, memory):
+    class ExpandingPolicy(TypedAgentPolicy):
+        @staticmethod
+        def next_action(analysis, observations, memory):
+            if not observations:
+                return ToolAction(
+                    tool="search_calendar",
+                    query="missing-calendar",
+                    reason="bounded initial search",
+                )
             return ToolAction(
                 tool="expand_calendar_event",
-                event_id="missing-event-0",
+                event_id=f"missing-event-{len(observations)}",
                 reason="bounded expansion",
             )
 
-        async def judge(self, state):
-            next_index = len(state["observations"])
+        def judge(
+            self,
+            analysis,
+            observations,
+            documents,
+            memory,
+            iteration_count,
+        ):
             return JudgeDecision(
                 sufficient=False,
                 reason="still missing",
                 missing_information=["never complete"],
-                recommended_action=ToolAction(
-                    tool="expand_calendar_event",
-                    event_id=f"missing-event-{next_index}",
-                    reason="bounded expansion",
+                recommended_action=self.next_action(
+                    analysis, observations, memory
                 ),
             )
 
@@ -477,7 +738,11 @@ def test_unique_event_expansions_cannot_bypass_the_total_action_bound():
         Path("fixtures/multi_source_demo/corpus.json"),
         SourceRegistry.from_settings(Settings()),
     )
-    workflow = MultiSourceAgenticWorkflow(search, ExpandingModel())
+    workflow = MultiSourceAgenticWorkflow(
+        search,
+        analyzer(SourceRequest(source="calendar", query="missing-calendar")),
+        policy=ExpandingPolicy(),
+    )
 
     result = invoke(workflow, "그 회의 Action 알려줘")
 
@@ -487,233 +752,23 @@ def test_unique_event_expansions_cannot_bypass_the_total_action_bound():
     assert "search_calendar" in result.agent_trace.tool_calls
 
 
-def test_invalid_structured_output_retries_once_then_falls_back():
-    class BrokenStructuredLLM:
-        def __init__(self):
-            self.calls = 0
-
-        async def complete_model(self, system, user, schema):
-            self.calls += 1
-            raise ValueError("invalid structured output")
-
-        async def complete_text(self, system, user):
-            return ""
-
-    llm = BrokenStructuredLLM()
-    model = StructuredAgentModel(llm, fallback=RuleBasedAgentModel())
+def test_model_time_scope_is_resolved_by_the_server():
+    llm = FixedIntentLLM(
+        IntentDecision(
+            intent="mail",
+            source_requests=[SourceRequest(source="mail", query="NAND")],
+            time_scope="previous_week",
+        )
+    )
+    model = StructuredAgentModel(llm, now=NOW)
 
     analysis = asyncio.run(
-        model.analyze(
-            "Cell Leakage가 뭐야?",
-            ConversationMemory(),
-            "Asia/Seoul",
-        )
+        model.analyze("임의 문구", ConversationMemory(), "Asia/Seoul")
     )
 
-    assert llm.calls == 2
-    assert analysis.question_type == "domain_knowledge"
-
-
-def test_structured_answer_falls_back_when_cited_claim_is_unsupported():
-    class UnsupportedAnswerLLM:
-        async def complete_text(self, system, user):
-            return "근거에 없는 임의 사실입니다. [S1]"
-
-        async def complete_model(self, system, user, schema):
-            return {"supported": False}
-
-    fallback = RuleBasedAgentModel()
-    analysis = asyncio.run(
-        fallback.analyze(
-            "NAND Action이 뭐였어?", ConversationMemory(), "Asia/Seoul"
-        )
-    )
-    documents = [
-        SearchDocument(
-            source_type="calendar",
-            document_id="event-kim-1-action",
-            content_kind="attachment",
-            title="NAND Action",
-            text="회의 Action은 장비 A의 FDC 로그를 점검하는 것이다.",
-            score=1.0,
-        )
-    ]
-    model = StructuredAgentModel(UnsupportedAnswerLLM(), fallback=fallback)
-
-    answer = asyncio.run(
-        model.answer("NAND Action이 뭐였어?", analysis, documents, [])
-    )
-
-    assert "근거에 없는 임의 사실" not in answer
-    assert "FDC 로그" in answer
-    assert "[S1]" in answer
-
-
-def test_structured_answer_cannot_self_approve_a_fabricated_cited_claim():
-    class SelfApprovingLLM:
-        def __init__(self):
-            self.support_calls = 0
-
-        async def complete_model(self, system, user, schema):
-            if schema.__name__ == "QueryAnalysis":
-                return {
-                    "intent": "knowledge_query",
-                    "question_type": "mail_search",
-                    "entities": {"product": "NAND"},
-                    "information_needs": ["관련 메일"],
-                }
-            if schema.__name__ == "ToolAction":
-                return {
-                    "tool": "search_mail",
-                    "query": "NAND",
-                    "reason": "mail evidence",
-                }
-            if schema.__name__ == "JudgeDecision":
-                return {
-                    "sufficient": True,
-                    "reason": "self approved",
-                    "missing_information": [],
-                    "recommended_action": None,
-                }
-            self.support_calls += 1
-            return {"supported": True}
-
-        async def complete_text(self, system, user):
-            return "NAND 수율은 99.9%로 확정됐습니다. [S1]"
-
-    llm = SelfApprovingLLM()
-    search = InMemoryMultiSourceSearch.from_path(
-        Path("fixtures/multi_source_demo/corpus.json"),
-        SourceRegistry.from_settings(Settings()),
-    )
-    workflow = MultiSourceAgenticWorkflow(
-        search,
-        StructuredAgentModel(llm, fallback=RuleBasedAgentModel(now=NOW), now=NOW),
-    )
-
-    result = invoke(workflow, "NAND 메일 찾아줘")
-
-    assert "99.9%" not in result.answer
-    assert "Cell Leakage" in result.answer
-    assert result.quality.citation_valid is True
-    assert result.execution.status == "succeeded"
-    assert llm.support_calls == 0
-
-
-def test_model_authored_utc_is_replaced_by_deterministic_resolution():
-    class MisleadingStructuredLLM:
-        async def complete_model(self, system, user, schema):
-            return {
-                "intent": "knowledge_query",
-                "question_type": "mail_search",
-                "entities": {"product": "NAND"},
-                "time_expression": "어제",
-                "start_at_utc": "2000-01-01T00:00:00Z",
-                "end_at_utc": "2000-01-02T00:00:00Z",
-                "information_needs": ["관련 메일"],
-            }
-
-    model = StructuredAgentModel(MisleadingStructuredLLM(), now=NOW)
-
-    analysis = asyncio.run(
-        model.analyze(
-            "지난주 NAND 메일 찾아줘", ConversationMemory(), "Asia/Seoul"
-        )
-    )
-
-    expected = resolve_time_range(
-        "지난주", now=NOW, timezone_name="Asia/Seoul"
-    )
-    assert analysis.time_expression == "지난주"
-    assert analysis.start_at_utc == expected.start_at_utc
-    assert analysis.end_at_utc == expected.end_at_utc
-
-
-@pytest.mark.parametrize(
-    "hostile_analysis",
-    [
-        {
-            "intent": "knowledge_query",
-            "question_type": "general_chat",
-            "entities": {},
-            "information_needs": [],
-        },
-        {
-            "intent": "knowledge_query",
-            "question_type": "multi_source",
-            "entities": {"product": "NAND"},
-            "information_needs": ["기술적 의미"],
-        },
-    ],
-    ids=["general-chat-empty", "multi-source-wrong-needs"],
-)
-def test_structured_analysis_cannot_remove_raw_multi_source_requirements(
-    hostile_analysis,
-):
-    class HostileStructuredLLM:
-        async def complete_model(self, system, user, schema):
-            if schema.__name__ == "QueryAnalysis":
-                return hostile_analysis
-            if schema.__name__ == "ToolAction":
-                return {
-                    "tool": "search_mail",
-                    "query": "NAND",
-                    "reason": "stop after one source",
-                }
-            return {
-                "sufficient": True,
-                "reason": "one source is enough",
-                "missing_information": [],
-                "recommended_action": None,
-            }
-
-    search = InMemoryMultiSourceSearch.from_path(
-        Path("fixtures/multi_source_demo/corpus.json"),
-        SourceRegistry.from_settings(Settings()),
-    )
-    workflow = MultiSourceAgenticWorkflow(
-        search,
-        StructuredAgentModel(HostileStructuredLLM(), now=NOW),
-    )
-
-    result = invoke(workflow, QUESTION)
-
-    assert [action.tool for action, _owner in search.calls] == [
-        "search_mail",
-        "search_calendar",
-        "expand_calendar_event",
-        "search_domain_knowledge",
-    ]
-    assert {item.source_type for item in result.evidence} == {
-        "mail",
-        "calendar",
-        "domain_knowledge",
-    }
-    assert result.execution.status == "succeeded"
-
-
-def test_structured_analysis_may_add_need_without_removing_baseline_needs():
-    class AdditiveStructuredLLM:
-        async def complete_model(self, system, user, schema):
-            return {
-                "intent": "knowledge_query",
-                "question_type": "domain_knowledge",
-                "entities": {"product": "NAND"},
-                "information_needs": ["기술적 의미"],
-            }
-
-    model = StructuredAgentModel(AdditiveStructuredLLM(), now=NOW)
-
-    analysis = asyncio.run(
-        model.analyze(
-            "NAND 관련 메일 찾아줘",
-            ConversationMemory(),
-            "Asia/Seoul",
-        )
-    )
-
-    assert analysis.information_needs == ["관련 메일", "기술적 의미"]
-    assert analysis.question_type == "multi_source"
+    assert analysis.time_scope == "previous_week"
+    assert analysis.start_at_utc == datetime(2026, 8, 2, 15, tzinfo=UTC)
+    assert analysis.end_at_utc == datetime(2026, 8, 9, 15, tzinfo=UTC)
 
 
 def test_answer_citations_and_evidence_are_grounded_and_normalized():
@@ -888,7 +943,10 @@ def test_agentic_result_preserves_bm25_retrieval_mode():
                 disclosures=["embedding unavailable"],
             )
 
-    workflow = MultiSourceAgenticWorkflow(BM25Search(), RuleBasedAgentModel())
+    workflow = MultiSourceAgenticWorkflow(
+        BM25Search(),
+        analyzer(SourceRequest(source="mail", query="NAND")),
+    )
 
     result = invoke(workflow, "NAND 메일 찾아줘")
 
@@ -917,7 +975,8 @@ def test_limited_answer_reserves_a_disclosure_slot_for_the_limit_message():
             )
 
     workflow = MultiSourceAgenticWorkflow(
-        FourDisclosureSearch(), RuleBasedAgentModel()
+        FourDisclosureSearch(),
+        analyzer(SourceRequest(source="mail", query="NAND")),
     )
 
     result = invoke(workflow, "NAND 관련 메일 찾아줘")
@@ -927,9 +986,16 @@ def test_limited_answer_reserves_a_disclosure_slot_for_the_limit_message():
     assert LIMIT_DISCLOSURE in result.disclosures
 
 
-def test_hostile_judge_output_is_sanitized_from_answer_trace_and_memory():
-    class HostileJudgeModel(RuleBasedAgentModel):
-        async def judge(self, state):
+def test_hostile_policy_output_is_sanitized_from_answer_trace_and_memory():
+    class HostileJudgePolicy(TypedAgentPolicy):
+        def judge(
+            self,
+            analysis,
+            observations,
+            documents,
+            memory,
+            iteration_count,
+        ):
             return JudgeDecision(
                 sufficient=False,
                 reason="<analysis>trace secret</analysis>",
@@ -939,14 +1005,19 @@ def test_hostile_judge_output_is_sanitized_from_answer_trace_and_memory():
                 recommended_action=None,
             )
 
-        async def answer(self, question, analysis, documents, missing):
+        @staticmethod
+        def answer(documents, missing):
             return "확인된 근거입니다. [S1]"
 
     search = InMemoryMultiSourceSearch.from_path(
         Path("fixtures/multi_source_demo/corpus.json"),
         SourceRegistry.from_settings(Settings()),
     )
-    workflow = MultiSourceAgenticWorkflow(search, HostileJudgeModel())
+    workflow = MultiSourceAgenticWorkflow(
+        search,
+        analyzer(SourceRequest(source="mail", query="NAND")),
+        policy=HostileJudgePolicy(),
+    )
 
     result = invoke(workflow, "NAND 메일 찾아줘")
     serialized = result.model_dump_json()
@@ -969,25 +1040,13 @@ def test_no_evidence_cannot_persist_model_authored_memory_fields():
                 retrieval_mode="deterministic",
             )
 
-    class HostileMemoryModel(RuleBasedAgentModel):
-        async def analyze(self, question, memory, timezone_name):
-            return QueryAnalysis(
-                intent="knowledge_query",
-                question_type="mail_search",
-                entities={
-                    "product": "TOP_SECRET",
-                    "issue": "MODEL_INVENTED",
-                },
-                information_needs=["관련 메일"],
-            )
-
-        async def judge(self, state):
-            return JudgeDecision(
-                sufficient=True,
-                reason="hostile complete",
-                missing_information=["HOSTILE_MISSING"],
-                recommended_action=None,
-            )
+    hostile_analyzer = analyzer(
+        SourceRequest(source="mail", query="NAND"),
+        entities={
+            "product": "TOP_SECRET",
+            "issue": "MODEL_INVENTED",
+        },
+    )
 
     trusted = ConversationMemory(
         entities={"product": "TRUSTED_NAND"},
@@ -995,7 +1054,7 @@ def test_no_evidence_cannot_persist_model_authored_memory_fields():
         unresolved_information=["Trusted gap"],
     )
     policy = PolicyContext.from_user_id("kim")
-    workflow = MultiSourceAgenticWorkflow(EmptySearch(), HostileMemoryModel())
+    workflow = MultiSourceAgenticWorkflow(EmptySearch(), hostile_analyzer)
 
     result = asyncio.run(
         workflow.invoke(
@@ -1045,7 +1104,10 @@ def test_request_mail_facets_are_forwarded_to_source_search():
             )
 
     search = FilterRecordingSearch()
-    workflow = MultiSourceAgenticWorkflow(search, RuleBasedAgentModel())
+    workflow = MultiSourceAgenticWorkflow(
+        search,
+        analyzer(SourceRequest(source="mail", query="NAND")),
+    )
 
     result = asyncio.run(
         workflow.invoke(
@@ -1114,7 +1176,13 @@ def test_source_failure_returns_partial_grounded_result_instead_of_raising():
             )
 
     search = PartiallyFailingSearch()
-    workflow = MultiSourceAgenticWorkflow(search, RuleBasedAgentModel())
+    workflow = MultiSourceAgenticWorkflow(
+        search,
+        analyzer(
+            SourceRequest(source="mail", query="NAND"),
+            SourceRequest(source="calendar", query="NAND"),
+        ),
+    )
 
     result = invoke(workflow, "NAND 메일과 회의 찾아줘")
 
@@ -1174,7 +1242,13 @@ def test_required_source_sweep_continues_after_empty_or_failed_mail(
             )
 
     search = SweepSearch()
-    workflow = MultiSourceAgenticWorkflow(search, RuleBasedAgentModel())
+    workflow = MultiSourceAgenticWorkflow(
+        search,
+        analyzer(
+            SourceRequest(source="mail", query="NAND"),
+            SourceRequest(source="calendar", query="NAND"),
+        ),
+    )
 
     result = invoke(workflow, "NAND 메일과 회의 찾아줘")
 
@@ -1204,11 +1278,11 @@ def test_policy_and_programming_errors_are_not_downgraded_to_source_failure():
     )
     policy_workflow = MultiSourceAgenticWorkflow(
         RaisingSearch(policy_error),
-        RuleBasedAgentModel(),
+        analyzer(SourceRequest(source="mail", query="NAND")),
     )
     programming_workflow = MultiSourceAgenticWorkflow(
         RaisingSearch(AssertionError("programming contract failed")),
-        RuleBasedAgentModel(),
+        analyzer(SourceRequest(source="mail", query="NAND")),
     )
 
     with pytest.raises(AppError) as policy_failure:
@@ -1218,7 +1292,7 @@ def test_policy_and_programming_errors_are_not_downgraded_to_source_failure():
         invoke(programming_workflow, "NAND 메일 찾아줘")
 
 
-def test_optional_source_failure_keeps_quality_and_execution_limited():
+def test_additional_typed_source_failure_keeps_quality_and_execution_limited():
     class OptionalFailureSearch:
         async def execute(
             self,
@@ -1250,31 +1324,12 @@ def test_optional_source_failure_keeps_quality_and_execution_limited():
                 retrieval_mode="hybrid",
             )
 
-    class OptionalSourceJudge(RuleBasedAgentModel):
-        def __init__(self):
-            super().__init__()
-            self.judge_calls = 0
-
-        async def judge(self, state):
-            self.judge_calls += 1
-            return JudgeDecision(
-                sufficient=self.judge_calls > 1,
-                reason="optional source check",
-                missing_information=[],
-                recommended_action=(
-                    None
-                    if self.judge_calls > 1
-                    else ToolAction(
-                        tool="search_domain_knowledge",
-                        query="NAND",
-                        reason="optional corroboration",
-                    )
-                ),
-            )
-
     workflow = MultiSourceAgenticWorkflow(
         OptionalFailureSearch(),
-        OptionalSourceJudge(),
+        analyzer(
+            SourceRequest(source="mail", query="NAND"),
+            SourceRequest(source="domain_knowledge", query="NAND"),
+        ),
     )
 
     result = invoke(workflow, "NAND 메일 찾아줘")
@@ -1322,7 +1377,10 @@ def test_calendar_expansion_failure_is_reported_as_typed_partial_result():
 
     workflow = MultiSourceAgenticWorkflow(
         ExpansionFailingSearch(),
-        RuleBasedAgentModel(),
+        analyzer(
+            SourceRequest(source="calendar", query="NAND"),
+            calendar_detail_required=True,
+        ),
     )
 
     result = invoke(workflow, "NAND 회의에서 Action 뭐였어?")
@@ -1334,20 +1392,18 @@ def test_calendar_expansion_failure_is_reported_as_typed_partial_result():
     assert "calendar attachment timeout secret" not in result.model_dump_json()
 
 
-def test_deterministic_required_source_precedes_irrelevant_model_plan():
-    class IrrelevantPlanner(RuleBasedAgentModel):
-        async def plan(self, question, analysis, observations, memory):
-            return ToolAction(
-                tool="search_domain_knowledge",
-                query="NAND",
-                reason="irrelevant model preference",
-            )
-
+def test_typed_source_request_controls_initial_source():
     search = InMemoryMultiSourceSearch.from_path(
         Path("fixtures/multi_source_demo/corpus.json"),
         SourceRegistry.from_settings(Settings()),
     )
-    workflow = MultiSourceAgenticWorkflow(search, IrrelevantPlanner(now=NOW))
+    workflow = MultiSourceAgenticWorkflow(
+        search,
+        analyzer(
+            SourceRequest(source="mail", query="NAND"),
+            information_needs=["기술 원인 일정"],
+        ),
+    )
 
     result = invoke(workflow, "NAND 메일 찾아줘")
 
@@ -1355,22 +1411,14 @@ def test_deterministic_required_source_precedes_irrelevant_model_plan():
     assert {item.source_type for item in result.evidence} == {"mail"}
 
 
-def test_deterministic_required_source_also_controls_initial_query():
-    class EmptyMailQueryPlanner(RuleBasedAgentModel):
-        async def plan(self, question, analysis, observations, memory):
-            return ToolAction(
-                tool="search_mail",
-                query="definitely-no-such-mail-token",
-                reason="same source but unusable model query",
-            )
-
+def test_typed_source_request_controls_initial_query():
     search = InMemoryMultiSourceSearch.from_path(
         Path("fixtures/multi_source_demo/corpus.json"),
         SourceRegistry.from_settings(Settings()),
     )
     workflow = MultiSourceAgenticWorkflow(
         search,
-        EmptyMailQueryPlanner(now=NOW),
+        analyzer(SourceRequest(source="mail", query="NAND")),
     )
 
     result = invoke(workflow, "NAND 메일 찾아줘")
