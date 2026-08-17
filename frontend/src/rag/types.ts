@@ -1,4 +1,3 @@
-export type ExecutionMode = 'auto' | 'fast' | 'deep'
 export type ResearchStatus =
   | 'queued'
   | 'running'
@@ -18,7 +17,6 @@ export interface ChatPayload {
   message: string
   conversation_id?: string
   filters: RetrievalFilters
-  response_mode: ExecutionMode
 }
 
 export interface QualityStatus {
@@ -63,13 +61,10 @@ export interface ExecutionMetadata {
   node_runs: NodeRun[]
 }
 
-export interface RoutingDiagnostics {
-  requested_mode: ExecutionMode
-  route: 'general' | 'fast' | 'deep' | 'clarify' | 'diagnostic' | 'corpus_info'
-  executed_system: 'general' | 'fast_rag' | 'deep_research' | 'clarification' | 'diagnostic' | 'corpus_info'
-  reason_code: string
-  confidence: number
-  estimated_searches: number
+export interface AgentTrace {
+  tool_calls: string[]
+  judge_decisions: string[]
+  iteration_count: number
 }
 
 export interface ChatReference {
@@ -84,16 +79,12 @@ export interface ChatReference {
 
 export interface ChatResponse {
   conversation_id: string
-  mode: 'fast_rag' | 'deep_research' | 'diagnostic' | 'corpus_info'
   answer?: string | null
   references: ChatReference[]
   quality?: QualityStatus | null
   disclosures: string[]
   trace_id: string
-  routing: RoutingDiagnostics
-  job_id?: string | null
-  status?: ResearchStatus | null
-  plan_summary?: string | null
+  agent_trace?: AgentTrace | null
   execution?: ExecutionMetadata | null
 }
 
@@ -152,7 +143,6 @@ export interface ReadinessResponse {
 
 export interface RagRequestSettings {
   userId: string
-  mode: ExecutionMode
   conversationId?: string
   filters: RetrievalFilters
 }

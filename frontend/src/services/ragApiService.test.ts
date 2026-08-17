@@ -10,6 +10,36 @@ const jsonResponse = (body: unknown, status = 200) =>
     headers: { 'content-type': 'application/json' },
   })
 
+const chatResponse = (updates: Record<string, unknown> = {}) => ({
+  conversation_id: 'conversation-1',
+  answer: '일정 답변 [S1]',
+  references: [],
+  quality: {
+    citation_valid: true,
+    limited_answer: false,
+    retrieval_mode: 'hybrid',
+  },
+  disclosures: [],
+  trace_id: 'trace-1',
+  agent_trace: {
+    tool_calls: ['search_calendar'],
+    judge_decisions: ['sufficient'],
+    iteration_count: 1,
+  },
+  execution: {
+    status: 'succeeded',
+    failure_stage: null,
+    error_code: null,
+    retryable: false,
+    search_count: 1,
+    evidence_count: 1,
+    duration_ms: 12,
+    include_in_llm_history: true,
+    node_runs: [],
+  },
+  ...updates,
+})
+
 const completedJob = {
   job_id: 'job-1',
   status: 'completed',
@@ -34,36 +64,13 @@ describe('RagApiService', () => {
     vi.unstubAllGlobals()
   })
 
-  it('sends explicit Fast chat with owner and search facets', async () => {
-    fetchMock.mockResolvedValue(
-      jsonResponse({
-        conversation_id: 'c1',
-        mode: 'fast_rag',
-        answer: '답 [S1]',
-        references: [],
-        quality: {
-          citation_valid: true,
-          limited_answer: false,
-          retrieval_mode: 'hybrid',
-        },
-        routing: {
-          requested_mode: 'fast',
-          route: 'fast',
-          executed_system: 'fast_rag',
-          reason_code: 'explicit_mode',
-          confidence: 1,
-          estimated_searches: 1,
-        },
-        disclosures: [],
-        trace_id: 't1',
-      }),
-    )
+  it('sends one route-free chat request and accepts bounded agent trace', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(chatResponse()))
     const service = new RagApiService('/api/')
 
     const exchange = await service.sendChat({
       user_id: 'kim',
       message: '질문',
-      response_mode: 'fast',
       filters: {
         teams: ['YIELD'],
         weeks: ['2026-31'],
@@ -78,7 +85,6 @@ describe('RagApiService', () => {
         body: JSON.stringify({
           user_id: 'kim',
           message: '질문',
-          response_mode: 'fast',
           filters: {
             teams: ['YIELD'],
             weeks: ['2026-31'],
@@ -89,164 +95,34 @@ describe('RagApiService', () => {
     )
     expect(exchange.status).toBe(200)
     expect(exchange.durationMs).toBe(42)
-    expect(exchange.response?.trace_id).toBe('t1')
-    expect(exchange.request).not.toHaveProperty('headers')
-  })
-
-  it('accepts deterministic retrieval from a demo chat response', async () => {
-    fetchMock.mockResolvedValue(
-      jsonResponse({
-        conversation_id: 'c-demo',
-        mode: 'fast_rag',
-        answer: 'Cell Leakage는 저장 전하 누설 현상입니다 [S1]',
-        references: [
-          {
-            evidence_id: 'S1',
-            source_type: 'domain_knowledge',
-            document_id: 'domain-cell-leakage',
-            title: 'Cell Leakage',
-            excerpt: '저장 전하 누설 현상이다.',
-          },
-        ],
-        quality: {
-          citation_valid: true,
-          limited_answer: false,
-          retrieval_mode: 'deterministic',
-        },
-        routing: {
-          requested_mode: 'fast',
-          route: 'fast',
-          executed_system: 'fast_rag',
-          reason_code: 'explicit_mode',
-          confidence: 1,
-          estimated_searches: 1,
-        },
-        disclosures: [],
-        trace_id: 'trace-demo',
-      }),
-    )
-
-    const exchange = await new RagApiService('/api').sendChat({
-      user_id: 'kim',
-      message: 'Cell Leakage가 뭐야?',
-      response_mode: 'fast',
-      filters: { teams: [], weeks: [] },
-    })
-
-    expect(exchange.error).toBeUndefined()
-    expect(exchange.response?.quality?.retrieval_mode).toBe('deterministic')
-  })
-
-  it('accepts general routing with retrieval not used', async () => {
-    fetchMock.mockResolvedValue(
-      jsonResponse({
-        conversation_id: 'c-general',
-        mode: 'fast_rag',
-        answer: 'Hello!',
-        references: [],
-        quality: {
-          citation_valid: true,
-          limited_answer: false,
-          retrieval_mode: 'not_used',
-        },
-        routing: {
-          requested_mode: 'auto',
-          route: 'general',
-          executed_system: 'general',
-          reason_code: 'deterministic_general',
-          confidence: 1,
-          estimated_searches: 0,
-        },
-        disclosures: [],
-        trace_id: 'trace-general',
-      }),
-    )
-
-    const exchange = await new RagApiService('/api').sendChat({
-      user_id: 'kim',
-      message: 'hi',
-      response_mode: 'auto',
-      filters: { teams: [], weeks: [] },
-    })
-
-    expect(exchange.error).toBeUndefined()
-    expect(exchange.response?.routing.route).toBe('general')
-    expect(exchange.response?.quality?.retrieval_mode).toBe('not_used')
+    expect(exchange.response?.agent_trace?.tool_calls).toEqual(['search_calendar'])
+    expect(exchange.request.body).not.toHaveProperty('response_mode')
   })
 
   it('accepts references from every supported source type', async () => {
-    fetchMock.mockResolvedValue(
-      jsonResponse({
-        conversation_id: 'c-multi-source',
-        mode: 'fast_rag',
-        answer: '확인된 답변입니다 [S1] [S2] [S3] [S4] [S5]',
-        references: [
-          {
-            evidence_id: 'S1',
-            source_type: 'calendar',
-            document_id: 'event-kim-1',
-            title: 'NAND Yield Review',
-            excerpt: 'FDC 로그를 확인한다.',
-          },
-          {
-            evidence_id: 'S2',
-            source_type: 'domain_knowledge',
-            document_id: 'domain-cell-leakage',
-            title: 'Cell Leakage',
-            excerpt: '저장 전하 누설 현상이다.',
-          },
-          {
-            evidence_id: 'S3',
-            source_type: 'mail',
-            document_id: 'mail-yield-1',
-            title: '주간 수율 메일',
-            excerpt: '수율 저하 원인을 정리했다.',
-            team: 'YIELD',
-            week: '2026-31',
-          },
-          {
-            evidence_id: 'S4',
-            source_type: 'wiki',
-            document_id: 'wiki-nand-1',
-            title: 'NAND 공정 Wiki',
-            excerpt: '공정 기준을 설명한다.',
-          },
-          {
-            evidence_id: 'S5',
-            source_type: 'statistic',
-            document_id: 'stat-yield-1',
-            title: '수율 통계',
-            excerpt: '최근 수율 추이를 집계했다.',
-          },
-        ],
-        quality: {
-          citation_valid: true,
-          limited_answer: false,
-          retrieval_mode: 'hybrid',
-        },
-        routing: {
-          requested_mode: 'fast',
-          route: 'fast',
-          executed_system: 'fast_rag',
-          reason_code: 'explicit_mode',
-          confidence: 1,
-          estimated_searches: 1,
-        },
-        disclosures: [],
-        trace_id: 'trace-multi-source',
-      }),
-    )
+    const references = [
+      ['calendar', 'event-1'],
+      ['domain_knowledge', 'domain-1'],
+      ['mail', 'mail-1'],
+      ['wiki', 'wiki-1'],
+      ['statistic', 'stat-1'],
+    ].map(([source_type, document_id], index) => ({
+      evidence_id: `S${index + 1}`,
+      source_type,
+      document_id,
+      title: '근거',
+      excerpt: '검증된 내용',
+    }))
+    fetchMock.mockResolvedValue(jsonResponse(chatResponse({ references })))
 
     const exchange = await new RagApiService('/api').sendChat({
       user_id: 'kim',
       message: '회의와 도메인 지식을 알려줘',
-      response_mode: 'fast',
       filters: { teams: [], weeks: [] },
     })
 
     expect(exchange.error).toBeUndefined()
-    expect(exchange.response?.references).toHaveLength(5)
-    expect(exchange.response?.references.map((reference) => reference.source_type)).toEqual([
+    expect(exchange.response?.references.map((item) => item.source_type)).toEqual([
       'calendar',
       'domain_knowledge',
       'mail',
@@ -255,43 +131,22 @@ describe('RagApiService', () => {
     ])
   })
 
-  it('rejects an unsupported reference source type', async () => {
+  it('rejects unsupported evidence sources', async () => {
     fetchMock.mockResolvedValue(
-      jsonResponse({
-        conversation_id: 'c-unsupported-source',
-        mode: 'fast_rag',
-        answer: '지원하지 않는 근거입니다 [S1]',
-        references: [
-          {
-            evidence_id: 'S1',
-            source_type: 'chat_log',
-            document_id: 'chat-1',
-            title: '내부 대화 로그',
-            excerpt: '외부에 노출하면 안 되는 값이다.',
-          },
-        ],
-        quality: {
-          citation_valid: true,
-          limited_answer: false,
-          retrieval_mode: 'hybrid',
-        },
-        routing: {
-          requested_mode: 'fast',
-          route: 'fast',
-          executed_system: 'fast_rag',
-          reason_code: 'explicit_mode',
-          confidence: 1,
-          estimated_searches: 1,
-        },
-        disclosures: [],
-        trace_id: 'trace-unsupported-source',
-      }),
+      jsonResponse(chatResponse({
+        references: [{
+          evidence_id: 'S1',
+          source_type: 'chat_log',
+          document_id: 'chat-1',
+          title: '내부 로그',
+          excerpt: '노출 금지',
+        }],
+      })),
     )
 
     const exchange = await new RagApiService('/api').sendChat({
       user_id: 'kim',
-      message: '지원하지 않는 출처를 확인해줘',
-      response_mode: 'fast',
+      message: '질문',
       filters: { teams: [], weeks: [] },
     })
 
@@ -299,25 +154,15 @@ describe('RagApiService', () => {
     expect(exchange.error?.code).toBe('INVALID_RESPONSE')
   })
 
-  it('accepts typed failed execution with unrun citation and search', async () => {
+  it('accepts a typed failed agent execution', async () => {
     fetchMock.mockResolvedValue(
-      jsonResponse({
-        conversation_id: 'c-failed',
-        mode: 'fast_rag',
+      jsonResponse(chatResponse({
         answer: null,
         references: [],
         quality: {
           citation_valid: null,
           limited_answer: true,
           retrieval_mode: 'not_started',
-        },
-        routing: {
-          requested_mode: 'fast',
-          route: 'fast',
-          executed_system: 'fast_rag',
-          reason_code: 'explicit_mode',
-          confidence: 1,
-          estimated_searches: 1,
         },
         execution: {
           status: 'failed',
@@ -328,16 +173,14 @@ describe('RagApiService', () => {
           evidence_count: 0,
           duration_ms: 5000,
           include_in_llm_history: false,
+          node_runs: [],
         },
-        disclosures: [],
-        trace_id: 'trace-failed',
-      }),
+      })),
     )
 
     const exchange = await new RagApiService('/api').sendChat({
       user_id: 'kim',
       message: '질문',
-      response_mode: 'fast',
       filters: { teams: [], weeks: [] },
     })
 
@@ -346,27 +189,25 @@ describe('RagApiService', () => {
     expect(exchange.response?.quality?.citation_valid).toBeNull()
   })
 
-  it('rejects a successful chat response without routing diagnostics', async () => {
+  it('rejects the obsolete route envelope', async () => {
     fetchMock.mockResolvedValue(
       jsonResponse({
-        conversation_id: 'c1',
+        ...chatResponse(),
         mode: 'fast_rag',
-        answer: '답변',
-        references: [],
-        quality: {
-          citation_valid: true,
-          limited_answer: false,
-          retrieval_mode: 'hybrid',
+        routing: {
+          requested_mode: 'fast',
+          route: 'fast',
+          executed_system: 'fast_rag',
+          reason_code: 'explicit_mode',
+          confidence: 1,
+          estimated_searches: 1,
         },
-        disclosures: [],
-        trace_id: 'trace-1',
       }),
     )
 
     const exchange = await new RagApiService('/api').sendChat({
       user_id: 'kim',
       message: '질문',
-      response_mode: 'fast',
       filters: { teams: [], weeks: [] },
     })
 
@@ -375,12 +216,11 @@ describe('RagApiService', () => {
   })
 
   it.each(['status', 'cancel', 'retry'] as const)(
-    'sends owner for research %s',
+    'keeps explicit research %s independent from chat',
     async (action) => {
       fetchMock.mockResolvedValue(jsonResponse(completedJob))
-      const service = new RagApiService('/api')
 
-      await service.researchAction('job/1', action, 'kim')
+      await new RagApiService('/api').researchAction('job/1', action, 'kim')
 
       expect(fetchMock).toHaveBeenCalledWith(
         `/api/v1/research/job%2F1/${action}`,
@@ -406,10 +246,10 @@ describe('RagApiService', () => {
         503,
       ),
     )
+
     const exchange = await new RagApiService('/api').sendChat({
       user_id: 'kim',
       message: '질문',
-      response_mode: 'fast',
       filters: { teams: [], weeks: [] },
     })
 
@@ -422,59 +262,12 @@ describe('RagApiService', () => {
     expect(exchange.response).toBeUndefined()
   })
 
-  it('does not expose an HTML failure body', async () => {
-    fetchMock.mockResolvedValue(
-      new Response('<html>/srv/private secret</html>', {
-        status: 502,
-        headers: { 'content-type': 'text/html' },
-      }),
-    )
-    const exchange = await new RagApiService('/api').getHealth()
-
-    expect(exchange.error?.message).toBe('요청을 처리할 수 없습니다.')
-    expect(exchange.error?.retryable).toBe(true)
-    expect(JSON.stringify(exchange)).not.toContain('/srv/private')
-  })
-
-  it('returns a safe protocol error for a successful malformed response', async () => {
-    fetchMock.mockResolvedValue(
-      new Response('<html>unexpected success</html>', {
-        status: 200,
-        headers: { 'content-type': 'text/html' },
-      }),
-    )
-
-    const exchange = await new RagApiService('/api').getHealth()
-
-    expect(exchange.response).toBeUndefined()
-    expect(exchange.error).toEqual({
-      code: 'INVALID_RESPONSE',
-      message: 'API 응답 형식을 확인할 수 없습니다.',
-      retryable: true,
-    })
-  })
-
-  it('rejects malformed nested references in an otherwise successful chat', async () => {
-    fetchMock.mockResolvedValue(
-      jsonResponse({
-        conversation_id: 'c1',
-        mode: 'fast_rag',
-        answer: '답변',
-        references: [null],
-        quality: {
-          citation_valid: true,
-          limited_answer: false,
-          retrieval_mode: 'hybrid',
-        },
-        disclosures: [],
-        trace_id: 'trace-1',
-      }),
-    )
+  it('rejects malformed nested references', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(chatResponse({ references: [null] })))
 
     const exchange = await new RagApiService('/api').sendChat({
       user_id: 'kim',
       message: '질문',
-      response_mode: 'fast',
       filters: { teams: [], weeks: [] },
     })
 
@@ -482,7 +275,21 @@ describe('RagApiService', () => {
     expect(exchange.error?.code).toBe('INVALID_RESPONSE')
   })
 
-  it('parses split POST event-stream frames and sends the owner', async () => {
+  it('does not expose an HTML failure body', async () => {
+    fetchMock.mockResolvedValue(
+      new Response('<html>/srv/private secret</html>', {
+        status: 502,
+        headers: { 'content-type': 'text/html' },
+      }),
+    )
+
+    const exchange = await new RagApiService('/api').getHealth()
+
+    expect(exchange.error?.message).toBe('요청을 처리할 수 없습니다.')
+    expect(JSON.stringify(exchange)).not.toContain('/srv/private')
+  })
+
+  it('parses split research event frames and sends the owner', async () => {
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(encoder.encode('data: {"job_id":"j1","status":"run'))
