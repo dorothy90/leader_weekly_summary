@@ -21,6 +21,21 @@ The canonical run exits with status 0, shows the exact tool order
 evidence. A custom question exits with status 0 when it returns a grounded,
 non-limited answer; it does not have to use the canonical four-tool path.
 
+## August 2026 dummy coverage
+
+The committed corpus contains one Mail body at 09:00 Asia/Seoul and one
+Calendar event at 10:00-11:00 Asia/Seoul for every Monday-to-Friday date in
+August 2026: August 3-7, 10-14, 17-21, 24-28, and 31. Demo time is fixed at
+August 17, 2026 so this command returns five grounded Calendar events for
+August 17-21:
+
+```bash
+python scripts/run_multi_source_demo.py "이번주 일정알려줘"
+```
+
+Use an explicit ISO date to inspect the month boundaries, for example
+`2026-08-03 일정 알려줘` or `2026-08-31 일정 알려줘`.
+
 ## API and frontend
 
 Start the demo API and frontend in separate terminals:
