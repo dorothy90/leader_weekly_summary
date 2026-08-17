@@ -1,4 +1,5 @@
 import asyncio
+from datetime import UTC, date, datetime
 import os
 from pathlib import Path
 import re
@@ -11,19 +12,52 @@ import pytest
 from app.api.dependencies import build_demo_container
 from app.api.main import create_app
 from app.config.settings import Settings
+from app.domain.agentic import IntentDecision, SourceRequest
+from app.domain.chat import ChatRequest
 from app.domain.policy import PolicyContext
 from app.graphs.multi_source import MultiSourceAgenticWorkflow
-from app.llm.agentic import RuleBasedAgentModel
+from app.llm.demo_scenarios import StaticIntentAnalyzer, scenario_decisions
 from app.persistence.conversations import InMemoryConversationStore
 from app.retrieval.multi_source import InMemoryMultiSourceSearch
 
 
 ROOT = Path(__file__).resolve().parents[2]
+NOW = datetime(2026, 8, 17, 0, tzinfo=UTC)
+CANONICAL_NOW = datetime(2026, 8, 16, 12, tzinfo=UTC)
 CANONICAL_QUESTION = (
     "김OO이 지난주 메일에서 이야기한 NAND 수율 문제가 어떤 회의에서 "
     "논의됐고 회의에서 어떤 Action을 하기로 했으며 기술적으로 어떤 "
     "의미인지 설명해줘."
 )
+
+
+def demo_container(scenario="canonical"):
+    return build_demo_container(
+        Settings(openrouter_api_key=""),
+        agent_model=StaticIntentAnalyzer(
+            scenario_decisions(scenario),
+            now=CANONICAL_NOW if scenario == "canonical" else NOW,
+        ),
+    )
+
+
+def exact_date_container(day):
+    return build_demo_container(
+        Settings(openrouter_api_key=""),
+        agent_model=StaticIntentAnalyzer(
+            (
+                IntentDecision(
+                    intent="daily_schedule",
+                    source_requests=[
+                        SourceRequest(source="calendar", query="일정")
+                    ],
+                    time_scope="exact_date",
+                    exact_date=date.fromisoformat(day),
+                ),
+            ),
+            now=NOW,
+        ),
+    )
 
 
 async def post(app, payload):
@@ -33,7 +67,7 @@ async def post(app, payload):
 
 
 def canonical_demo_response():
-    app = create_app(build_demo_container())
+    app = create_app(demo_container())
     response = asyncio.run(
         post(
             app,
@@ -75,7 +109,9 @@ def test_every_answer_citation_exists_in_same_response_references():
     assert cited <= evidence_ids
 
 
-def test_demo_container_uses_only_in_memory_and_rule_based_dependencies(monkeypatch):
+def test_demo_container_accepts_injected_typed_analyzer_without_external_services(
+    monkeypatch,
+):
     monkeypatch.setattr(
         "app.api.dependencies.build_ai_gateways",
         lambda _settings: (_ for _ in ()).throw(AssertionError("external AI")),
@@ -85,17 +121,57 @@ def test_demo_container_uses_only_in_memory_and_rule_based_dependencies(monkeypa
         lambda _settings: (_ for _ in ()).throw(AssertionError("OpenSearch")),
     )
 
-    container = build_demo_container(Settings(openrouter_api_key=""))
+    static = StaticIntentAnalyzer(
+        scenario_decisions("weekly-calendar"), now=NOW
+    )
+    container = build_demo_container(
+        Settings(openrouter_api_key=""), agent_model=static
+    )
 
     assert isinstance(container.conversations, InMemoryConversationStore)
-    assert isinstance(container.fast.llm, RuleBasedAgentModel)
+    assert container.fast.agentic.analyzer is static
     assert isinstance(container.fast.agentic, MultiSourceAgenticWorkflow)
     assert isinstance(container.fast.agentic.search, InMemoryMultiSourceSearch)
     assert container.deep is None
 
 
+def test_demo_container_accepts_injected_router():
+    class InjectedRouter:
+        def __bool__(self):
+            return False
+
+    router = InjectedRouter()
+
+    container = build_demo_container(
+        Settings(openrouter_api_key=""),
+        agent_model=StaticIntentAnalyzer(
+            scenario_decisions("weekly-calendar"), now=NOW
+        ),
+        router=router,
+    )
+
+    assert container.router is router
+
+
+def test_default_demo_router_always_selects_fast_without_semantic_rules():
+    container = demo_container("weekly-calendar")
+
+    decision = asyncio.run(
+        container.router.route(
+            ChatRequest(
+                user_id="kim",
+                message="안녕하세요",
+                response_mode="auto",
+            )
+        )
+    )
+
+    assert decision.route == "fast"
+    assert decision.reason_code == "demo_fast"
+
+
 def test_demo_api_runs_canonical_flow_in_canonical_tool_order():
-    container = build_demo_container()
+    container = demo_container()
     app = create_app(container)
 
     response = asyncio.run(
@@ -125,10 +201,11 @@ def test_demo_api_runs_canonical_flow_in_canonical_tool_order():
     ]
     assert "FDC" in body["answer"]
     assert body["quality"]["citation_valid"] is True
+    assert body["quality"]["limited_answer"] is False
 
 
 def test_demo_api_returns_all_current_week_events_for_generic_schedule_question():
-    container = build_demo_container()
+    container = demo_container("weekly-calendar")
     app = create_app(container)
 
     response = asyncio.run(
@@ -170,7 +247,7 @@ def test_demo_api_retrieves_beginning_and_end_of_month_events(
     day,
     expected_event_id,
 ):
-    app = create_app(build_demo_container())
+    app = create_app(exact_date_container(day))
 
     response = asyncio.run(
         post(
@@ -190,7 +267,7 @@ def test_demo_api_retrieves_beginning_and_end_of_month_events(
 
 
 def test_demo_api_follow_up_uses_saved_raw_event_reference():
-    container = build_demo_container()
+    container = demo_container("followup")
     app = create_app(container)
     first = asyncio.run(
         post(
@@ -226,10 +303,14 @@ def test_demo_api_follow_up_uses_saved_raw_event_reference():
     action = container.fast.agentic.search.calls[-1][0]
     assert action.tool == "expand_calendar_event"
     assert action.event_id == "event-kim-1"
+    assert container.fast.agentic.search.calls[-1][1] == "kim"
+    assert [
+        item.tool for item, _owner in container.fast.agentic.search.calls
+    ] == ["search_calendar", "expand_calendar_event"]
 
 
 def test_demo_api_public_response_does_not_expose_private_agent_state():
-    app = create_app(build_demo_container())
+    app = create_app(demo_container("event-action"))
 
     response = asyncio.run(
         post(
@@ -271,7 +352,7 @@ def test_demo_api_public_response_does_not_expose_private_agent_state():
 
 
 def test_demo_api_rejects_cross_user_conversation_reuse_without_leaking_it():
-    app = create_app(build_demo_container())
+    app = create_app(demo_container("followup"))
     first = asyncio.run(
         post(
             app,
@@ -303,7 +384,7 @@ def test_demo_api_rejects_cross_user_conversation_reuse_without_leaking_it():
 
 
 def test_demo_readiness_is_ready():
-    app = create_app(build_demo_container())
+    app = create_app(demo_container())
 
     async def request():
         transport = httpx.ASGITransport(app=app)
@@ -373,12 +454,13 @@ def test_demo_cli_runs_canonical_scenario_without_external_services():
     assert "Traceback" not in result.stdout + result.stderr
 
 
-def test_demo_cli_custom_calendar_question_succeeds_without_canonical_tool_path():
+def test_demo_cli_weekly_calendar_offline_scenario_is_calendar_only():
     result = subprocess.run(
         [
             sys.executable,
             "scripts/run_multi_source_demo.py",
-            "2026-08-07 NAND Yield Review 회의에서 Action 뭐였어?",
+            "--offline-scenario",
+            "weekly-calendar",
         ],
         cwd=ROOT,
         env={**os.environ, "OPENROUTER_API_KEY": ""},
@@ -388,28 +470,37 @@ def test_demo_cli_custom_calendar_question_succeeds_without_canonical_tool_path(
     )
 
     assert result.returncode == 0, result.stderr
-    assert "FDC" in result.stdout
-    lines = result.stdout.splitlines()
-    sources_line = next(line for line in lines if line.startswith("Sources:"))
-    tools_line = next(line for line in lines if line.startswith("Tool calls:"))
-    sources = [
-        item.strip()
-        for item in sources_line.removeprefix("Sources:").split(",")
-        if item.strip()
-    ]
-    tools = [
-        item.strip()
-        for item in tools_line.removeprefix("Tool calls:").split("->")
-        if item.strip()
-    ]
-    assert tools == ["search_calendar", "expand_calendar_event"]
-    assert sources == ["calendar", "calendar"]
+    assert "Tool calls: search_calendar" in result.stdout
+    assert "search_domain_knowledge" not in result.stdout
 
 
-def test_demo_cli_reports_invalid_input_without_traceback_or_raw_state():
+def test_free_form_demo_without_llm_key_fails_safely():
     result = subprocess.run(
-        [sys.executable, "scripts/run_multi_source_demo.py", ""],
+        [sys.executable, "scripts/run_multi_source_demo.py", "이번주 일정 뭐야?"],
         cwd=ROOT,
+        env={**os.environ, "OPENROUTER_API_KEY": ""},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "OPENROUTER_API_KEY" in result.stderr
+    assert "Traceback" not in result.stdout + result.stderr
+
+
+def test_offline_demo_reports_invalid_request_without_traceback():
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/run_multi_source_demo.py",
+            "--offline-scenario",
+            "weekly-calendar",
+            "--user-id",
+            "",
+        ],
+        cwd=ROOT,
+        env={**os.environ, "OPENROUTER_API_KEY": ""},
         capture_output=True,
         text=True,
         check=False,
@@ -418,4 +509,3 @@ def test_demo_cli_reports_invalid_input_without_traceback_or_raw_state():
     assert result.returncode == 1
     assert "요청을 처리할 수 없습니다." in result.stderr
     assert "Traceback" not in result.stdout + result.stderr
-    assert "ValidationError" not in result.stdout + result.stderr

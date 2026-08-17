@@ -49,12 +49,15 @@ class DependencyReadiness:
 
 
 class DemoReadiness:
+    def __init__(self, agent_model="ready"):
+        self.agent_model = agent_model
+
     async def check(self):
         return {
             "opensearch": "ready",
             "mongo": "ready",
             "aliases": "ready",
-            "agent_model": "ready",
+            "agent_model": self.agent_model,
         }
 
 
@@ -202,15 +205,24 @@ def build_container(settings=None, trace_sink=None) -> ServiceContainer:
     )
 
 
-def build_demo_container(settings=None) -> ServiceContainer:
+def build_demo_container(
+    settings=None,
+    *,
+    agent_model=None,
+    router=None,
+) -> ServiceContainer:
     from datetime import UTC, datetime
     from pathlib import Path
+
+    from openai import AsyncOpenAI
 
     from app.config.settings import get_settings
     from app.domain.chat import RouteDecision
     from app.graphs.fast_rag import FastRAGWorkflow
     from app.graphs.multi_source import MultiSourceAgenticWorkflow
-    from app.llm.agentic import RuleBasedAgentModel
+    from app.llm.agentic import StructuredAgentModel
+    from app.llm.demo_scenarios import UnavailableAnalyzer
+    from app.llm.gateway import OpenAILLMGateway
     from app.persistence.conversations import InMemoryConversationStore
     from app.persistence.research_jobs import InMemoryResearchJobStore
     from app.retrieval.multi_source import InMemoryMultiSourceSearch
@@ -225,7 +237,30 @@ def build_demo_container(settings=None) -> ServiceContainer:
         / "corpus.json"
     )
     search = InMemoryMultiSourceSearch.from_path(fixture, registry)
-    model = RuleBasedAgentModel(now=datetime(2026, 8, 17, 0, tzinfo=UTC))
+    if agent_model is None:
+        endpoint = current.resolve_llm_endpoint()
+        api_key = endpoint.api_key.get_secret_value().strip()
+        if api_key:
+            llm = OpenAILLMGateway(
+                AsyncOpenAI(
+                    api_key=api_key,
+                    base_url=endpoint.base_url,
+                    timeout=endpoint.timeout_seconds,
+                ),
+                endpoint.model,
+            )
+            model = StructuredAgentModel(
+                llm,
+                timeout_seconds=current.openrouter_request_timeout_seconds,
+                now=datetime(2026, 8, 17, 0, tzinfo=UTC),
+            )
+        else:
+            model = UnavailableAnalyzer()
+    else:
+        model = agent_model
+    model_status = (
+        "unavailable" if isinstance(model, UnavailableAnalyzer) else "ready"
+    )
     agentic = MultiSourceAgenticWorkflow(
         search,
         model,
@@ -234,27 +269,21 @@ def build_demo_container(settings=None) -> ServiceContainer:
 
     class DemoRouter:
         async def route(self, request, conversation=None):
-            general = request.message.casefold().strip() in {
-                "안녕",
-                "안녕하세요",
-                "hello",
-                "hi",
-            }
             return RouteDecision(
-                route="general" if general else "fast",
-                reason_code="demo_rule",
+                route="fast",
+                reason_code="demo_fast",
                 confidence=1,
-                estimated_searches=0 if general else 1,
+                estimated_searches=1,
             )
 
         async def contextualize_request(self, request, conversation=None):
             return request
 
     return ServiceContainer(
-        router=DemoRouter(),
+        router=router if router is not None else DemoRouter(),
         fast=FastRAGWorkflow(None, model, agentic=agentic),
         deep=None,
         conversations=InMemoryConversationStore(),
         jobs=InMemoryResearchJobStore(),
-        readiness=DemoReadiness(),
+        readiness=DemoReadiness(model_status),
     )
