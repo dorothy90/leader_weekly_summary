@@ -112,11 +112,10 @@ async def run(
     turn_two_start = 0
     for turn, display_question in enumerate(questions, start=1):
         if turn == 2:
-            turn_two_start = len(container.fast.agentic.search.calls)
+            turn_two_start = len(container.agentic.search.calls)
         payload = {
             "user_id": user_id,
             "message": display_question,
-            "response_mode": "fast",
         }
         if conversation_id is not None:
             payload["conversation_id"] = conversation_id
@@ -132,7 +131,7 @@ async def run(
             return 1
 
     tool_calls = [
-        action.tool for action, _owner in container.fast.agentic.search.calls
+        action.tool for action, _owner in container.agentic.search.calls
     ]
     _print_response(bodies[-1], tool_calls)
     complete = all(_complete(body) for body in bodies)
