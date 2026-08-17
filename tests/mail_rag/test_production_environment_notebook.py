@@ -72,13 +72,28 @@ def test_production_notebook_uses_the_real_route_free_application_path():
         'client.get("/ready")',
         'client.post("/v1/chat"',
         '"conversation_id": conversation_id',
+        '"MANUS_API_KEY configured"',
         '"OPENROUTER_API_KEY configured"',
+        'assert llm_endpoint.model == "manus-1.6-lite"',
+        "build_llm_gateway(settings)",
+        "complete_model_with_diagnostics",
+        '"actual_profile"',
+        '"credit_usage"',
+        "embedding_gateway.embed",
+        '"vector_dimension"',
     ):
         assert required in source
 
-    assert '"response_mode":' not in source
-    assert '"mode":' not in source
-    assert '"routing":' not in source
+    for forbidden in (
+        '"response_mode":',
+        '"mode":',
+        '"routing":',
+        "MANUS_API_KEY=",
+        "OPENROUTER_API_KEY=",
+        '"task_id"',
+        '"task_url"',
+    ):
+        assert forbidden not in source
     assert 'obsolete_fields = {"response_mode", "mode", "routing"}' in source
     assert "settings.multi_source_demo is False" in source
 
@@ -105,7 +120,8 @@ def test_production_notebook_redacts_credentials_from_displayed_endpoint():
 
     source = _code_source()
     assert (
-        '"base_url": safe_endpoint_description(settings.openrouter_base_url)'
+        '"embedding_base_url": safe_endpoint_description('
+        "embedding_endpoint.base_url)"
         in source
     )
-    assert '"base_url": settings.openrouter_base_url' not in source
+    assert '"embedding_base_url": embedding_endpoint.base_url' not in source
