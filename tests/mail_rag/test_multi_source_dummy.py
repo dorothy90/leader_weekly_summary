@@ -1,6 +1,7 @@
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from app.config.settings import Settings
 from app.domain.agentic import QueryAnalysis, SearchDocument, ToolAction
@@ -10,6 +11,116 @@ from app.retrieval.source_registry import SourceRegistry
 
 
 FIXTURE = Path("fixtures/multi_source_demo/corpus.json")
+
+AUGUST_2026_BUSINESS_DAYS = {
+    date(2026, 8, day)
+    for day in (
+        3, 4, 5, 6, 7,
+        10, 11, 12, 13, 14,
+        17, 18, 19, 20, 21,
+        24, 25, 26, 27, 28,
+        31,
+    )
+}
+LEGACY_DOCUMENT_IDS = {
+    "domain-cell-leakage",
+    "mail-kim-body-0",
+    "mail-kim-attachment-0",
+    "event-kim-1",
+    "event-kim-1-action",
+    "mail-lee-decoy",
+    "mail-kim-inactive",
+    "event-kim-cancelled",
+}
+
+
+def _daily_documents():
+    return [
+        item
+        for item in service().documents
+        if item.document_id.startswith(
+            ("mail-kim-202608", "event-kim-202608")
+        )
+    ]
+
+
+def _document_day(document_id: str) -> date:
+    return datetime.strptime(document_id[-8:], "%Y%m%d").date()
+
+
+def test_august_corpus_has_one_mail_and_calendar_record_per_business_day():
+    documents = service().documents
+    daily = _daily_documents()
+    mail = [item for item in daily if item.source_type == "mail"]
+    calendar = [item for item in daily if item.source_type == "calendar"]
+
+    assert len(documents) == 50
+    assert len({item.document_id for item in documents}) == 50
+    assert len(mail) == 21
+    assert len(calendar) == 21
+    assert {_document_day(item.document_id) for item in mail} == (
+        AUGUST_2026_BUSINESS_DAYS
+    )
+    assert {_document_day(item.document_id) for item in calendar} == (
+        AUGUST_2026_BUSINESS_DAYS
+    )
+
+
+def test_august_daily_records_have_local_business_hours_and_metadata():
+    seoul = ZoneInfo("Asia/Seoul")
+    daily = _daily_documents()
+
+    assert len(daily) == 42
+
+    for item in daily:
+        business_day = _document_day(item.document_id)
+        occurred = datetime.fromisoformat(
+            item.occurred_at.replace("Z", "+00:00")
+        )
+        local = occurred.astimezone(seoul)
+
+        assert local.date() == business_day
+        assert item.employee_id == "kim"
+        assert item.is_active is True
+        assert item.is_cancelled is False
+
+        if item.source_type == "mail":
+            iso_year, iso_week, _ = business_day.isocalendar()
+            assert item.index == "ews-mail-active"
+            assert item.content_kind == "body"
+            assert local.hour == 9
+            assert item.team in {"YIELD팀", "PROCESS팀", "EQUIPMENT팀"}
+            assert item.week == f"{iso_year}-{iso_week:02d}"
+            assert item.mail_type == "daily_report"
+            assert item.metadata == {
+                "chunk_index": 0,
+                "sender_email": "kim.oo@example.com",
+            }
+        else:
+            start = datetime.fromisoformat(
+                item.metadata["start_at_utc"].replace("Z", "+00:00")
+            )
+            end = datetime.fromisoformat(
+                item.metadata["end_at_utc"].replace("Z", "+00:00")
+            )
+            assert item.index == "ews-calendar-active"
+            assert item.content_kind == "event"
+            assert local.hour == 10
+            assert end - start == timedelta(hours=1)
+            assert item.source_id == item.document_id
+            assert item.parent_event_id == item.document_id
+            assert item.metadata["calendar_item_id"] == item.document_id
+            assert item.metadata["timezone"] == "Asia/Seoul"
+            assert "일정" in f"{item.title} {item.text}"
+
+
+def test_august_extension_preserves_security_decoys():
+    by_id = {item.document_id: item for item in service().documents}
+
+    assert LEGACY_DOCUMENT_IDS <= by_id.keys()
+    assert by_id["mail-lee-decoy"].employee_id == "lee"
+    assert by_id["mail-kim-inactive"].is_active is False
+    assert by_id["event-kim-cancelled"].is_cancelled is True
 
 
 def service():
