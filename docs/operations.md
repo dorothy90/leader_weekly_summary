@@ -85,6 +85,12 @@ first verifies a same-owner, active, non-cancelled parent event by its validated
 canonical ID without applying requested attachment/output filters. It queries
 the related bundle only after that parent gate succeeds.
 
+`DOMAIN_KNOWLEDGE_INDEX` supports the existing `syld_gpt` contract where each
+document contains only `page_content` and `embedding`. The domain corpus is
+shared, so it has no owner filter; `is_active` is optional. When lifecycle data
+is present, explicit `is_active=false` documents remain excluded. Mail and
+Calendar continue to require their owner and lifecycle fields.
+
 `OPENROUTER_API_KEY`, a reachable `MONGO_URI`, and reachable OpenRouter and
 OpenSearch endpoints are required for normal service operation. The default
 AI configuration is:

@@ -65,6 +65,7 @@ SOURCE_FIELDS = [
     "subject",
     "title",
     "text",
+    "page_content",
     *sorted(SAFE_METADATA),
 ]
 
@@ -179,7 +180,26 @@ class OpenSearchMultiSourceSearch:
         filters: list[dict[str, Any]] = []
         if source in {"mail", "calendar"}:
             filters.append({"term": {"employee_id": policy.user_id}})
-        filters.append({"term": {"is_active": True}})
+        if source == "domain_knowledge":
+            filters.append(
+                {
+                    "bool": {
+                        "should": [
+                            {"term": {"is_active": True}},
+                            {
+                                "bool": {
+                                    "must_not": [
+                                        {"exists": {"field": "is_active"}}
+                                    ]
+                                }
+                            },
+                        ],
+                        "minimum_should_match": 1,
+                    }
+                }
+            )
+        else:
+            filters.append({"term": {"is_active": True}})
         if source == "calendar":
             filters.append({"term": {"is_cancelled": False}})
         if source == "mail" and request_filters is not None:
@@ -224,17 +244,18 @@ class OpenSearchMultiSourceSearch:
         action: ToolAction,
         filters: list[dict[str, Any]],
     ) -> dict[str, Any]:
-        fields = (
-            [
+        if action.tool == "search_calendar":
+            fields = [
                 "subject^4",
                 "location^2",
                 "text^3",
                 "organizer_email",
                 "attendee_emails",
             ]
-            if action.tool == "search_calendar"
-            else ["text^3"]
-        )
+        elif action.tool == "search_domain_knowledge":
+            fields = ["page_content^3", "text^3"]
+        else:
+            fields = ["text^3"]
         return {
             "size": action.top_k * 3,
             "_source": SOURCE_FIELDS,
@@ -410,7 +431,11 @@ class OpenSearchMultiSourceSearch:
             if source_type in {"mail", "calendar"}:
                 if source.get("employee_id") != policy.user_id:
                     continue
-            if source.get("is_active") is not True:
+            is_active = source.get("is_active")
+            if source_type == "domain_knowledge":
+                if is_active is not None and is_active is not True:
+                    continue
+            elif is_active is not True:
                 continue
             if source_type == "calendar" and source.get("is_cancelled") is not False:
                 continue
@@ -434,7 +459,10 @@ class OpenSearchMultiSourceSearch:
             document_id = hit.get("_id")
             if not self._valid_document_id(document_id):
                 continue
-            text_value = source.get("text")
+            if source_type == "domain_knowledge":
+                text_value = source.get("page_content") or source.get("text")
+            else:
+                text_value = source.get("text")
             if not isinstance(text_value, str):
                 continue
             text = text_value.strip()

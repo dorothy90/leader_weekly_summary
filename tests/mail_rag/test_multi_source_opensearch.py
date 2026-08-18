@@ -147,6 +147,22 @@ def filters_from(body):
     return body["query"]["bool"]["filter"]
 
 
+def optional_active_filter():
+    return {
+        "bool": {
+            "should": [
+                {"term": {"is_active": True}},
+                {
+                    "bool": {
+                        "must_not": [{"exists": {"field": "is_active"}}]
+                    }
+                },
+            ],
+            "minimum_should_match": 1,
+        }
+    }
+
+
 def hit(document_id, *, score=1, **source):
     return {"_id": document_id, "_score": score, "_source": source}
 
@@ -173,7 +189,7 @@ def test_mail_bm25_and_vector_queries_use_configured_alias_and_mandatory_filters
         assert {"term": {"is_active": True}} in filters_from(body)
 
 
-def test_domain_queries_use_configured_index_and_active_filter_only():
+def test_domain_queries_use_configured_index_and_optional_active_filter():
     backend = RecordingBackend()
     configured = Settings(domain_knowledge_index="domain-read")
 
@@ -190,7 +206,40 @@ def test_domain_queries_use_configured_index_and_active_filter_only():
         "domain-read",
     ]
     for _index, body in backend.calls:
-        assert filters_from(body) == [{"term": {"is_active": True}}]
+        assert filters_from(body) == [optional_active_filter()]
+
+
+def test_domain_knowledge_supports_page_content_embedding_only_schema():
+    response = {
+        "hits": {
+            "hits": [
+                hit(
+                    "domain-1",
+                    page_content="Cell Leakage는 대기 누설 전류입니다.",
+                )
+            ]
+        }
+    }
+    backend = RecordingBackend([response, response])
+
+    result = asyncio.run(
+        workflow(backend).execute(
+            ToolAction(
+                tool="search_domain_knowledge",
+                query="Cell Leakage 의미",
+                reason="domain",
+            ),
+            PolicyContext.from_user_id("kim"),
+            analysis(question_type="domain_knowledge"),
+        )
+    )
+
+    assert result.total_hits == 1
+    assert result.documents[0].text == "Cell Leakage는 대기 누설 전류입니다."
+    assert "page_content^3" in backend.calls[0][1]["query"]["bool"]["must"][0][
+        "multi_match"
+    ]["fields"]
+    assert all("page_content" in body["_source"] for _index, body in backend.calls)
 
 
 def test_calendar_search_and_expansion_repeat_all_security_filters_and_alias():
@@ -329,7 +378,7 @@ def test_domain_knowledge_does_not_inherit_mail_date_filters():
     )
 
     for _index, body in backend.calls:
-        assert filters_from(body) == [{"term": {"is_active": True}}]
+        assert filters_from(body) == [optional_active_filter()]
 
 
 def test_mail_facets_are_added_to_backend_built_filters():
@@ -854,7 +903,7 @@ def test_post_filter_drops_foreign_inactive_cancelled_and_malformed_hits():
     assert "private_path" not in result.documents[0].metadata
 
 
-def test_domain_post_filter_drops_inactive_or_missing_lifecycle_hits():
+def test_domain_post_filter_drops_inactive_but_allows_missing_lifecycle():
     response = {
         "hits": {
             "hits": [
@@ -874,7 +923,10 @@ def test_domain_post_filter_drops_inactive_or_missing_lifecycle_hits():
         )
     )
 
-    assert [item.document_id for item in result.documents] == ["active"]
+    assert [item.document_id for item in result.documents] == [
+        "missing",
+        "active",
+    ]
 
 
 def test_calendar_expansion_uses_relation_clause_and_optional_filters():
