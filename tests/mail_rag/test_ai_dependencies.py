@@ -3,7 +3,11 @@ from datetime import UTC, datetime
 
 from pydantic import SecretStr
 
-from app.api.dependencies import build_ai_gateways, build_demo_container
+from app.api.dependencies import (
+    build_ai_gateways,
+    build_demo_container,
+    build_stage_llm_gateways,
+)
 from app.config.settings import Settings
 from app.domain.agentic import IntentDecision, QueryAnalysis, SourceRequest
 from app.llm.agentic import StructuredAgentModel
@@ -50,6 +54,38 @@ def test_ai_gateways_use_openrouter_free_for_llm_and_embeddings(
     ]
     assert embeddings.client is clients[1]
     assert embeddings.model == "qwen/qwen3-embedding-8b"
+
+
+def test_stage_llm_gateways_share_one_client_and_use_independent_models(
+    monkeypatch,
+):
+    clients = []
+
+    class FakeAsyncOpenAI:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            clients.append(self)
+
+    monkeypatch.setattr("openai.AsyncOpenAI", FakeAsyncOpenAI)
+    settings = Settings(
+        openrouter_api_key=SecretStr("openrouter-secret"),
+        openrouter_routing_model="cheap-routing",
+        openrouter_planner_model="cheap-planner",
+        openrouter_judge_model="cheap-judge",
+        openrouter_answer_model="quality-answer",
+    )
+
+    gateways = build_stage_llm_gateways(settings)
+
+    assert list(gateways) == ["routing", "planner", "judge", "answer"]
+    assert [gateway.model for gateway in gateways.values()] == [
+        "cheap-routing",
+        "cheap-planner",
+        "cheap-judge",
+        "quality-answer",
+    ]
+    assert len(clients) == 1
+    assert all(gateway.client is clients[0] for gateway in gateways.values())
 
 
 def test_openai_compatible_selection_builds_existing_llm_gateway(
@@ -114,6 +150,28 @@ def test_demo_container_builds_manus_analyzer_for_configured_llm_key(
         "timeout": 30.0,
     }
     assert analyzer.attempts == 1
+
+
+def test_demo_container_wires_each_configured_stage_model(monkeypatch):
+    class FakeAsyncOpenAI:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    monkeypatch.setattr("openai.AsyncOpenAI", FakeAsyncOpenAI)
+    settings = Settings(
+        openrouter_api_key=SecretStr("configured-key"),
+        openrouter_routing_model="cheap-routing",
+        openrouter_planner_model="cheap-planner",
+        openrouter_judge_model="cheap-judge",
+        openrouter_answer_model="quality-answer",
+    )
+
+    analyzer = build_demo_container(settings).agentic.analyzer
+
+    assert analyzer.routing_llm.model == "cheap-routing"
+    assert analyzer.planner_llm.model == "cheap-planner"
+    assert analyzer.judge_llm.model == "cheap-judge"
+    assert analyzer.answer_llm.model == "quality-answer"
 
 
 def test_demo_container_without_llm_key_reports_unavailable_analyzer():

@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 
 import pytest
+from langchain_core.messages.utils import count_tokens_approximately
 
 from app.config.settings import Settings
 from app.domain.agentic import (
@@ -141,9 +142,19 @@ class RaisingIntentLLM:
 class StageLLM:
     def __init__(self):
         self.schemas = []
+        self.users = []
 
     async def complete_model(self, system, user, schema):
         self.schemas.append(schema.__name__)
+        self.users.append(user)
+        if schema.__name__ == "IntentDecision":
+            return {
+                "intent": "weekly_schedule",
+                "source_requests": [
+                    {"source": "calendar", "query": "두 번째 일정"}
+                ],
+                "time_scope": "current_week",
+            }
         if schema.__name__ == "PlanningDecision":
             return {
                 "action": {
@@ -359,6 +370,90 @@ def test_structured_agent_uses_llm_for_plan_judge_and_answer():
     assert decision.sufficient is True
     assert answer == "이번 주 일정입니다. [S1]"
     assert llm.schemas == ["PlanningDecision", "JudgeDecision", "AnswerDecision"]
+
+
+def test_structured_agent_uses_the_configured_model_for_each_stage():
+    routing_llm = StageLLM()
+    planner_llm = StageLLM()
+    judge_llm = StageLLM()
+    answer_llm = StageLLM()
+    model = StructuredAgentModel(
+        routing_llm,
+        planner_llm=planner_llm,
+        judge_llm=judge_llm,
+        answer_llm=answer_llm,
+        attempts=1,
+        now=NOW,
+    )
+    memory = ConversationMemory()
+
+    analysis = asyncio.run(model.analyze("이번 주 일정", memory, "Asia/Seoul"))
+    asyncio.run(model.plan("이번 주 일정", analysis, [], memory))
+    asyncio.run(model.judge("이번 주 일정", analysis, [], [], memory, 1))
+    asyncio.run(model.answer("이번 주 일정", analysis, [], [], memory))
+
+    assert routing_llm.schemas == ["IntentDecision"]
+    assert planner_llm.schemas == ["PlanningDecision"]
+    assert judge_llm.schemas == ["JudgeDecision"]
+    assert answer_llm.schemas == ["AnswerDecision"]
+
+
+def test_structured_agent_sends_last_three_turns_to_every_semantic_stage():
+    llm = StageLLM()
+    model = StructuredAgentModel(llm, attempts=1, now=NOW)
+    messages = []
+    for index in range(1, 5):
+        messages.extend(
+            [
+                {"role": "user", "content": f"질문 {index}"},
+                {"role": "assistant", "content": f"답변 {index}"},
+            ]
+        )
+    memory = ConversationMemory(messages=messages)
+
+    analysis = asyncio.run(
+        model.analyze("그중 두 번째 일정은?", memory, "Asia/Seoul")
+    )
+    asyncio.run(model.plan("그중 두 번째 일정은?", analysis, [], memory))
+    asyncio.run(model.judge("그중 두 번째 일정은?", analysis, [], [], memory, 1))
+    asyncio.run(model.answer("그중 두 번째 일정은?", analysis, [], [], memory))
+
+    expected_history = messages[-6:]
+    payloads = [json.loads(user) for user in llm.users]
+    assert [payload["conversation_history"] for payload in payloads] == [
+        expected_history,
+        expected_history,
+        expected_history,
+        expected_history,
+    ]
+
+
+def test_structured_agent_bounds_conversation_history_to_four_thousand_tokens():
+    llm = FixedIntentLLM(IntentDecision(intent="general"))
+    model = StructuredAgentModel(llm, attempts=1)
+    messages = []
+    for index in range(1, 5):
+        messages.extend(
+            [
+                {"role": "user", "content": f"질문 {index} " + "가" * 7000},
+                {
+                    "role": "assistant",
+                    "content": f"답변 {index} " + "나" * 7000,
+                },
+            ]
+        )
+
+    asyncio.run(
+        model.analyze(
+            "이전 답변을 이어서 설명해줘",
+            ConversationMemory(messages=messages),
+            "Asia/Seoul",
+        )
+    )
+
+    history = json.loads(llm.users[0])["conversation_history"]
+    assert count_tokens_approximately(history) <= 4_000
+    assert not history or history[0]["role"] == "user"
 
 
 def test_graph_uses_agent_for_every_semantic_stage():

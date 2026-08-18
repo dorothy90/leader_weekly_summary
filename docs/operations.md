@@ -10,6 +10,12 @@ analysis uses two bounded attempts; OpenRouter LLM and embedding requests have
 a 150-second default safety limit. These limits are safety ceilings, not
 production latency guarantees.
 
+Multi-turn chat stores at most 20 messages and supplies only the latest three
+completed user/assistant turns to `routing`, `planner`, `judge`, and `answer`.
+That prompt history is capped at approximately 4,000 tokens and sanitized again
+before use. It resolves references and omitted wording only; previous assistant
+answers are never treated as retrieval evidence.
+
 Every OpenSearch query and MongoDB lookup is scoped by exact request-body `user_id`. `team` is only a facet. Missing owners remain invisible; never infer an owner from team, index, mail text, or path.
 
 ## Environment
@@ -41,9 +47,18 @@ MANUS_POLL_INTERVAL_SECONDS
 OPENAI_COMPATIBLE_LLM_API_KEY
 OPENAI_COMPATIBLE_LLM_BASE_URL
 OPENAI_COMPATIBLE_LLM_MODEL
+OPENAI_COMPATIBLE_ROUTING_MODEL
+OPENAI_COMPATIBLE_PLANNER_MODEL
+OPENAI_COMPATIBLE_JUDGE_MODEL
+OPENAI_COMPATIBLE_ANSWER_MODEL
 OPENAI_COMPATIBLE_LLM_TIMEOUT_SECONDS
 OPENROUTER_API_KEY
 OPENROUTER_BASE_URL
+OPENROUTER_LLM_MODEL
+OPENROUTER_ROUTING_MODEL
+OPENROUTER_PLANNER_MODEL
+OPENROUTER_JUDGE_MODEL
+OPENROUTER_ANSWER_MODEL
 OPENROUTER_EMBEDDING_MODEL
 OPENROUTER_REQUEST_TIMEOUT_SECONDS
 MONGO_URI
@@ -83,6 +98,22 @@ OPENROUTER_EMBEDDING_MODEL=qwen/qwen3-embedding-8b
 OPENROUTER_REQUEST_TIMEOUT_SECONDS=150
 ```
 
+Each semantic stage can override `OPENROUTER_LLM_MODEL` independently. Empty
+stage values inherit the shared model. A cost-optimized production example is:
+
+```dotenv
+OPENROUTER_ROUTING_MODEL=openai/gpt-oss-20b
+OPENROUTER_PLANNER_MODEL=openai/gpt-oss-20b
+OPENROUTER_JUDGE_MODEL=openai/gpt-oss-20b
+OPENROUTER_ANSWER_MODEL=google/gemini-2.5-flash-lite
+```
+
+For zero-cost integration testing, use `openai/gpt-oss-20b:free` for all four
+stage variables. Free endpoints can be rate-limited or temporarily unavailable;
+do not treat their latency and availability as production guarantees. The four
+stage gateways share one provider client, URL, API key, and timeout while keeping
+their model IDs independent.
+
 The application never silently falls back from OpenRouter to Manus, keyword
 routing, or another LLM. A failed free-model analysis produces the existing
 bounded unavailable-analysis response. To switch later to an OpenAI-compatible
@@ -93,8 +124,15 @@ LLM_PROVIDER=openai_compatible
 OPENAI_COMPATIBLE_LLM_API_KEY=<secret>
 OPENAI_COMPATIBLE_LLM_BASE_URL=https://provider.example/v1
 OPENAI_COMPATIBLE_LLM_MODEL=provider-model
+OPENAI_COMPATIBLE_ROUTING_MODEL=
+OPENAI_COMPATIBLE_PLANNER_MODEL=
+OPENAI_COMPATIBLE_JUDGE_MODEL=
+OPENAI_COMPATIBLE_ANSWER_MODEL=
 OPENAI_COMPATIBLE_LLM_TIMEOUT_SECONDS=150
 ```
+
+OpenAI-compatible stage values follow the same inheritance rule: a blank value
+uses `OPENAI_COMPATIBLE_LLM_MODEL`.
 
 The OpenSearch index and query path must use the same Qwen3-Embedding-8B output dimension. If OpenRouter embedding generation fails, retrieval degrades to owner-filtered BM25 and includes the embedding-unavailable disclosure.
 

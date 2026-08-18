@@ -26,6 +26,39 @@ def test_openrouter_free_llm_and_embedding_defaults_share_provider_settings():
     assert "openrouter-secret" not in repr(embedding)
 
 
+def test_openrouter_stage_models_override_the_shared_model_independently():
+    settings = Settings(
+        openrouter_llm_model="shared-model",
+        openrouter_routing_model="cheap-routing",
+        openrouter_planner_model="cheap-planner",
+        openrouter_judge_model="cheap-judge",
+        openrouter_answer_model="quality-answer",
+    )
+
+    assert settings.resolve_llm_endpoint("routing").model == "cheap-routing"
+    assert settings.resolve_llm_endpoint("planner").model == "cheap-planner"
+    assert settings.resolve_llm_endpoint("judge").model == "cheap-judge"
+    assert settings.resolve_llm_endpoint("answer").model == "quality-answer"
+    assert settings.resolve_llm_endpoint().model == "shared-model"
+
+
+def test_blank_openai_compatible_stage_models_fall_back_to_shared_model():
+    settings = Settings(
+        llm_provider="openai_compatible",
+        openai_compatible_llm_model="future-shared-model",
+        openai_compatible_routing_model="future-cheap-routing",
+    )
+
+    assert (
+        settings.resolve_llm_endpoint("routing").model
+        == "future-cheap-routing"
+    )
+    assert (
+        settings.resolve_llm_endpoint("planner").model
+        == "future-shared-model"
+    )
+
+
 def test_manus_llm_can_still_be_selected_explicitly():
     settings = Settings(
         llm_provider="manus",

@@ -2,6 +2,7 @@ import asyncio
 import json
 from typing import Protocol
 
+from langchain_core.messages.utils import count_tokens_approximately
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.domain.agentic import (
@@ -19,6 +20,10 @@ from app.llm.prompts import (
     PLANNER_SYSTEM_PROMPT,
 )
 from app.security.redaction import sanitize_text
+
+
+MAX_CONVERSATION_HISTORY_MESSAGES = 6
+MAX_CONVERSATION_HISTORY_TOKENS = 4_000
 
 
 class PlanningDecision(BaseModel):
@@ -72,11 +77,18 @@ class StructuredAgentModel:
         self,
         llm,
         *,
+        planner_llm=None,
+        judge_llm=None,
+        answer_llm=None,
         timeout_seconds=150,
         attempts=2,
         now=None,
     ):
         self.llm = llm
+        self.routing_llm = llm
+        self.planner_llm = planner_llm or llm
+        self.judge_llm = judge_llm or llm
+        self.answer_llm = answer_llm or llm
         self.timeout_seconds = max(0.001, float(timeout_seconds))
         self.attempts = max(1, int(attempts))
         self.now = now
@@ -93,6 +105,35 @@ class StructuredAgentModel:
                 previous.model_dump(mode="json") if previous is not None else None
             ),
         }
+
+    @staticmethod
+    def _history(memory: object) -> list[dict[str, str]]:
+        history = []
+        for item in (getattr(memory, "messages", None) or []):
+            if not isinstance(item, dict):
+                continue
+            role = item.get("role")
+            if role not in {"user", "assistant"}:
+                continue
+            content = sanitize_text(str(item.get("content", ""))) or "[REDACTED]"
+            history.append({"role": role, "content": content})
+        history = history[-MAX_CONVERSATION_HISTORY_MESSAGES:]
+        while (
+            history
+            and count_tokens_approximately(history)
+            > MAX_CONVERSATION_HISTORY_TOKENS
+        ):
+            remove_count = (
+                2
+                if len(history) >= 2
+                and history[0]["role"] == "user"
+                and history[1]["role"] == "assistant"
+                else 1
+            )
+            del history[:remove_count]
+        while history and history[0]["role"] != "user":
+            history.pop(0)
+        return history
 
     @staticmethod
     def _documents(documents: list[SearchDocument]) -> list[dict]:
@@ -128,13 +169,13 @@ class StructuredAgentModel:
             for item in observations[-4:]
         ]
 
-    async def _complete(self, system: str, payload: dict, schema):
+    async def _complete(self, llm, system: str, payload: dict, schema):
         user = json.dumps(payload, ensure_ascii=False)
         last_error = None
         for _attempt in range(self.attempts):
             try:
                 result = await asyncio.wait_for(
-                    self.llm.complete_model(system, user, schema),
+                    llm.complete_model(system, user, schema),
                     timeout=self.timeout_seconds,
                 )
                 return schema.model_validate(result)
@@ -146,13 +187,17 @@ class StructuredAgentModel:
         safe_memory = self._memory(memory)
         safe_memory.pop("previous_event_reference", None)
         user = json.dumps(
-            {"question": question, "memory": safe_memory},
+            {
+                "question": question,
+                "conversation_history": self._history(memory),
+                "memory": safe_memory,
+            },
             ensure_ascii=False,
         )
         for _attempt in range(self.attempts):
             try:
                 decision = await asyncio.wait_for(
-                    self.llm.complete_model(
+                    self.routing_llm.complete_model(
                         INTENT_SYSTEM_PROMPT,
                         user,
                         IntentDecision,
@@ -171,9 +216,11 @@ class StructuredAgentModel:
 
     async def plan(self, question, analysis, observations, memory):
         decision = await self._complete(
+            self.planner_llm,
             PLANNER_SYSTEM_PROMPT,
             {
                 "question": question,
+                "conversation_history": self._history(memory),
                 "analysis": analysis.model_dump(mode="json"),
                 "observations": self._observations(observations),
                 "memory": self._memory(memory),
@@ -192,9 +239,11 @@ class StructuredAgentModel:
         iteration_count,
     ):
         return await self._complete(
+            self.judge_llm,
             JUDGE_SYSTEM_PROMPT,
             {
                 "question": question,
+                "conversation_history": self._history(memory),
                 "analysis": analysis.model_dump(mode="json"),
                 "observations": self._observations(observations),
                 "evidence": self._documents(documents),
@@ -206,9 +255,11 @@ class StructuredAgentModel:
 
     async def answer(self, question, analysis, documents, missing, memory):
         decision = await self._complete(
+            self.answer_llm,
             ANSWER_SYSTEM_PROMPT,
             {
                 "question": question,
+                "conversation_history": self._history(memory),
                 "analysis": analysis.model_dump(mode="json"),
                 "evidence": self._documents(documents),
                 "missing_information": missing,

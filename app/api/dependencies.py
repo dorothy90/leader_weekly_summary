@@ -79,14 +79,10 @@ def build_opensearch_client(settings=None):
     )
 
 
-def build_llm_gateway(settings):
-    import httpx
-    from openai import AsyncOpenAI
+LLM_STAGES = ("routing", "planner", "judge", "answer")
 
-    from app.llm.gateway import OpenAILLMGateway
-    from app.llm.manus import ManusLLMGateway
 
-    endpoint = settings.resolve_llm_endpoint()
+def _validated_llm_api_key(endpoint):
     api_key = endpoint.api_key.get_secret_value().strip()
     if not api_key:
         required = {
@@ -95,29 +91,68 @@ def build_llm_gateway(settings):
             "openai_compatible": "OPENAI_COMPATIBLE_LLM_API_KEY",
         }[endpoint.provider]
         raise RuntimeError(f"{required} is required")
+    if endpoint.provider != "manus" and (
+        not endpoint.base_url.strip() or not endpoint.model.strip()
+    ):
+        raise RuntimeError("OpenAI-compatible LLM endpoint is incomplete")
+    return api_key
+
+
+def _build_llm_client(endpoint, api_key):
+    import httpx
+    from openai import AsyncOpenAI
+
     if endpoint.provider == "manus":
-        client = httpx.AsyncClient(
+        return httpx.AsyncClient(
             base_url=endpoint.base_url.rstrip("/"),
             headers={"x-manus-api-key": api_key},
             timeout=endpoint.request_timeout_seconds,
         )
+    return AsyncOpenAI(
+        api_key=api_key,
+        base_url=endpoint.base_url,
+        timeout=endpoint.request_timeout_seconds,
+    )
+
+
+def _build_llm_gateway_for_endpoint(endpoint, client):
+    from app.llm.gateway import OpenAILLMGateway
+    from app.llm.manus import ManusLLMGateway
+
+    if endpoint.provider == "manus":
         return ManusLLMGateway(
             client,
             profile=endpoint.model,
             poll_interval_seconds=endpoint.poll_interval_seconds,
             task_timeout_seconds=endpoint.completion_timeout_seconds,
         )
-    if not endpoint.base_url.strip() or not endpoint.model.strip():
-        raise RuntimeError("OpenAI-compatible LLM endpoint is incomplete")
     return OpenAILLMGateway(
-        AsyncOpenAI(
-            api_key=api_key,
-            base_url=endpoint.base_url,
-            timeout=endpoint.request_timeout_seconds,
-        ),
+        client,
         endpoint.model,
         native_structured_output=endpoint.provider == "openrouter",
     )
+
+
+def build_llm_gateway(settings, stage=None):
+    endpoint = settings.resolve_llm_endpoint(stage)
+    api_key = _validated_llm_api_key(endpoint)
+    client = _build_llm_client(endpoint, api_key)
+    return _build_llm_gateway_for_endpoint(endpoint, client)
+
+
+def build_stage_llm_gateways(settings):
+    endpoints = {
+        stage: settings.resolve_llm_endpoint(stage) for stage in LLM_STAGES
+    }
+    first = endpoints["routing"]
+    api_key = _validated_llm_api_key(first)
+    for endpoint in endpoints.values():
+        _validated_llm_api_key(endpoint)
+    client = _build_llm_client(first, api_key)
+    return {
+        stage: _build_llm_gateway_for_endpoint(endpoint, client)
+        for stage, endpoint in endpoints.items()
+    }
 
 
 def build_embedding_gateway(settings):
@@ -161,15 +196,19 @@ def build_container(settings=None, trace_sink=None) -> ServiceContainer:
 
     current = settings or get_settings()
     traces = trace_sink if trace_sink is not None else NoOpTraceSink()
-    llm, embeddings = build_ai_gateways(current)
-    llm_endpoint = current.resolve_llm_endpoint()
+    stage_llms = build_stage_llm_gateways(current)
+    embeddings = build_embedding_gateway(current)
+    llm_endpoint = current.resolve_llm_endpoint("routing")
     opensearch_client = build_opensearch_client(current)
     search = AsyncOpenSearchGateway(opensearch_client)
     registry = SourceRegistry.from_settings(current)
     agentic = MultiSourceAgenticWorkflow(
         OpenSearchMultiSourceSearch(search, embeddings, registry),
         StructuredAgentModel(
-            llm,
+            stage_llms["routing"],
+            planner_llm=stage_llms["planner"],
+            judge_llm=stage_llms["judge"],
+            answer_llm=stage_llms["answer"],
             timeout_seconds=llm_endpoint.completion_timeout_seconds,
             attempts=1 if llm_endpoint.provider == "manus" else 2,
         ),
@@ -223,12 +262,15 @@ def build_demo_container(
     )
     search = InMemoryMultiSourceSearch.from_path(fixture, registry)
     if agent_model is None:
-        endpoint = current.resolve_llm_endpoint()
+        endpoint = current.resolve_llm_endpoint("routing")
         api_key = endpoint.api_key.get_secret_value().strip()
         if api_key:
-            llm = build_llm_gateway(current)
+            stage_llms = build_stage_llm_gateways(current)
             model = StructuredAgentModel(
-                llm,
+                stage_llms["routing"],
+                planner_llm=stage_llms["planner"],
+                judge_llm=stage_llms["judge"],
+                answer_llm=stage_llms["answer"],
                 timeout_seconds=endpoint.completion_timeout_seconds,
                 attempts=1 if endpoint.provider == "manus" else 2,
                 now=datetime(2026, 8, 17, 0, tzinfo=UTC),

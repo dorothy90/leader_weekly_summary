@@ -28,3 +28,15 @@ def test_multi_source_prompts_keep_all_four_semantic_contracts():
     assert agentic.PLANNER_SYSTEM_PROMPT is PLANNER_SYSTEM_PROMPT
     assert agentic.JUDGE_SYSTEM_PROMPT is JUDGE_SYSTEM_PROMPT
     assert agentic.ANSWER_SYSTEM_PROMPT is ANSWER_SYSTEM_PROMPT
+
+
+def test_multi_source_prompts_treat_conversation_history_as_context_not_evidence():
+    prompts = (
+        INTENT_SYSTEM_PROMPT,
+        PLANNER_SYSTEM_PROMPT,
+        JUDGE_SYSTEM_PROMPT,
+        ANSWER_SYSTEM_PROMPT,
+    )
+
+    assert all("conversation_history" in prompt for prompt in prompts)
+    assert "검색 근거로 취급하지 마세요" in ANSWER_SYSTEM_PROMPT
