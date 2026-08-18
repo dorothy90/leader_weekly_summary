@@ -62,7 +62,7 @@ def test_production_notebook_is_valid_output_free_python():
         assert cell["outputs"] == []
 
 
-def test_production_notebook_uses_the_real_route_free_application_path():
+def test_production_notebook_exercises_every_index_through_the_real_chat_path():
     source = _code_source()
     for required in (
         "Settings.from_env()",
@@ -75,13 +75,24 @@ def test_production_notebook_uses_the_real_route_free_application_path():
         '"OPENROUTER_API_KEY configured"',
         'assert llm_endpoint.provider == "openrouter"',
         'assert llm_endpoint.model == "openrouter/free"',
-        'QUESTION = "이번 주 일정 뭐야?"',
-        'required_tools = {"search_calendar"}',
-        "required_tools <= set(chat_body[\"agent_trace\"][\"tool_calls\"])",
-        'required_llm_calls = ["routing", "planner", "judge", "answer"]',
-        'chat_body["agent_trace"]["llm_calls"] == required_llm_calls',
-        'required_source_types = {"calendar"}',
-        'chat_body["quality"]["citation_valid"] is True',
+        "TEST_CASES = [",
+        '"name": "domain_knowledge"',
+        '"expected_tools": {"search_domain_knowledge"}',
+        '"expected_source_types": {"domain_knowledge"}',
+        '"name": "mail"',
+        '"expected_tools": {"search_mail"}',
+        '"expected_source_types": {"mail"}',
+        '"name": "calendar"',
+        '"expected_tools": {"search_calendar"}',
+        '"expected_source_types": {"calendar"}',
+        '"name": "multi_source"',
+        '"search_mail", "search_calendar", "search_domain_knowledge"',
+        '"mail", "calendar", "domain_knowledge"',
+        "for case in TEST_CASES:",
+        'chat_results[case["name"]] = chat_body',
+        'conversation_ids[case["name"]] = chat_body["conversation_id"]',
+        'conversation_id = conversation_ids[FOLLOW_UP["base_case"]]',
+        'assert body["quality"]["citation_valid"] is True',
     ):
         assert required in source
 
@@ -97,6 +108,9 @@ def test_production_notebook_uses_the_real_route_free_application_path():
         "build_llm_gateway(settings)",
         "complete_model_with_diagnostics",
         "embedding_gateway.embed",
+        'QUESTION = "이번 주 일정 뭐야?"',
+        'required_tools = {"search_calendar"}',
+        'required_source_types = {"calendar"}',
     ):
         assert forbidden not in source
     assert 'obsolete_fields = {"response_mode", "mode", "routing"}' in source
