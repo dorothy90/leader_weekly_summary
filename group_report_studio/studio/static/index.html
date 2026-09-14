@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="그룹 주보 작성, 검토, Word 출력을 위한 문서 작업대">
+  <title>그룹 주보 작업실</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#document">본문으로 건너뛰기</a>
+  <header class="topbar">
+    <button class="brand" id="homeButton" type="button" aria-label="보고서 목록으로 이동">
+      <span class="brand-mark" aria-hidden="true"><svg class="icon" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6M8 13h8M8 17h5"/></svg></span>
+      <span><strong>그룹 주보</strong></span>
+    </button>
+    <div class="top-actions">
+      <span class="connection-state" id="connectionState">연결 확인 중</span>
+      <button class="button secondary" id="newReportButton" type="button"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>새 주보</button>
+      <button class="button secondary" id="saveCurrentTemplateButton" type="button" hidden>현재 목차 저장</button>
+      <button class="button primary" id="generateButton" type="button" hidden>초안 생성</button>
+      <button class="button primary" id="finalizeButton" type="button" disabled>확정</button>
+      <button class="button secondary" id="downloadButton" type="button" disabled>Word 받기</button>
+    </div>
+  </header>
+
+  <main class="workspace" id="workspace">
+    <aside class="rail" aria-label="보고서 탐색">
+      <section>
+        <div class="section-heading"><h2>내 주보</h2><button class="icon-button" id="refreshButton" type="button" aria-label="목록 새로고침"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 7a7 7 0 0 1 11.6-2L20 8M4 16l2.3 3a7 7 0 0 0 11.6-2"/></svg></button></div>
+        <p class="empty-note" id="reportListEmpty">저장된 주보가 없습니다.</p>
+        <ul class="report-list" id="reportList"></ul>
+      </section>
+      <section class="outline-panel">
+        <h2>목차</h2>
+        <nav id="outline" aria-label="현재 보고서 목차"><p class="empty-note">주보를 열면 목차가 표시됩니다.</p></nav>
+      </section>
+      <section class="history-panel">
+        <h2>버전 기록</h2>
+        <div id="history"><p class="empty-note">변경 기록이 여기에 쌓입니다.</p></div>
+      </section>
+    </aside>
+
+    <article class="document-area" id="document" tabindex="-1">
+      <div class="welcome" id="welcome">
+        <div class="welcome-icon" aria-hidden="true"><svg class="icon" viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg></div>
+        <h1>이번 주 주보를 시작하세요</h1>
+        <p class="welcome-copy">팀별 보고를 모아 초안을 만들고,<br>대화로 다듬어 Word로 내보내세요.</p>
+        <button class="button primary large" id="welcomeNewButton" type="button"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>새 주보 만들기</button>
+        <p class="welcome-note">이전 2주 주보의 내용과 형식을 참고할 수 있습니다.</p>
+      </div>
+      <div class="paper" id="paper" hidden>
+        <header class="paper-header">
+          <div><p class="week-label" id="paperWeek"></p><h1 id="paperTitle"></h1></div>
+          <span class="status-badge" id="reportStatus"></span>
+        </header>
+        <div class="notice warning" id="reportWarnings" hidden></div>
+        <div class="coverage" id="coverage" hidden></div>
+        <div id="sections"></div>
+        <section class="evidence-panel" id="evidencePanel" hidden>
+          <button class="evidence-toggle" id="evidenceToggle" type="button" aria-expanded="false">
+            <span>근거와 원문</span><span id="evidenceCount"></span>
+          </button>
+          <div id="evidenceContent" hidden></div>
+        </section>
+      </div>
+    </article>
+
+    <aside class="assistant-panel" aria-label="대화 편집">
+      <header><div><h2><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5H4l-2 2V11.5A8.5 8.5 0 0 1 10.5 3h2a8.5 8.5 0 0 1 8.5 8.5Z"/><path d="M7 10h9M7 14h6"/></svg>대화 편집</h2><p id="selectionLabel">전체 문서</p></div></header>
+      <div class="job-card" id="jobCard" hidden aria-live="polite">
+        <div class="job-row"><strong id="jobMessage">작업 준비 중</strong><span id="jobProgress">0%</span></div>
+        <div class="progress-track"><span id="jobProgressBar"></span></div>
+        <p class="error-text" id="jobError" hidden></p>
+        <div class="job-actions"><button class="text-button" id="cancelJobButton" type="button">취소</button><button class="text-button" id="retryJobButton" type="button" hidden>다시 시도</button></div>
+      </div>
+      <div class="messages" id="messages" aria-live="polite">
+        <div class="guide-message">초안이 준비되면 수정할 내용을 알려주세요. 항목을 선택해 그 부분만 다듬을 수도 있습니다.</div>
+      </div>
+      <form class="chat-form" id="chatForm">
+        <label for="chatInput">수정 요청</label>
+        <textarea id="chatInput" rows="3" placeholder="어떻게 수정할까요?" disabled></textarea>
+        <div class="chat-actions"><button class="text-button" id="clearSelectionButton" type="button" disabled>전체 문서 선택</button><button class="button primary" id="sendButton" type="submit" disabled>수정 요청</button></div>
+      </form>
+    </aside>
+  </main>
+
+  <dialog id="createDialog" class="create-dialog">
+    <form id="createForm" method="dialog">
+      <header class="dialog-header"><div><h2>새 주보</h2><p>주차와 양식, 참고할 이전 주보를 선택하세요.</p></div><button class="icon-button" id="closeDialogButton" type="button" aria-label="닫기">×</button></header>
+      <div class="dialog-body">
+        <div class="field-grid">
+          <label>기준 주<input id="weekInput" name="week" type="week" required></label>
+          <label>주보 제목<input id="titleInput" name="title" type="text" required placeholder="예: 9월 둘째 주 그룹 주보"></label>
+        </div>
+        <section class="form-section">
+          <div class="section-heading"><div><h3>목차</h3><p>순서를 옮기거나 필요한 항목을 추가하세요.</p></div><button class="button secondary compact" id="addSectionButton" type="button">항목 추가</button></div>
+          <div class="template-picker"><label>저장된 양식<select id="templateSelect"><option value="">기본 양식</option></select></label></div>
+          <details class="outline-settings" id="outlineSettings"><summary>목차 편집</summary><div id="sectionEditor" class="section-editor"></div></details>
+          <label class="save-template"><input id="saveTemplateInput" type="checkbox"> 이 목차를 재사용할 양식으로 저장</label>
+          <label id="templateNameField" hidden>양식 이름<input id="templateNameInput" type="text" placeholder="예: 월간 운영회의용"></label>
+        </section>
+        <section class="form-section">
+          <h3>포함되어야 할 팀</h3>
+          <p>쉼표나 줄바꿈으로 구분하세요. 누락 여부를 생성 결과에서 확인합니다.</p>
+          <textarea id="teamsInput" rows="2" placeholder="예: YIELD팀, DRAM팀, NAND팀"></textarea>
+        </section>
+        <section class="form-section">
+          <div class="section-heading"><div><h3>이전 2주 주보</h3><p>DOCX, TXT, MD 파일이나 본문을 추가할 수 있습니다.</p></div><label class="button secondary compact file-button">파일 선택<input id="referenceFiles" type="file" multiple accept=".docx,.txt,.md"></label></div>
+          <div id="referenceList" class="reference-list"></div>
+          <button class="text-button" id="addTextReferenceButton" type="button">본문으로 추가</button>
+        </section>
+        <div class="notice warning" id="configWarning" hidden></div>
+      </div>
+      <footer class="dialog-footer"><button class="button secondary" id="cancelCreateButton" type="button">취소</button><button class="button primary" id="createSubmitButton" type="submit">주보 만들기</button></footer>
+    </form>
+  </dialog>
+
+  <div class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="true"></div>
+  <script src="/static/app.js" defer></script>
+</body>
+</html>

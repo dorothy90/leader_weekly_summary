@@ -1,0 +1,1154 @@
+[
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_01_part_0",
+    "_source": {
+      "text": "[더미 데이터] YIELD팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n담당 소주제: yield_all\nDRAM / 우시 / NAND 공식 CUM0: 93.9%, 91.8%, 91.3%\n전주 동일 기준: 93.5%, 91.6%, 90.8%\nDRAM·우시·NAND 모두 전주 대비 개선.",
+      "type": "original_part",
+      "team": "YIELD팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_01",
+      "html_path": "group_report_studio/demo_2026_37/teams/YIELD팀/body.html",
+      "part_index": 0,
+      "total_parts": 2,
+      "subject": "[더미][주보] YIELD팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_01_part_1",
+    "_source": {
+      "text": "[더미 데이터] YIELD팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n차주 계획: 제품별 투입량 가중 공식 집계 유지. 단순 평균 사용 금지. 완료 목표 2026-09-18.\n집계 범위: DRAM / 우시 / NAND 공식 CUM0. 개발 지표와 양산 지표는 별도 관리하며 팀별 수치를 임의 평균하지 않는다.",
+      "type": "original_part",
+      "team": "YIELD팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_01",
+      "html_path": "group_report_studio/demo_2026_37/teams/YIELD팀/body.html",
+      "part_index": 1,
+      "total_parts": 2,
+      "subject": "[더미][주보] YIELD팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_02_part_0",
+    "_source": {
+      "text": "[더미 데이터] HBM수율팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n담당 소주제: yield_hbm\nHBM3E 8H / HBM3E 12H CUM0: 90.6%, 86.8%\n전주 동일 기준: 90.1%, 86%\n12H CUM0 0.8%p 상승, 확대 LOT 추적 중.",
+      "type": "original_part",
+      "team": "HBM수율팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_02",
+      "html_path": "group_report_studio/demo_2026_37/teams/HBM수율팀/body.html",
+      "part_index": 0,
+      "total_parts": 2,
+      "subject": "[더미][주보] HBM수율팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_02_part_1",
+    "_source": {
+      "text": "[더미 데이터] HBM수율팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n차주 계획: 12H 확대 LOT 5개 재현성 확인. 완료 목표 2026-09-18.\n집계 범위: HBM3E 8H / HBM3E 12H CUM0. 개발 지표와 양산 지표는 별도 관리하며 팀별 수치를 임의 평균하지 않는다.",
+      "type": "original_part",
+      "team": "HBM수율팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_02",
+      "html_path": "group_report_studio/demo_2026_37/teams/HBM수율팀/body.html",
+      "part_index": 1,
+      "total_parts": 2,
+      "subject": "[더미][주보] HBM수율팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_03_part_0",
+    "_source": {
+      "text": "[더미 데이터] Spica수율팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n담당 소주제: yield_spica\nSpica A / Spica B CUM0: 93.2%, 91.1%\n전주 동일 기준: 92.6%, 90.4%\nSpica B CUM0 0.7%p 개선, edge 불량 감소 확인.",
+      "type": "original_part",
+      "team": "Spica수율팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_03",
+      "html_path": "group_report_studio/demo_2026_37/teams/Spica수율팀/body.html",
+      "part_index": 0,
+      "total_parts": 2,
+      "subject": "[더미][주보] Spica수율팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_03_part_1",
+    "_source": {
+      "text": "[더미 데이터] Spica수율팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n차주 계획: Spica B 세정 조건 8개 LOT 확대. 완료 목표 2026-09-18.\n집계 범위: Spica A / Spica B CUM0. 개발 지표와 양산 지표는 별도 관리하며 팀별 수치를 임의 평균하지 않는다.",
+      "type": "original_part",
+      "team": "Spica수율팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_03",
+      "html_path": "group_report_studio/demo_2026_37/teams/Spica수율팀/body.html",
+      "part_index": 1,
+      "total_parts": 2,
+      "subject": "[더미][주보] Spica수율팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_04_part_0",
+    "_source": {
+      "text": "[더미 데이터] 우시CP팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n담당 소주제: yield_wuxi\n우시CP D1 / D2 CUM0: 91.7%, 91%\n전주 동일 기준: 91.5%, 90.6%\nD2 0.4%p 개선, probe 2호기 접촉저항 상승 signal.",
+      "type": "original_part",
+      "team": "우시CP팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_04",
+      "html_path": "group_report_studio/demo_2026_37/teams/우시CP팀/body.html",
+      "part_index": 0,
+      "total_parts": 2,
+      "subject": "[더미][주보] 우시CP팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_04_part_1",
+    "_source": {
+      "text": "[더미 데이터] 우시CP팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n차주 계획: probe 2호기 정비 후 확인 LOT 투입. 완료 목표 2026-09-18.\n집계 범위: 우시CP D1 / D2 CUM0. 개발 지표와 양산 지표는 별도 관리하며 팀별 수치를 임의 평균하지 않는다.",
+      "type": "original_part",
+      "team": "우시CP팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_04",
+      "html_path": "group_report_studio/demo_2026_37/teams/우시CP팀/body.html",
+      "part_index": 1,
+      "total_parts": 2,
+      "subject": "[더미][주보] 우시CP팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_05_part_0",
+    "_source": {
+      "text": "[더미 데이터] Olympus수율팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n담당 소주제: yield_olympus\nOlympus A / B CUM0: 90.9%, 88.9%\n전주 동일 기준: 90.5%, 89.2%\nB 제품 0.3%p 하락, 잔류물 재발 signal.",
+      "type": "original_part",
+      "team": "Olympus수율팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_05",
+      "html_path": "group_report_studio/demo_2026_37/teams/Olympus수율팀/body.html",
+      "part_index": 0,
+      "total_parts": 2,
+      "subject": "[더미][주보] Olympus수율팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_05_part_1",
+    "_source": {
+      "text": "[더미 데이터] Olympus수율팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n차주 계획: B 제품 영향 2개 LOT 보류 후 잔류물 재분석. 완료 목표 2026-09-18.\n집계 범위: Olympus A / B CUM0. 개발 지표와 양산 지표는 별도 관리하며 팀별 수치를 임의 평균하지 않는다.",
+      "type": "original_part",
+      "team": "Olympus수율팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_05",
+      "html_path": "group_report_studio/demo_2026_37/teams/Olympus수율팀/body.html",
+      "part_index": 1,
+      "total_parts": 2,
+      "subject": "[더미][주보] Olympus수율팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_06_part_0",
+    "_source": {
+      "text": "[더미 데이터] 대련FAB팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n담당 소주제: yield_dalian\n대련 N1 / N2 CUM0: 90.2%, 88.7%\n전주 동일 기준: 89.6%, 88.2%\nN2 CUM0 0.5%p 개선, 온도 조건 효과 확인.",
+      "type": "original_part",
+      "team": "대련FAB팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_06",
+      "html_path": "group_report_studio/demo_2026_37/teams/대련FAB팀/body.html",
+      "part_index": 0,
+      "total_parts": 2,
+      "subject": "[더미][주보] 대련FAB팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_06_part_1",
+    "_source": {
+      "text": "[더미 데이터] 대련FAB팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n차주 계획: 조건 B 확대 4개 LOT 평가. 완료 목표 2026-09-18.\n집계 범위: 대련 N1 / N2 CUM0. 개발 지표와 양산 지표는 별도 관리하며 팀별 수치를 임의 평균하지 않는다.",
+      "type": "original_part",
+      "team": "대련FAB팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_06",
+      "html_path": "group_report_studio/demo_2026_37/teams/대련FAB팀/body.html",
+      "part_index": 1,
+      "total_parts": 2,
+      "subject": "[더미][주보] 대련FAB팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_07_part_0",
+    "_source": {
+      "text": "[더미 데이터] 공정품질팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n담당 소주제: quality_process\nSPC 이상 건수: 4건\n전주 동일 기준: 6건\n신규 SPC 이상 4건 중 3건 조치, 1건 추적.",
+      "type": "original_part",
+      "team": "공정품질팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_07",
+      "html_path": "group_report_studio/demo_2026_37/teams/공정품질팀/body.html",
+      "part_index": 0,
+      "total_parts": 2,
+      "subject": "[더미][주보] 공정품질팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_07_part_1",
+    "_source": {
+      "text": "[더미 데이터] 공정품질팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n차주 계획: 미종결 1건의 계측기 교차 검증. 완료 목표 2026-09-18.\n집계 범위: SPC 이상 건수. 개발 지표와 양산 지표는 별도 관리하며 팀별 수치를 임의 평균하지 않는다.",
+      "type": "original_part",
+      "team": "공정품질팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_07",
+      "html_path": "group_report_studio/demo_2026_37/teams/공정품질팀/body.html",
+      "part_index": 1,
+      "total_parts": 2,
+      "subject": "[더미][주보] 공정품질팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_08_part_0",
+    "_source": {
+      "text": "[더미 데이터] 출하품질팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n담당 소주제: quality_shipping\n출하검사 불량률: 28ppm\n전주 동일 기준: 35ppm\n28ppm으로 개선, 보류 LOT 2개 검사 중.",
+      "type": "original_part",
+      "team": "출하품질팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_08",
+      "html_path": "group_report_studio/demo_2026_37/teams/출하품질팀/body.html",
+      "part_index": 0,
+      "total_parts": 2,
+      "subject": "[더미][주보] 출하품질팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_08_part_1",
+    "_source": {
+      "text": "[더미 데이터] 출하품질팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n차주 계획: 보류 LOT 2개 재검 완료 후 출하 판단. 완료 목표 2026-09-18.\n집계 범위: 출하검사 불량률. 개발 지표와 양산 지표는 별도 관리하며 팀별 수치를 임의 평균하지 않는다.",
+      "type": "original_part",
+      "team": "출하품질팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_08",
+      "html_path": "group_report_studio/demo_2026_37/teams/출하품질팀/body.html",
+      "part_index": 1,
+      "total_parts": 2,
+      "subject": "[더미][주보] 출하품질팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_09_part_0",
+    "_source": {
+      "text": "[더미 데이터] 고객품질팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n담당 소주제: quality_customer\n고객 불량 접수: 1건\n전주 동일 기준: 2건\n고객 A사 HBM3E 고온 불량 1건 지속, 출하 보류 2개 LOT 유지.",
+      "type": "original_part",
+      "team": "고객품질팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_09",
+      "html_path": "group_report_studio/demo_2026_37/teams/고객품질팀/body.html",
+      "part_index": 0,
+      "total_parts": 2,
+      "subject": "[더미][주보] 고객품질팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_09_part_1",
+    "_source": {
+      "text": "[더미 데이터] 고객품질팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n차주 계획: 고객 A사 8D 중간보고 제출 및 패키지 분석 완료. 완료 목표 2026-09-18.\n집계 범위: 고객 불량 접수. 개발 지표와 양산 지표는 별도 관리하며 팀별 수치를 임의 평균하지 않는다.",
+      "type": "original_part",
+      "team": "고객품질팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_09",
+      "html_path": "group_report_studio/demo_2026_37/teams/고객품질팀/body.html",
+      "part_index": 1,
+      "total_parts": 2,
+      "subject": "[더미][주보] 고객품질팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_10_part_0",
+    "_source": {
+      "text": "[더미 데이터] FAB증산TF팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n담당 소주제: tf_fab\n증산 검증 LOT 통과: 90%\n전주 동일 기준: 86%\n검증 50개 LOT 중 45개 통과, 미통과 5개 원인 분류.",
+      "type": "original_part",
+      "team": "FAB증산TF팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_10",
+      "html_path": "group_report_studio/demo_2026_37/teams/FAB증산TF팀/body.html",
+      "part_index": 0,
+      "total_parts": 2,
+      "subject": "[더미][주보] FAB증산TF팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_10_part_1",
+    "_source": {
+      "text": "[더미 데이터] FAB증산TF팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n차주 계획: 미통과 5개 LOT 재평가. 완료 목표 2026-09-18.\n집계 범위: 증산 검증 LOT 통과. 개발 지표와 양산 지표는 별도 관리하며 팀별 수치를 임의 평균하지 않는다.",
+      "type": "original_part",
+      "team": "FAB증산TF팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_10",
+      "html_path": "group_report_studio/demo_2026_37/teams/FAB증산TF팀/body.html",
+      "part_index": 1,
+      "total_parts": 2,
+      "subject": "[더미][주보] FAB증산TF팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_11_part_0",
+    "_source": {
+      "text": "[더미 데이터] DRAM증산팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n담당 소주제: tf_dram\nDRAM 증산 구간 CUM0: 92.7%\n전주 동일 기준: 92.2%\n증산 구간 0.5%p 개선, 월 2천장 확대 검증 중.",
+      "type": "original_part",
+      "team": "DRAM증산팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_11",
+      "html_path": "group_report_studio/demo_2026_37/teams/DRAM증산팀/body.html",
+      "part_index": 0,
+      "total_parts": 2,
+      "subject": "[더미][주보] DRAM증산팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_11_part_1",
+    "_source": {
+      "text": "[더미 데이터] DRAM증산팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n차주 계획: 매칭 장비 2대 추가 검증. 완료 목표 2026-09-18.\n집계 범위: DRAM 증산 구간 CUM0. 개발 지표와 양산 지표는 별도 관리하며 팀별 수치를 임의 평균하지 않는다.",
+      "type": "original_part",
+      "team": "DRAM증산팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_11",
+      "html_path": "group_report_studio/demo_2026_37/teams/DRAM증산팀/body.html",
+      "part_index": 1,
+      "total_parts": 2,
+      "subject": "[더미][주보] DRAM증산팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_12_part_0",
+    "_source": {
+      "text": "[더미 데이터] NAND증산팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n담당 소주제: tf_nand\nNAND 증산 구간 CUM0: 89.5%\n전주 동일 기준: 89%\n증산 구간 0.5%p 개선, 상한 초과 LOT 2개 추적.",
+      "type": "original_part",
+      "team": "NAND증산팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_12",
+      "html_path": "group_report_studio/demo_2026_37/teams/NAND증산팀/body.html",
+      "part_index": 0,
+      "total_parts": 2,
+      "subject": "[더미][주보] NAND증산팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_12_part_1",
+    "_source": {
+      "text": "[더미 데이터] NAND증산팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n차주 계획: 대기시간 상한 적용 범위 확대. 완료 목표 2026-09-18.\n집계 범위: NAND 증산 구간 CUM0. 개발 지표와 양산 지표는 별도 관리하며 팀별 수치를 임의 평균하지 않는다.",
+      "type": "original_part",
+      "team": "NAND증산팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_12",
+      "html_path": "group_report_studio/demo_2026_37/teams/NAND증산팀/body.html",
+      "part_index": 1,
+      "total_parts": 2,
+      "subject": "[더미][주보] NAND증산팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_13_part_0",
+    "_source": {
+      "text": "[더미 데이터] Proycon개발팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n담당 소주제: dev_proycon\nProycon 개발 CUM0: 71.5%\n전주 동일 기준: 68%\n개발 CUM0 3.5%p 개선, 양산 기준 75% 미달.",
+      "type": "original_part",
+      "team": "Proycon개발팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_13",
+      "html_path": "group_report_studio/demo_2026_37/teams/Proycon개발팀/body.html",
+      "part_index": 0,
+      "total_parts": 2,
+      "subject": "[더미][주보] Proycon개발팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_13_part_1",
+    "_source": {
+      "text": "[더미 데이터] Proycon개발팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n차주 계획: split B 신뢰성 평가 3개 LOT 진행. 완료 목표 2026-09-18.\n집계 범위: Proycon 개발 CUM0. 개발 지표와 양산 지표는 별도 관리하며 팀별 수치를 임의 평균하지 않는다.",
+      "type": "original_part",
+      "team": "Proycon개발팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_13",
+      "html_path": "group_report_studio/demo_2026_37/teams/Proycon개발팀/body.html",
+      "part_index": 1,
+      "total_parts": 2,
+      "subject": "[더미][주보] Proycon개발팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_14_part_0",
+    "_source": {
+      "text": "[더미 데이터] HBM4E개발팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n담당 소주제: dev_hbm4e\nHBM4E 개발 CUM0: 67%\n전주 동일 기준: 62.5%\n개발 CUM0 4.5%p 개선, 열시험 검증 미완료.",
+      "type": "original_part",
+      "team": "HBM4E개발팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_14",
+      "html_path": "group_report_studio/demo_2026_37/teams/HBM4E개발팀/body.html",
+      "part_index": 0,
+      "total_parts": 2,
+      "subject": "[더미][주보] HBM4E개발팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_14_part_1",
+    "_source": {
+      "text": "[더미 데이터] HBM4E개발팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n차주 계획: 열시험 완료 전 양산성 판정 보류. 완료 목표 2026-09-18.\n집계 범위: HBM4E 개발 CUM0. 개발 지표와 양산 지표는 별도 관리하며 팀별 수치를 임의 평균하지 않는다.",
+      "type": "original_part",
+      "team": "HBM4E개발팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_14",
+      "html_path": "group_report_studio/demo_2026_37/teams/HBM4E개발팀/body.html",
+      "part_index": 1,
+      "total_parts": 2,
+      "subject": "[더미][주보] HBM4E개발팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_15_part_0",
+    "_source": {
+      "text": "[더미 데이터] GD7개발팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n담당 소주제: dev_sp12g\nSP 12G GD7 개발 CUM0: 74.3%\n전주 동일 기준: 72.1%\n2.2%p 개선, 고속 corner 추가 확인 필요.",
+      "type": "original_part",
+      "team": "GD7개발팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_15",
+      "html_path": "group_report_studio/demo_2026_37/teams/GD7개발팀/body.html",
+      "part_index": 0,
+      "total_parts": 2,
+      "subject": "[더미][주보] GD7개발팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_15_part_1",
+    "_source": {
+      "text": "[더미 데이터] GD7개발팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n차주 계획: 고속 corner 3조건 재시험. 완료 목표 2026-09-18.\n집계 범위: SP 12G GD7 개발 CUM0. 개발 지표와 양산 지표는 별도 관리하며 팀별 수치를 임의 평균하지 않는다.",
+      "type": "original_part",
+      "team": "GD7개발팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_15",
+      "html_path": "group_report_studio/demo_2026_37/teams/GD7개발팀/body.html",
+      "part_index": 1,
+      "total_parts": 2,
+      "subject": "[더미][주보] GD7개발팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_16_part_0",
+    "_source": {
+      "text": "[더미 데이터] M15X개발팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n담당 소주제: dev_m15x\nM15X 개발 CUM0: 66.8%\n전주 동일 기준: 64.2%\n2.6%p 개선, 신규 장비 1대 matching 미완료.",
+      "type": "original_part",
+      "team": "M15X개발팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_16",
+      "html_path": "group_report_studio/demo_2026_37/teams/M15X개발팀/body.html",
+      "part_index": 0,
+      "total_parts": 2,
+      "subject": "[더미][주보] M15X개발팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_16_part_1",
+    "_source": {
+      "text": "[더미 데이터] M15X개발팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n차주 계획: 신규 장비 matching 후 양산성 검토. 완료 목표 2026-09-18.\n집계 범위: M15X 개발 CUM0. 개발 지표와 양산 지표는 별도 관리하며 팀별 수치를 임의 평균하지 않는다.",
+      "type": "original_part",
+      "team": "M15X개발팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_16",
+      "html_path": "group_report_studio/demo_2026_37/teams/M15X개발팀/body.html",
+      "part_index": 1,
+      "total_parts": 2,
+      "subject": "[더미][주보] M15X개발팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_17_part_0",
+    "_source": {
+      "text": "[더미 데이터] Heraion개발팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n담당 소주제: dev_heraion\nHeraion 개발 CUM0: 64.6%\n전주 동일 기준: 65%\n0.4%p 하락, WL 단선 재발 2개 LOT.",
+      "type": "original_part",
+      "team": "Heraion개발팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_17",
+      "html_path": "group_report_studio/demo_2026_37/teams/Heraion개발팀/body.html",
+      "part_index": 0,
+      "total_parts": 2,
+      "subject": "[더미][주보] Heraion개발팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_17_part_1",
+    "_source": {
+      "text": "[더미 데이터] Heraion개발팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n차주 계획: WL 단선 위치 분석 및 DOE 재설계. 완료 목표 2026-09-18.\n집계 범위: Heraion 개발 CUM0. 개발 지표와 양산 지표는 별도 관리하며 팀별 수치를 임의 평균하지 않는다.",
+      "type": "original_part",
+      "team": "Heraion개발팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_17",
+      "html_path": "group_report_studio/demo_2026_37/teams/Heraion개발팀/body.html",
+      "part_index": 1,
+      "total_parts": 2,
+      "subject": "[더미][주보] Heraion개발팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_18_part_0",
+    "_source": {
+      "text": "[더미 데이터] PSDI팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n담당 소주제: task_psdi\nPSDI 자동 분류 적용률: 76%\n전주 동일 기준: 68%\n적용률 8%p 상승, 오분류 3건 보완 중.",
+      "type": "original_part",
+      "team": "PSDI팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_18",
+      "html_path": "group_report_studio/demo_2026_37/teams/PSDI팀/body.html",
+      "part_index": 0,
+      "total_parts": 2,
+      "subject": "[더미][주보] PSDI팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_18_part_1",
+    "_source": {
+      "text": "[더미 데이터] PSDI팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n차주 계획: 오분류 3건 규칙 수정 후 재검증. 완료 목표 2026-09-18.\n집계 범위: PSDI 자동 분류 적용률. 개발 지표와 양산 지표는 별도 관리하며 팀별 수치를 임의 평균하지 않는다.",
+      "type": "original_part",
+      "team": "PSDI팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_18",
+      "html_path": "group_report_studio/demo_2026_37/teams/PSDI팀/body.html",
+      "part_index": 1,
+      "total_parts": 2,
+      "subject": "[더미][주보] PSDI팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_19_part_0",
+    "_source": {
+      "text": "[더미 데이터] WLQM팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n담당 소주제: task_wlqm\nNAND WLQM 평균 대기시간: 4.1시간\n전주 동일 기준: 4.6시간\n평균 대기시간 0.5시간 단축, P95 8.2시간.",
+      "type": "original_part",
+      "team": "WLQM팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_19",
+      "html_path": "group_report_studio/demo_2026_37/teams/WLQM팀/body.html",
+      "part_index": 0,
+      "total_parts": 2,
+      "subject": "[더미][주보] WLQM팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_19_part_1",
+    "_source": {
+      "text": "[더미 데이터] WLQM팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n차주 계획: 야간 대기시간 상위 10개 LOT 흐름 개선. 완료 목표 2026-09-18.\n집계 범위: NAND WLQM 평균 대기시간. 개발 지표와 양산 지표는 별도 관리하며 팀별 수치를 임의 평균하지 않는다.",
+      "type": "original_part",
+      "team": "WLQM팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_19",
+      "html_path": "group_report_studio/demo_2026_37/teams/WLQM팀/body.html",
+      "part_index": 1,
+      "total_parts": 2,
+      "subject": "[더미][주보] WLQM팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_20_part_0",
+    "_source": {
+      "text": "[더미 데이터] PHOTO팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n담당 소주제: dev_proycon\n금주 결과: Photo CD 산포 2.8nm→2.4nm, split B와 동일 LOT 사용.",
+      "type": "original_part",
+      "team": "PHOTO팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_20",
+      "html_path": "group_report_studio/demo_2026_37/teams/PHOTO팀/body.html",
+      "part_index": 0,
+      "total_parts": 2,
+      "subject": "[더미][주보] PHOTO팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_20_part_1",
+    "_source": {
+      "text": "[더미 데이터] PHOTO팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n차주 계획: 노광 dose 3수준 검증. 완료 목표 2026-09-18.\n관련 주관팀과 동일 이슈를 추적하며 지원팀 보고를 별도 신규 사건으로 중복 집계하지 않는다.",
+      "type": "original_part",
+      "team": "PHOTO팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_20",
+      "html_path": "group_report_studio/demo_2026_37/teams/PHOTO팀/body.html",
+      "part_index": 1,
+      "total_parts": 2,
+      "subject": "[더미][주보] PHOTO팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_21_part_0",
+    "_source": {
+      "text": "[더미 데이터] ETCH팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n담당 소주제: yield_olympus\n금주 결과: Olympus B 잔류물 재발 LOT 2개에서 chamber 04 공통 이력 확인.",
+      "type": "original_part",
+      "team": "ETCH팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_21",
+      "html_path": "group_report_studio/demo_2026_37/teams/ETCH팀/body.html",
+      "part_index": 0,
+      "total_parts": 2,
+      "subject": "[더미][주보] ETCH팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_21_part_1",
+    "_source": {
+      "text": "[더미 데이터] ETCH팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n차주 계획: chamber 04 추가 세정과 단면 분석. 완료 목표 2026-09-18.\n관련 주관팀과 동일 이슈를 추적하며 지원팀 보고를 별도 신규 사건으로 중복 집계하지 않는다.",
+      "type": "original_part",
+      "team": "ETCH팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_21",
+      "html_path": "group_report_studio/demo_2026_37/teams/ETCH팀/body.html",
+      "part_index": 1,
+      "total_parts": 2,
+      "subject": "[더미][주보] ETCH팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_22_part_0",
+    "_source": {
+      "text": "[더미 데이터] CVD팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n담당 소주제: dev_m15x\n금주 결과: M15X 막두께 균일도 2.1%→1.8%, 신규 장비 검증 중.",
+      "type": "original_part",
+      "team": "CVD팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_22",
+      "html_path": "group_report_studio/demo_2026_37/teams/CVD팀/body.html",
+      "part_index": 0,
+      "total_parts": 2,
+      "subject": "[더미][주보] CVD팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_22_part_1",
+    "_source": {
+      "text": "[더미 데이터] CVD팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n차주 계획: 신규 장비 1대 온도 profile 조정. 완료 목표 2026-09-18.\n관련 주관팀과 동일 이슈를 추적하며 지원팀 보고를 별도 신규 사건으로 중복 집계하지 않는다.",
+      "type": "original_part",
+      "team": "CVD팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_22",
+      "html_path": "group_report_studio/demo_2026_37/teams/CVD팀/body.html",
+      "part_index": 1,
+      "total_parts": 2,
+      "subject": "[더미][주보] CVD팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_23_part_0",
+    "_source": {
+      "text": "[더미 데이터] CMP팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n담당 소주제: yield_spica\n금주 결과: Spica B dishing 18nm→15nm, 세정 개선 LOT과 구분 관리.",
+      "type": "original_part",
+      "team": "CMP팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_23",
+      "html_path": "group_report_studio/demo_2026_37/teams/CMP팀/body.html",
+      "part_index": 0,
+      "total_parts": 2,
+      "subject": "[더미][주보] CMP팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_23_part_1",
+    "_source": {
+      "text": "[더미 데이터] CMP팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n차주 계획: pad 수명 말기 조건 검증. 완료 목표 2026-09-18.\n관련 주관팀과 동일 이슈를 추적하며 지원팀 보고를 별도 신규 사건으로 중복 집계하지 않는다.",
+      "type": "original_part",
+      "team": "CMP팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_23",
+      "html_path": "group_report_studio/demo_2026_37/teams/CMP팀/body.html",
+      "part_index": 1,
+      "total_parts": 2,
+      "subject": "[더미][주보] CMP팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_24_part_0",
+    "_source": {
+      "text": "[더미 데이터] DIFF팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n담당 소주제: yield_dalian\n금주 결과: 대련 N2 열처리 온도 편차 1.2℃→0.8℃.",
+      "type": "original_part",
+      "team": "DIFF팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_24",
+      "html_path": "group_report_studio/demo_2026_37/teams/DIFF팀/body.html",
+      "part_index": 0,
+      "total_parts": 2,
+      "subject": "[더미][주보] DIFF팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_24_part_1",
+    "_source": {
+      "text": "[더미 데이터] DIFF팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n차주 계획: 조건 B 확대 LOT 4개 온도 이력 추적. 완료 목표 2026-09-18.\n관련 주관팀과 동일 이슈를 추적하며 지원팀 보고를 별도 신규 사건으로 중복 집계하지 않는다.",
+      "type": "original_part",
+      "team": "DIFF팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_24",
+      "html_path": "group_report_studio/demo_2026_37/teams/DIFF팀/body.html",
+      "part_index": 1,
+      "total_parts": 2,
+      "subject": "[더미][주보] DIFF팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_25_part_0",
+    "_source": {
+      "text": "[더미 데이터] IMPLANT팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n담당 소주제: dev_heraion\n금주 결과: Heraion dose 편차 1.5%→1.3%, WL 단선과 인과 미확정.",
+      "type": "original_part",
+      "team": "IMPLANT팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_25",
+      "html_path": "group_report_studio/demo_2026_37/teams/IMPLANT팀/body.html",
+      "part_index": 0,
+      "total_parts": 2,
+      "subject": "[더미][주보] IMPLANT팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_25_part_1",
+    "_source": {
+      "text": "[더미 데이터] IMPLANT팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n차주 계획: dose와 WL 단선 상관 재분석. 완료 목표 2026-09-18.\n관련 주관팀과 동일 이슈를 추적하며 지원팀 보고를 별도 신규 사건으로 중복 집계하지 않는다.",
+      "type": "original_part",
+      "team": "IMPLANT팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_25",
+      "html_path": "group_report_studio/demo_2026_37/teams/IMPLANT팀/body.html",
+      "part_index": 1,
+      "total_parts": 2,
+      "subject": "[더미][주보] IMPLANT팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_26_part_0",
+    "_source": {
+      "text": "[더미 데이터] METROLOGY팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n담당 소주제: quality_process\n금주 결과: SPC 이상 미종결 1건의 계측기 편차 0.6nm 관찰.",
+      "type": "original_part",
+      "team": "METROLOGY팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_26",
+      "html_path": "group_report_studio/demo_2026_37/teams/METROLOGY팀/body.html",
+      "part_index": 0,
+      "total_parts": 2,
+      "subject": "[더미][주보] METROLOGY팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_26_part_1",
+    "_source": {
+      "text": "[더미 데이터] METROLOGY팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n차주 계획: 기준장비 교차 측정 30점 수행. 완료 목표 2026-09-18.\n관련 주관팀과 동일 이슈를 추적하며 지원팀 보고를 별도 신규 사건으로 중복 집계하지 않는다.",
+      "type": "original_part",
+      "team": "METROLOGY팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_26",
+      "html_path": "group_report_studio/demo_2026_37/teams/METROLOGY팀/body.html",
+      "part_index": 1,
+      "total_parts": 2,
+      "subject": "[더미][주보] METROLOGY팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_27_part_0",
+    "_source": {
+      "text": "[더미 데이터] DEFECT팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n담당 소주제: yield_spica\n금주 결과: Spica B edge defect 밀도 0.28→0.21개/cm².",
+      "type": "original_part",
+      "team": "DEFECT팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_27",
+      "html_path": "group_report_studio/demo_2026_37/teams/DEFECT팀/body.html",
+      "part_index": 0,
+      "total_parts": 2,
+      "subject": "[더미][주보] DEFECT팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_27_part_1",
+    "_source": {
+      "text": "[더미 데이터] DEFECT팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n차주 계획: 확대 LOT edge 분포와 CUM0 동시 추적. 완료 목표 2026-09-18.\n관련 주관팀과 동일 이슈를 추적하며 지원팀 보고를 별도 신규 사건으로 중복 집계하지 않는다.",
+      "type": "original_part",
+      "team": "DEFECT팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_27",
+      "html_path": "group_report_studio/demo_2026_37/teams/DEFECT팀/body.html",
+      "part_index": 1,
+      "total_parts": 2,
+      "subject": "[더미][주보] DEFECT팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_28_part_0",
+    "_source": {
+      "text": "[더미 데이터] EQUIP팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n담당 소주제: tf_fab\n금주 결과: 증산 대상 장비 가동률 88.0%→90.5%, etch 1대 정비 중.",
+      "type": "original_part",
+      "team": "EQUIP팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_28",
+      "html_path": "group_report_studio/demo_2026_37/teams/EQUIP팀/body.html",
+      "part_index": 0,
+      "total_parts": 2,
+      "subject": "[더미][주보] EQUIP팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_28_part_1",
+    "_source": {
+      "text": "[더미 데이터] EQUIP팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n차주 계획: etch 정비 후 3개 LOT 검증. 완료 목표 2026-09-18.\n관련 주관팀과 동일 이슈를 추적하며 지원팀 보고를 별도 신규 사건으로 중복 집계하지 않는다.",
+      "type": "original_part",
+      "team": "EQUIP팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_28",
+      "html_path": "group_report_studio/demo_2026_37/teams/EQUIP팀/body.html",
+      "part_index": 1,
+      "total_parts": 2,
+      "subject": "[더미][주보] EQUIP팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_29_part_0",
+    "_source": {
+      "text": "[더미 데이터] PI팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n담당 소주제: dev_proycon\n금주 결과: Proycon split B 누설전류 fail 비율 8.2%→6.1%.",
+      "type": "original_part",
+      "team": "PI팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_29",
+      "html_path": "group_report_studio/demo_2026_37/teams/PI팀/body.html",
+      "part_index": 0,
+      "total_parts": 2,
+      "subject": "[더미][주보] PI팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_29_part_1",
+    "_source": {
+      "text": "[더미 데이터] PI팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n차주 계획: 신뢰성 결과 확보 후 공정 조건 동결 검토. 완료 목표 2026-09-18.\n관련 주관팀과 동일 이슈를 추적하며 지원팀 보고를 별도 신규 사건으로 중복 집계하지 않는다.",
+      "type": "original_part",
+      "team": "PI팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_29",
+      "html_path": "group_report_studio/demo_2026_37/teams/PI팀/body.html",
+      "part_index": 1,
+      "total_parts": 2,
+      "subject": "[더미][주보] PI팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_30_part_0",
+    "_source": {
+      "text": "[더미 데이터] TEST팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n담당 소주제: dev_sp12g\n금주 결과: GD7 고속 corner fail 5.4%→4.0%, 상온 기준.",
+      "type": "original_part",
+      "team": "TEST팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_30",
+      "html_path": "group_report_studio/demo_2026_37/teams/TEST팀/body.html",
+      "part_index": 0,
+      "total_parts": 2,
+      "subject": "[더미][주보] TEST팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_30_part_1",
+    "_source": {
+      "text": "[더미 데이터] TEST팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n차주 계획: 고온 corner 추가 시험. 완료 목표 2026-09-18.\n관련 주관팀과 동일 이슈를 추적하며 지원팀 보고를 별도 신규 사건으로 중복 집계하지 않는다.",
+      "type": "original_part",
+      "team": "TEST팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_30",
+      "html_path": "group_report_studio/demo_2026_37/teams/TEST팀/body.html",
+      "part_index": 1,
+      "total_parts": 2,
+      "subject": "[더미][주보] TEST팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_31_part_0",
+    "_source": {
+      "text": "[더미 데이터] PACKAGE팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n담당 소주제: quality_customer\n금주 결과: 고객 A사 HBM3E 고온 불량 시료 5개 단면 분석 중, 원인 미확정.",
+      "type": "original_part",
+      "team": "PACKAGE팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_31",
+      "html_path": "group_report_studio/demo_2026_37/teams/PACKAGE팀/body.html",
+      "part_index": 0,
+      "total_parts": 2,
+      "subject": "[더미][주보] PACKAGE팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_31_part_1",
+    "_source": {
+      "text": "[더미 데이터] PACKAGE팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n차주 계획: 계면 박리 유무 확인 후 8D 반영. 완료 목표 2026-09-18.\n관련 주관팀과 동일 이슈를 추적하며 지원팀 보고를 별도 신규 사건으로 중복 집계하지 않는다.",
+      "type": "original_part",
+      "team": "PACKAGE팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_31",
+      "html_path": "group_report_studio/demo_2026_37/teams/PACKAGE팀/body.html",
+      "part_index": 1,
+      "total_parts": 2,
+      "subject": "[더미][주보] PACKAGE팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_32_part_0",
+    "_source": {
+      "text": "[더미 데이터] RELIABILITY팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n담당 소주제: dev_hbm4e\n금주 결과: HBM4E 열시험 500시간 중 300시간 완료, 중간 신규 fail 0개.",
+      "type": "original_part",
+      "team": "RELIABILITY팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_32",
+      "html_path": "group_report_studio/demo_2026_37/teams/RELIABILITY팀/body.html",
+      "part_index": 0,
+      "total_parts": 2,
+      "subject": "[더미][주보] RELIABILITY팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_32_part_1",
+    "_source": {
+      "text": "[더미 데이터] RELIABILITY팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n차주 계획: 500시간 완료 후 판정. 완료 목표 2026-09-18.\n관련 주관팀과 동일 이슈를 추적하며 지원팀 보고를 별도 신규 사건으로 중복 집계하지 않는다.",
+      "type": "original_part",
+      "team": "RELIABILITY팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_32",
+      "html_path": "group_report_studio/demo_2026_37/teams/RELIABILITY팀/body.html",
+      "part_index": 1,
+      "total_parts": 2,
+      "subject": "[더미][주보] RELIABILITY팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_33_part_0",
+    "_source": {
+      "text": "[더미 데이터] FA팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n담당 소주제: quality_customer\n금주 결과: 고객 A사 HBM3E 재현 시료 2개 확보, 전원 패턴 민감도 관찰.",
+      "type": "original_part",
+      "team": "FA팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_33",
+      "html_path": "group_report_studio/demo_2026_37/teams/FA팀/body.html",
+      "part_index": 0,
+      "total_parts": 2,
+      "subject": "[더미][주보] FA팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_33_part_1",
+    "_source": {
+      "text": "[더미 데이터] FA팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n차주 계획: 전원 조건별 재현 시험. 완료 목표 2026-09-18.\n관련 주관팀과 동일 이슈를 추적하며 지원팀 보고를 별도 신규 사건으로 중복 집계하지 않는다.",
+      "type": "original_part",
+      "team": "FA팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_33",
+      "html_path": "group_report_studio/demo_2026_37/teams/FA팀/body.html",
+      "part_index": 1,
+      "total_parts": 2,
+      "subject": "[더미][주보] FA팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_34_part_0",
+    "_source": {
+      "text": "[더미 데이터] 생산관리팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n담당 소주제: tf_nand\n금주 결과: NAND queue time 상한 초과 LOT 5개→2개.",
+      "type": "original_part",
+      "team": "생산관리팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_34",
+      "html_path": "group_report_studio/demo_2026_37/teams/생산관리팀/body.html",
+      "part_index": 0,
+      "total_parts": 2,
+      "subject": "[더미][주보] 생산관리팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_34_part_1",
+    "_source": {
+      "text": "[더미 데이터] 생산관리팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n차주 계획: 초과 LOT 병목 공정 우선 배정. 완료 목표 2026-09-18.\n관련 주관팀과 동일 이슈를 추적하며 지원팀 보고를 별도 신규 사건으로 중복 집계하지 않는다.",
+      "type": "original_part",
+      "team": "생산관리팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_34",
+      "html_path": "group_report_studio/demo_2026_37/teams/생산관리팀/body.html",
+      "part_index": 1,
+      "total_parts": 2,
+      "subject": "[더미][주보] 생산관리팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_35_part_0",
+    "_source": {
+      "text": "[더미 데이터] DATA팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n담당 소주제: task_psdi\n금주 결과: PSDI 오분류 3건의 라벨 재검토 완료, 2건 규칙 충돌 확인.",
+      "type": "original_part",
+      "team": "DATA팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_35",
+      "html_path": "group_report_studio/demo_2026_37/teams/DATA팀/body.html",
+      "part_index": 0,
+      "total_parts": 2,
+      "subject": "[더미][주보] DATA팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_35_part_1",
+    "_source": {
+      "text": "[더미 데이터] DATA팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n차주 계획: 규칙 충돌 제거 후 검증셋 평가. 완료 목표 2026-09-18.\n관련 주관팀과 동일 이슈를 추적하며 지원팀 보고를 별도 신규 사건으로 중복 집계하지 않는다.",
+      "type": "original_part",
+      "team": "DATA팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_35",
+      "html_path": "group_report_studio/demo_2026_37/teams/DATA팀/body.html",
+      "part_index": 1,
+      "total_parts": 2,
+      "subject": "[더미][주보] DATA팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_36_part_0",
+    "_source": {
+      "text": "[더미 데이터] AUTOMATION팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n담당 소주제: task_wlqm\n금주 결과: WLQM 야간 작업 자동 배정률 64%→72%.",
+      "type": "original_part",
+      "team": "AUTOMATION팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_36",
+      "html_path": "group_report_studio/demo_2026_37/teams/AUTOMATION팀/body.html",
+      "part_index": 0,
+      "total_parts": 2,
+      "subject": "[더미][주보] AUTOMATION팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  },
+  {
+    "_index": "weekly_mail",
+    "_id": "demo_gr_2026_37_team_36_part_1",
+    "_source": {
+      "text": "[더미 데이터] AUTOMATION팀 2026-37 주간보고\n집계기간 2026-09-07~2026-09-13. 아래 내용은 모두 가상 테스트 데이터입니다.\n차주 계획: 상위 대기 LOT 10개 배정 규칙 점검. 완료 목표 2026-09-18.\n관련 주관팀과 동일 이슈를 추적하며 지원팀 보고를 별도 신규 사건으로 중복 집계하지 않는다.",
+      "type": "original_part",
+      "team": "AUTOMATION팀",
+      "week": "2026-37",
+      "mail_id": "demo_gr_2026_37_team_36",
+      "html_path": "group_report_studio/demo_2026_37/teams/AUTOMATION팀/body.html",
+      "part_index": 1,
+      "total_parts": 2,
+      "subject": "[더미][주보] AUTOMATION팀 2026-37",
+      "mail_type": "weekly_report"
+    }
+  }
+]
