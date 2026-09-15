@@ -107,7 +107,7 @@ def create_app(settings=None, *, source=None, llm=None, inline=False):
 
     @app.get('/api/config')
     def config():
-        return dict(ready=not settings.missing(),missing=settings.missing(),default_template=default_template())
+        return dict(ready=not settings.missing(),missing=settings.missing(),default_template=default_template(),debug_enabled=settings.debug_enabled)
 
     @app.get('/api/templates')
     def templates():
@@ -169,6 +169,11 @@ def create_app(settings=None, *, source=None, llm=None, inline=False):
     @app.get('/api/jobs/{job_id}')
     def job_status(job_id: str):
         return public_job(store.job(job_id))
+
+    @app.get('/api/jobs/{job_id}/debug')
+    def job_debug(job_id: str):
+        store.job(job_id)
+        return dict(enabled=settings.debug_enabled,records=harness.debug.records(job_id))
 
     @app.post('/api/jobs/{job_id}/cancel')
     def cancel(job_id: str):

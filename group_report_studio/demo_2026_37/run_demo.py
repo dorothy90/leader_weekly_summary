@@ -22,6 +22,8 @@ def settings():
         llm_url=env.get('GR_LLM_BASE_URL',env.get('OPENROUTER_BASE_URL','')),
         llm_key=env.get('GR_LLM_API_KEY',env.get('OPENROUTER_API_KEY','')),
         llm_model=env.get('GR_LLM_MODEL',env.get('LLM_MODEL','')),
+        debug_enabled=env.get('GR_DEBUG_ENABLED','false').lower()=='true',
+        debug_retention_days=int(env.get('GR_DEBUG_RETENTION_DAYS','7')),
     )
 
 if __name__=='__main__':

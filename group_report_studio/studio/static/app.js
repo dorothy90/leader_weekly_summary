@@ -34,7 +34,40 @@
   function dateText(value) { if (!value) return ""; const date = new Date(value); return Number.isNaN(date.valueOf()) ? value : date.toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }); }
   function statusText(status) { return ({ draft: "초안", generating: "작성 중", editing: "수정 중", finalized: "확정", queued: "대기 중", running: "진행 중", succeeded: "완료", failed: "실패", cancelled: "취소됨" })[status] || status || "초안"; }
 
+  async function showDebug() {
+    if (!state.activeJob) return;
+    const jobId = state.activeJob.id;
+    try {
+      const data = await apiJson(`/jobs/${encodeURIComponent(jobId)}/debug`);
+      const dialog = el("dialog", { className: "debug-dialog" });
+      const close = el("button", { className: "button", text: "닫기" });
+      close.addEventListener("click", () => dialog.close());
+      dialog.addEventListener("close", () => dialog.remove());
+      dialog.append(el("h2", { text: "모델 호출 기록" }), close);
+      if (!data.enabled) dialog.append(el("p", { text: "디버그 모드가 꺼져 있습니다. GR_DEBUG_ENABLED=true 설정 후 서버를 재시작하세요. 이전 호출은 소급 기록되지 않습니다." }));
+      else {
+        dialog.append(el("p", { text: `작업 ${jobId} · ${data.records.length}건 · 조회 시점의 기록입니다.` }));
+        const download = el("button", { className: "button", text: "전체 JSON 저장" });
+        download.addEventListener("click", () => {
+          const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }));
+          const link = el("a", { attrs: { href: url, download: `debug-${jobId}.json` } });
+          link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+        });
+        dialog.append(download);
+        if (!data.records.length) dialog.append(el("p", { text: "저장된 기록이 없습니다. 모드를 켠 뒤 실행한 호출부터 기록됩니다. 보존 기간이 지난 기록은 삭제됩니다." }));
+        data.records.forEach(record => {
+          const details = el("details");
+          details.append(el("summary", { text: `${record.stage} · ${record.status} · ${record.section?.title || ""} · ${record.error || ""}` }));
+          details.append(el("pre", { text: JSON.stringify(record, null, 2) }));
+          dialog.append(details);
+        });
+      }
+      document.body.append(dialog); dialog.showModal();
+    } catch (error) { showToast(error.message, "error"); }
+  }
+
   async function initialize() {
+    $("debugJobButton").addEventListener("click", showDebug);
     bindEvents(); setDefaultWeek();
     const results = await Promise.allSettled([apiJson("/config"), apiJson("/templates"), apiJson("/reports")]);
     if (results[0].status === "fulfilled") { state.config = results[0].value; renderConfig(); } else { renderConnectionFailure(results[0].reason); }

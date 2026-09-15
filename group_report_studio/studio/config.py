@@ -18,6 +18,8 @@ class Settings:
     max_input_bytes: int = 40000
     source_chunk_bytes: int = 10000
     max_output_tokens: int = 6000
+    debug_enabled: bool = False
+    debug_retention_days: int = 7
 
     @classmethod
     def from_env(cls):
@@ -35,6 +37,8 @@ class Settings:
             max_input_bytes=int(os.getenv('GR_MAX_INPUT_BYTES', '40000')),
             source_chunk_bytes=int(os.getenv('GR_SOURCE_CHUNK_BYTES', '10000')),
             max_output_tokens=int(os.getenv('GR_MAX_OUTPUT_TOKENS', '6000')),
+            debug_enabled=os.getenv('GR_DEBUG_ENABLED','false').lower()=='true',
+            debug_retention_days=int(os.getenv('GR_DEBUG_RETENTION_DAYS','7')),
         )
 
     def missing(self):

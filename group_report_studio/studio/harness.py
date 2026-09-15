@@ -3,6 +3,7 @@ import json
 from collections import defaultdict
 
 from . import prompts
+from .debug import DebugLog
 from .llm import LLMFormatError, LLMOutputLimitError, json_size
 from .models import EditPlan, EventSelection, Extraction, LineExtraction, ReferenceStyle, SectionContent, Verification
 from .source import audit_sources, split_source
@@ -41,6 +42,8 @@ def validate_content(content, facts):
 class Harness:
     def __init__(self, store, source, llm, settings):
         self.store, self.source, self.llm, self.settings = store, source, llm, settings
+        self.debug = DebugLog(settings)
+        self.debug.purge()
 
     def run(self, job_id):
         job = self.store.job(job_id)
@@ -160,7 +163,8 @@ class Harness:
             if stage=='write':
                 return self.source_excerpt(payload)
             raise LLMOutputLimitError(f'{stage}: 출력 초과 자동 분할 한계에 도달했습니다. 원문 분할 크기와 사내 모델 출력 제한을 확인하세요. 완료된 결과는 보존됩니다.')
-        return self.checkpoint(job_id,key,build)
+        with self.debug.call(job_id,stage,payload,depth):
+            return self.checkpoint(job_id,key,build)
 
     @staticmethod
     def source_excerpt(payload):
