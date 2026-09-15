@@ -1,10 +1,9 @@
 import hashlib
 import json
-import re
 from collections import defaultdict
 
 from . import prompts
-from .llm import LLMFormatError, json_size
+from .llm import LLMFormatError, LLMOutputLimitError, json_size
 from .models import EditPlan, EventSelection, Extraction, LineExtraction, ReferenceStyle, SectionContent, Verification
 from .source import audit_sources, split_source
 
@@ -95,7 +94,7 @@ class Harness:
         self.store.update_job(job_id,cache=cache)
         return value
 
-    def call(self, job_id, stage, system, payload, schema, validate=None):
+    def call(self, job_id, stage, system, payload, schema, validate=None, depth=0):
         signature = dict(payload=payload,system=system,schema=schema.model_json_schema(),model=self.settings.llm_model)
         key = stage+':'+hashlib.sha256(json.dumps(signature,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
         def build():
@@ -106,6 +105,8 @@ class Harness:
                 self.check_cancel(job_id)
                 try:
                     result = schema.model_validate(self.llm.complete(stage,system,attempt_payload,schema)).model_dump()
+                except LLMOutputLimitError:
+                    return recover_limit()
                 except LLMFormatError:
                     if stage == 'write':
                         return self.source_excerpt(payload)
@@ -114,6 +115,8 @@ class Harness:
                     if validate:
                         validate(result)
                 except ValueError as exc:
+                    if isinstance(exc,LLMOutputLimitError):
+                        return recover_limit()
                     if isinstance(exc,LLMFormatError) and stage == 'write':
                         return self.source_excerpt(payload)
                     if writing and not isinstance(exc,EvidenceError):
@@ -139,6 +142,24 @@ class Harness:
                         ' section_ids는 template의 id만 사용하세요. 모든 사실을 다시 추출하되 수치나 내용을 임의로 수정하거나 누락하지 마세요.')
                     continue
                 return result
+        def recover_limit():
+            field = 'facts' if stage=='write' else 'numbered_lines' if stage=='extract_lines' else None
+            items = payload.get(field,[]) if field else []
+            if field and len(items)>1 and depth<6:
+                middle = len(items)//2
+                parts = []
+                for part in (items[:middle],items[middle:]):
+                    child = dict(payload,**{field:part})
+                    if stage=='extract_lines':
+                        child['context_lines'] = payload.get('context_lines',items)
+                    parts.append(self.call(job_id,stage,system,child,schema,validate,depth+1))
+                if stage=='extract_lines':
+                    return {'facts':[fact for part in parts for fact in part['facts']]}
+                return {'blocks':[block for part in parts for block in part['blocks']],
+                        'warnings':list(dict.fromkeys(w for part in parts for w in part['warnings']))}
+            if stage=='write':
+                return self.source_excerpt(payload)
+            raise LLMOutputLimitError(f'{stage}: 출력 초과 자동 분할 한계에 도달했습니다. 원문 분할 크기와 사내 모델 출력 제한을 확인하세요. 완료된 결과는 보존됩니다.')
         return self.checkpoint(job_id,key,build)
 
     @staticmethod
@@ -179,6 +200,7 @@ class Harness:
 제품·수치·집계기간·조건·조치·일정의 문맥을 함께 선택하세요. 서로 떨어진 구절은 별개 facts로 선택하세요.
 section_ids는 template의 id만 사용하고 관련 항목이 없으면 빈 목록을 사용하세요.
 원문이 길면 구절별로 나누세요. 번호 범위는 4000자 이하여야 합니다. 입력에 있는 사실을 임의로 생략하지 마세요.'''
+        system += '\ncontext_lines가 있으면 제품·기간·조건의 문맥 확인용입니다. numbered_lines에 있는 사실을 추출하되 문맥에 필요한 인접 줄을 함께 인용할 수 있습니다.'
         value = self.call(job_id,'extract_lines',system,dict(template=payload['template'],
             source={k:v for k,v in source.items() if k!='text'},
             numbered_lines=[dict(line=i,text=line) for i,line in enumerate(lines)]),LineExtraction,convert)
@@ -191,19 +213,7 @@ section_ids는 template의 id만 사용하고 관련 항목이 없으면 빈 목
         for i, chunk in enumerate(chunks):
             self.store.update_job(job_id,progress=10+int(45*i/max(1,len(chunks))),message=f'원문 검토 {i+1}/{len(chunks)}')
             payload = dict(template=template,source=chunk)
-            def validate_extraction(value):
-                for index,fact in enumerate(value['facts']):
-                    if fact['quote'] not in chunk['text']:
-                        # Restore source whitespace only. Never change a digit, word or punctuation.
-                        pattern = r'\s+'.join(re.escape(token) for token in fact['quote'].split())
-                        match = re.search(pattern,chunk['text']) if pattern else None
-                        if match:
-                            fact['quote'] = match.group(0)
-                        else:
-                            raise ValueError(f'facts[{index}].quote가 원문의 연속된 구절과 일치하지 않습니다.')
-                    if not set(fact['section_ids']).issubset(valid_ids):
-                        raise ValueError(f'facts[{index}].section_ids에 template에 없는 ID가 있습니다.')
-            result = Extraction.model_validate(self.call(job_id,'extract',prompts.EXTRACT,payload,Extraction,validate_extraction))
+            result = Extraction.model_validate(self.extract_by_lines(job_id,payload))
             for f in result.facts:
                 if f.quote not in chunk['text'] or not set(f.section_ids).issubset(valid_ids):
                     raise ValueError('추출된 인용문 또는 소주제 연결이 원문과 일치하지 않습니다. 다시 시도하세요.')
@@ -257,30 +267,7 @@ section_ids는 template의 id만 사용하고 관련 항목이 없으면 빈 목
             sections.append(result)
         if spec['id']=='events':
             return dict(**spec,**self.select_events(job_id,sections))
-        # Merge using already verified drafts, never an unbounded reattachment of original facts.
-        while len(sections)>1:
-            merged = []
-            changed = False
-            for i in range(0,len(sections),2):
-                pair = sections[i:i+2]
-                if len(pair)==1:
-                    merged.append(pair[0]); continue
-                ids = {ref for s in pair for b in s['blocks'] for ref in b['evidence_ids']}
-                related = [f for f in facts if f['id'] in ids]
-                payload = dict(section=spec,week=report['week'],partial_sections=pair)
-                if json_size(payload)>self.settings.max_input_bytes//2:
-                    merged.extend(pair)
-                    continue
-                prior_blocks = [b for part in pair for b in part['blocks']]
-                def validate_merge(value):
-                    value.update(validate_content(value,related))
-                    self.verify(job_id,value,[],previous_blocks=prior_blocks)
-                result = validate_content(self.call(job_id,'reduce',prompts.REDUCE,payload,SectionContent,validate_merge),related)
-                merged.append(result)
-                changed = True
-            sections = merged
-            if not changed:
-                break
+        # Assemble verified drafts without asking the model to emit the whole section again.
         return dict(**spec,blocks=[b for part in sections for b in part['blocks']],
                     warnings=list(dict.fromkeys(w for part in sections for w in part['warnings'])))
 

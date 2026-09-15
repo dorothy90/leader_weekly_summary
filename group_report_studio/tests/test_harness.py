@@ -29,6 +29,9 @@ class FakeLLM:
 
     def complete(self, stage, system, payload, schema):
         self.calls.append(stage)
+        if stage == 'extract_lines':
+            return {'facts':[{'start_line':payload['numbered_lines'][0]['line'],
+                              'end_line':payload['numbered_lines'][-1]['line'],'section_ids':['spica']}]}
         if stage == 'extract':
             return {'facts':[{'text':'Spica 수율', 'quote': payload['source']['text'], 'section_ids':['spica']}]}
         if stage == 'plan_edit':
@@ -77,7 +80,7 @@ class HarnessTests(unittest.TestCase):
             store.update_job(job['id'],status='queued')
             harness.run(job['id'])
             self.assertEqual(store.job(job['id'])['status'], 'succeeded')
-            self.assertEqual(llm.calls.count('extract'), 1)
+            self.assertEqual(llm.calls.count('extract_lines'), 1)
             self.assertEqual(origin.calls, 1)
             saved = store.get(report['id'])
             self.assertEqual(saved['version'],1)

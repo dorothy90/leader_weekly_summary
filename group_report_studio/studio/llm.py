@@ -14,6 +14,10 @@ class LLMFormatError(LLMError):
     pass
 
 
+class LLMOutputLimitError(LLMError):
+    pass
+
+
 def json_size(value):
     return len(json.dumps(value, ensure_ascii=False).encode('utf-8'))
 
@@ -52,7 +56,8 @@ class ChatModel:
                 response.raise_for_status()
                 choice = response.json()['choices'][0]
                 if choice.get('finish_reason') == 'length':
-                    raise LLMError('모델 출력이 길이 제한으로 중단되었습니다. 출력 토큰 설정을 늘리거나 소주제를 나누세요.')
+                    logging.getLogger(__name__).warning('Model output limit: stage=%s input_bytes=%s max_tokens=%s',stage,len(user.encode()),self.settings.max_output_tokens)
+                    raise LLMOutputLimitError('모델 출력이 길이 제한으로 중단되었습니다. 출력 토큰 설정을 늘리거나 소주제를 나누세요.')
                 content = choice['message'].get('content')
                 if not isinstance(content,str) or not content.strip():
                     raise ValueError('empty_content')

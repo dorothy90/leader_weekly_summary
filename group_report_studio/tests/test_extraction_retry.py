@@ -19,7 +19,10 @@ class ExtractionRetryTests(unittest.TestCase):
             def complete(self,stage,system,payload,schema):
                 self.calls.append(payload)
                 if stage == 'extract_lines':
-                    return {'facts':[{'start_line':999,'end_line':999,'section_ids':['tf_nand']}]}
+                    bad=mode=='always_bad' or len(self.calls)==1
+                    return {'facts':[{'start_line':999 if bad and mode!='bad_id' else 0,
+                                     'end_line':999 if bad and mode!='bad_id' else 0,
+                                     'section_ids':['unknown' if bad and mode=='bad_id' else 'tf_nand']}]}
                 bad=mode=='always_bad' or len(self.calls)==1
                 return {'facts':[{'text':'NAND 수율','quote':'NAND 증산 CUM0 99.5%.' if bad and mode!='bad_id' else source['text'],
                                   'section_ids':['NAND분과' if bad and mode=='bad_id' else 'tf_nand']}]}
@@ -43,7 +46,7 @@ class ExtractionRetryTests(unittest.TestCase):
             h,s,j,source,t,llm=self.setup_case(folder,'always_bad')
             with self.assertRaisesRegex(ValueError,'3회'):
                 h.extract(j['id'],[source],t)
-            self.assertEqual(len(llm.calls),6)
+            self.assertEqual(len(llm.calls),3)
             self.assertEqual(s.job(j['id'])['cache'],{})
 
     def test_whitespace_difference_restores_exact_original_quote(self):
@@ -51,7 +54,7 @@ class ExtractionRetryTests(unittest.TestCase):
             h,s,j,source,t,llm=self.setup_case(folder,'whitespace')
             source['text']='NAND 증산 CUM0 89.5%.\n전주 89.0%.'
             def complete(*args):
-                return {'facts':[{'text':'수율','quote':'NAND 증산 CUM0 89.5%. 전주 89.0%.','section_ids':['tf_nand']}]}
+                return {'facts':[{'start_line':0,'end_line':1,'section_ids':['tf_nand']}]}
             llm.complete=complete
             result=h.extract(j['id'],[source],t)
             self.assertEqual(result[0]['quote'],source['text'])
@@ -70,8 +73,8 @@ class ExtractionRetryTests(unittest.TestCase):
                 return {'facts':[{'text':'요약','quote':'NAND CUM0는 89.5%입니다.','section_ids':['tf_nand']}]}
             llm.complete=complete
             result=h.extract(j['id'],[source],t)
-            self.assertEqual(stages,['extract','extract','extract','extract_lines'])
+            self.assertEqual(stages,['extract_lines'])
             self.assertEqual(result[0]['quote'],'제품 NAND\nCUM0 89.5%\n전주 89.0%')
             self.assertEqual(result[1]['quote'],'조치 진행 중')
             h.extract(j['id'],[source],t)
-            self.assertEqual(len(stages),4)
+            self.assertEqual(len(stages),1)
