@@ -4,6 +4,8 @@ from collections import defaultdict
 
 from . import prompts
 from .debug import DebugLog
+from .citations import citation_candidates
+from .models import CandidateExtraction
 from .llm import LLMFormatError, LLMOutputLimitError, json_size
 from .models import EditPlan, EventSelection, Extraction, LineExtraction, ReferenceStyle, SectionContent, Verification
 from .source import audit_sources, split_source
@@ -103,7 +105,7 @@ class Harness:
         def build():
             attempt_payload = payload
             writing = stage in ('write','edit','reduce')
-            attempts = 3 if stage in ('extract','extract_lines','write','edit','reduce') and validate else 1
+            attempts = 3 if stage in ('extract','extract_lines','extract_candidates','write','edit','reduce') and validate else 1
             for attempt in range(attempts):
                 self.check_cancel(job_id)
                 try:
@@ -115,6 +117,11 @@ class Harness:
                         return self.source_excerpt(payload)
                     raise
                 try:
+                    if stage=='extract_candidates':
+                        expected={c['candidate_id'] for c in payload['candidates']}
+                        selected=[f['candidate_id'] for f in result['facts']]
+                        if set(selected)!=expected or len(selected)!=len(expected):
+                            raise ValueError('제공된 candidate_id를 누락·중복·추가 없이 각각 한 번 연결하세요.')
                     if validate:
                         validate(result)
                 except ValueError as exc:
@@ -141,12 +148,14 @@ class Harness:
                         continue
                     rule = ('start_line과 end_line은 제공된 줄 번호 범위에서 선택하세요.' if stage=='extract_lines' else
                             'quote는 source.text의 연속된 구절을 그대로 복사하세요.')
+                    if stage=='extract_candidates':
+                        rule='제공된 candidates의 candidate_id만 각각 한 번 반환하세요. 관련 없는 후보는 section_ids를 빈 목록으로 반환하세요.'
                     attempt_payload = dict(payload,validation_feedback=str(exc)+rule+
                         ' section_ids는 template의 id만 사용하세요. 모든 사실을 다시 추출하되 수치나 내용을 임의로 수정하거나 누락하지 마세요.')
                     continue
                 return result
         def recover_limit():
-            field = 'facts' if stage=='write' else 'numbered_lines' if stage=='extract_lines' else None
+            field = 'facts' if stage=='write' else 'numbered_lines' if stage=='extract_lines' else 'candidates' if stage=='extract_candidates' else None
             items = payload.get(field,[]) if field else []
             if field and len(items)>1 and depth<6:
                 middle = len(items)//2
@@ -156,7 +165,7 @@ class Harness:
                     if stage=='extract_lines':
                         child['context_lines'] = payload.get('context_lines',items)
                     parts.append(self.call(job_id,stage,system,child,schema,validate,depth+1))
-                if stage=='extract_lines':
+                if stage in ('extract_lines','extract_candidates'):
                     return {'facts':[fact for part in parts for fact in part['facts']]}
                 return {'blocks':[block for part in parts for block in part['blocks']],
                         'warnings':list(dict.fromkeys(w for part in parts for w in part['warnings']))}
@@ -210,6 +219,29 @@ section_ids는 template의 id만 사용하고 관련 항목이 없으면 빈 목
             numbered_lines=[dict(line=i,text=line) for i,line in enumerate(lines)]),LineExtraction,convert)
         return convert(value)
 
+    def extract_candidates(self, job_id, payload):
+        candidates=citation_candidates(payload['source']['text'])
+        valid_ids={s['id'] for s in payload['template']['sections']}
+        if not candidates:
+            return {'facts':[]}
+        def validate(value):
+            for fact in value['facts']:
+                if not set(fact['section_ids']).issubset(valid_ids):
+                    raise ValueError('선택한 소주제 ID가 template에 없습니다.')
+        system=prompts.BASE+'''제공된 원문 후보를 관련 소주제에 연결하세요.
+각 candidate_id를 정확히 한 번 반환하세요. 원문이나 줄 번호를 생성하지 마세요.
+section_ids는 template의 id만 사용하세요. 관련 항목이 없으면 빈 목록으로 반환하세요.
+여러 제품을 포함하는 후보는 관련된 소주제를 모두 연결하되 제품·기간·조건을 혼동하지 마세요.
+후보 경계의 중첩 문구는 문맥 보존용이며 별개의 개선 실적으로 중복 집계하지 마세요.'''
+        selected={}
+        # Bound the response schema independently of user-configured source chunk size.
+        for i in range(0,len(candidates),40):
+            batch=candidates[i:i+40]
+            value=self.call(job_id,'extract_candidates',system,dict(template=payload['template'],
+                source={k:v for k,v in payload['source'].items() if k!='text'},candidates=batch),CandidateExtraction,validate)
+            selected.update({f['candidate_id']:f['section_ids'] for f in value['facts']})
+        return {'facts':[dict(text=c['text'],quote=c['text'],section_ids=selected[c['candidate_id']]) for c in candidates]}
+
     def extract(self, job_id, sources, template):
         facts = []
         valid_ids = {s['id'] for s in template['sections']}
@@ -217,7 +249,7 @@ section_ids는 template의 id만 사용하고 관련 항목이 없으면 빈 목
         for i, chunk in enumerate(chunks):
             self.store.update_job(job_id,progress=10+int(45*i/max(1,len(chunks))),message=f'원문 검토 {i+1}/{len(chunks)}')
             payload = dict(template=template,source=chunk)
-            result = Extraction.model_validate(self.extract_by_lines(job_id,payload))
+            result = Extraction.model_validate(self.extract_candidates(job_id,payload))
             for f in result.facts:
                 if f.quote not in chunk['text'] or not set(f.section_ids).issubset(valid_ids):
                     raise ValueError('추출된 인용문 또는 소주제 연결이 원문과 일치하지 않습니다. 다시 시도하세요.')

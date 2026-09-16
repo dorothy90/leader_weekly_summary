@@ -23,16 +23,16 @@ class RegressionTests(unittest.TestCase):
             bad=True
             def complete(self,stage,system,payload,schema):
                 result=super().complete(stage,system,payload,schema)
-                if stage=='extract_lines' and self.bad:
+                if stage=='extract_candidates' and self.bad:
                     self.bad=False
-                    result['facts'][0]['start_line']=999
+                    result['facts'][0]['candidate_id']='unknown'
                 return result
         llm=OnceBad()
         harness=Harness(self.store,FakeSource(),llm,Settings())
         job=self.store.create_job(self.report['id'],'generate',{'base_version':0})
         harness.run(job['id'])
         self.assertEqual(self.store.job(job['id'])['status'],'succeeded')
-        self.assertEqual(llm.calls.count('extract_lines'),2)
+        self.assertEqual(llm.calls.count('extract_candidates'),2)
 
     def test_forty_team_section_keeps_all_products_with_bounded_calls(self):
         seen=[]

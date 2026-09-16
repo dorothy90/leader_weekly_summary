@@ -119,6 +119,15 @@ class LineExtraction(Model):
     facts: list[LineFact] = Field(max_length=100)
 
 
+class CandidateFact(Model):
+    candidate_id: str = Field(min_length=1,max_length=80)
+    section_ids: list[str] = Field(default_factory=list,max_length=60)
+
+
+class CandidateExtraction(Model):
+    facts: list[CandidateFact] = Field(max_length=100)
+
+
 class EditPlan(Model):
     action: Literal['edit', 'clarify', 'template']
     section_ids: list[str] = Field(default_factory=list, max_length=60)

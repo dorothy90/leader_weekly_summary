@@ -18,6 +18,11 @@ class ExtractionRetryTests(unittest.TestCase):
             def __init__(self): self.calls=[]
             def complete(self,stage,system,payload,schema):
                 self.calls.append(payload)
+                if stage == 'extract_candidates':
+                    bad=mode=='always_bad' or len(self.calls)==1
+                    return {'facts':[{'candidate_id':'unknown' if bad and mode!='bad_id' else c['candidate_id'],
+                                      'section_ids':['unknown' if bad and mode=='bad_id' else 'tf_nand']}
+                                     for c in payload['candidates']]}
                 if stage == 'extract_lines':
                     bad=mode=='always_bad' or len(self.calls)==1
                     return {'facts':[{'start_line':999 if bad and mode!='bad_id' else 0,
@@ -53,8 +58,8 @@ class ExtractionRetryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             h,s,j,source,t,llm=self.setup_case(folder,'whitespace')
             source['text']='NAND 증산 CUM0 89.5%.\n전주 89.0%.'
-            def complete(*args):
-                return {'facts':[{'start_line':0,'end_line':1,'section_ids':['tf_nand']}]}
+            def complete(stage,system,payload,schema):
+                return {'facts':[{'candidate_id':c['candidate_id'],'section_ids':['tf_nand']} for c in payload['candidates']]}
             llm.complete=complete
             result=h.extract(j['id'],[source],t)
             self.assertEqual(result[0]['quote'],source['text'])
@@ -72,9 +77,9 @@ class ExtractionRetryTests(unittest.TestCase):
                                      {'start_line':3,'end_line':3,'section_ids':['tf_nand']}]}
                 return {'facts':[{'text':'요약','quote':'NAND CUM0는 89.5%입니다.','section_ids':['tf_nand']}]}
             llm.complete=complete
-            result=h.extract(j['id'],[source],t)
+            result=h.extract_by_lines(j['id'],dict(source=source,template=t))['facts']
             self.assertEqual(stages,['extract_lines'])
             self.assertEqual(result[0]['quote'],'제품 NAND\nCUM0 89.5%\n전주 89.0%')
             self.assertEqual(result[1]['quote'],'조치 진행 중')
-            h.extract(j['id'],[source],t)
+            h.extract_by_lines(j['id'],dict(source=source,template=t))
             self.assertEqual(len(stages),1)
