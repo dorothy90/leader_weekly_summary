@@ -26,6 +26,7 @@ class Store:
                     created_at TEXT, PRIMARY KEY(report_id,version));
                 CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, report_id TEXT, body TEXT);
                 CREATE TABLE IF NOT EXISTS templates (id TEXT PRIMARY KEY, body TEXT);
+                CREATE TABLE IF NOT EXISTS preferences (name TEXT PRIMARY KEY, body TEXT);
             ''')
 
     @contextmanager
@@ -46,6 +47,17 @@ class Store:
             db.execute('INSERT INTO reports VALUES (?,?,?)', (report['id'], 0, body))
             db.execute('INSERT INTO versions VALUES (?,?,?,?,?)', (report['id'], 0, body, '새 주보', now()))
         return report
+
+    def default_template(self):
+        with self.connect() as db:
+            row = db.execute("SELECT body FROM preferences WHERE name='default_template'").fetchone()
+        return json.loads(row[0]) if row else None
+
+    def save_default_template(self, template):
+        with self.connect() as db:
+            db.execute("INSERT OR REPLACE INTO preferences VALUES ('default_template',?)",
+                       (json.dumps(template,ensure_ascii=False),))
+        return template
 
     def get(self, report_id, version=None):
         with self.connect() as db:
@@ -124,6 +136,31 @@ class Store:
             rows = db.execute('SELECT body FROM jobs' + (' WHERE report_id=?' if report_id else ''),
                               (report_id,) if report_id else ()).fetchall()
         return [json.loads(row[0]) for row in rows]
+
+    def record_call(self, job_id, stage, seconds, failed, retry):
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row=db.execute('SELECT body FROM jobs WHERE id=?',(job_id,)).fetchone()
+            if not row:
+                raise KeyError('작업을 찾을 수 없습니다.')
+            job=json.loads(row[0])
+            stats=job.setdefault('metrics',{}).setdefault(stage,dict(calls=0,seconds=0,failures=0,retries=0))
+            stats['calls']+=1
+            stats['seconds']=round(stats['seconds']+seconds,3)
+            stats['failures']+=int(failed)
+            stats['retries']+=int(retry)
+            db.execute('UPDATE jobs SET body=? WHERE id=?',(json.dumps(job,ensure_ascii=False),job_id))
+
+    def cache_value(self, job_id, key, value):
+        # Merge under a write transaction: parallel completions must not overwrite each other.
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row=db.execute('SELECT body FROM jobs WHERE id=?',(job_id,)).fetchone()
+            if not row:
+                raise KeyError('작업을 찾을 수 없습니다.')
+            job=json.loads(row[0])
+            job['cache'][key]=value
+            db.execute('UPDATE jobs SET body=? WHERE id=?',(json.dumps(job,ensure_ascii=False),job_id))
 
     def recover(self):
         for job in self.jobs():

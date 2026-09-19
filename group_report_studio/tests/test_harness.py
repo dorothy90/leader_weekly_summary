@@ -29,6 +29,8 @@ class FakeLLM:
 
     def complete(self, stage, system, payload, schema):
         self.calls.append(stage)
+        if stage == 'final_style':
+            return {'issues':[]}
         if stage == 'extract_candidates':
             return {'facts':[{'candidate_id':c['candidate_id'],'section_ids':['spica']} for c in payload['candidates']]}
         if stage == 'extract_lines':

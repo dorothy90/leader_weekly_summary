@@ -24,6 +24,8 @@ class APITests(unittest.IsolatedAsyncioTestCase):
                 rid = response.json()['id']
                 job = (await client.post(f'/api/reports/{rid}/generate',json={'base_version':0})).json()
                 self.assertEqual((await client.get('/api/jobs/'+job['id'])).json()['status'], 'succeeded')
+                saved_report=(await client.get('/api/reports/'+rid)).json()
+                self.assertEqual(saved_report['format_review']['status'],'passed')
                 self.assertEqual((await client.get(f'/api/reports/{rid}/export?version=1')).status_code,409)
                 edit = await client.post(f'/api/reports/{rid}/edit',json={'base_version':1,'message':'줄여줘','section_id':'spica'})
                 self.assertEqual(edit.status_code,200,edit.text)

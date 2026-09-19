@@ -20,6 +20,8 @@ from .models import (CreateReport, EditRequest, Model, RestoreRequest, Template,
                      VersionRequest, default_template)
 from .source import OpenSearchSource
 from .store import Conflict, Store
+from .word_template import extract_template
+from .priority import normalize_priority
 
 
 class ReferenceUpload(Model):
@@ -28,7 +30,7 @@ class ReferenceUpload(Model):
 
 
 def public_job(job):
-    return {key:job.get(key) for key in ('id','report_id','status','progress','message','error')}
+    return {key:job.get(key) for key in ('id','report_id','status','progress','message','error','metrics')}
 
 
 def create_app(settings=None, *, source=None, llm=None, inline=False):
@@ -107,15 +109,29 @@ def create_app(settings=None, *, source=None, llm=None, inline=False):
 
     @app.get('/api/config')
     def config():
-        return dict(ready=not settings.missing(),missing=settings.missing(),default_template=default_template(),debug_enabled=settings.debug_enabled)
+        return dict(ready=not settings.missing(),missing=settings.missing(),default_template=normalize_priority(store.default_template() or default_template()),debug_enabled=settings.debug_enabled)
 
     @app.get('/api/templates')
     def templates():
-        return store.templates()
+        return [normalize_priority(t) for t in store.templates()]
 
     @app.post('/api/templates')
     def save_template(payload: Template):
-        return store.save_template(payload.model_dump())
+        return store.save_template(normalize_priority(payload.model_dump()))
+
+    @app.post('/api/templates/default')
+    def save_default_template(payload: Template):
+        return store.save_default_template(normalize_priority(payload.model_dump()))
+
+    @app.post('/api/templates/from-word')
+    def template_from_word(payload: ReferenceUpload):
+        if not inline and (not settings.llm_url or not settings.llm_model):
+            raise ValueError('모델 주소와 이름을 먼저 설정하세요.')
+        try:
+            content = base64.b64decode(payload.content_base64,validate=True)
+        except binascii.Error:
+            raise ValueError('파일 전송 형식이 올바르지 않습니다.') from None
+        return extract_template(payload.name,content,llm,settings)
 
     @app.get('/api/reports')
     def reports():
@@ -123,7 +139,9 @@ def create_app(settings=None, *, source=None, llm=None, inline=False):
 
     @app.post('/api/reports')
     def create(payload: CreateReport):
-        return report_response(store.create(payload.model_dump()))
+        data = payload.model_dump()
+        data['template'] = normalize_priority(data['template'])
+        return report_response(store.create(data))
 
     @app.get('/api/reports/{report_id}')
     def get_report(report_id: str):

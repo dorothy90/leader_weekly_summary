@@ -15,6 +15,9 @@ text는 설명이며 quote가 최종 근거입니다. 관련 template 소주제 
 '''
 
 WRITE = BASE + '''section의 작성 규칙에 맞춰 blocks를 작성하세요. 모든 내용 블록에 이를 뒷받침하는 facts의 id를 evidence_ids로 넣으세요.
+writing_prompt는 저장된 공통 작성 양식입니다. 그 안의 문체·분량·문장 순서 규칙을 따르세요.
+사실 근거/표 금지 규칙은 항상 유지하고, 표현 규칙은 사용자 instruction, section 지침, writing_prompt, reference_style 순으로 우선하세요.
+writing_prompt의 예문이나 수치는 사실 근거로 사용하지 마세요. 핵심 위주로 중복 없이 간결하게 작성하세요.
 paragraph/bullet만 사용하세요. 표 블록, 마크다운 표, HTML 표는 금지합니다. 수치 비교도 제품별 문장이나 글머리표로 작성하세요. 번호·제목은 본문에 다시 쓰지 마세요.
 prior 근거만 있는 상태는 반드시 과거 주차와 금주 미확인을 명시하세요. user 근거는 사용자 정정임을 표시하세요.
 동일 현상은 통합하되 서로 다른 제품의 숫자를 생략하거나 섞지 마세요. 필수 항목 미보고·충돌은 warnings에 기록하세요.
@@ -38,6 +41,8 @@ PLAN = BASE + '''사용자의 주보 편집 요청을 분류하세요. 질문으
 '''
 
 VERIFY = BASE + '''blocks의 모든 주장, 수치, 조건이 인용된 facts의 quote 또는 previous_verified_blocks에 근거하는지 검증하세요.
+각 블록은 반드시 그 블록 자신의 evidence_ids에 해당하는 근거로만 검증하세요. 다른 블록의 근거를 빌려 통과시키지 마세요.
+블록 하나라도 근거가 부족하면 supported=false입니다. issues에 해당 블록의 내용과 실패 이유를 명시하세요.
 previous_verified_blocks는 이미 원문 검증을 통과한 문단입니다. 이 문단을 근거로 쓸 때 기존 인용 ID도 함께 보존해야 합니다.
 facts.text의 요약보다 quote가 우선입니다. 인용 ID 존재만으로 통과시키지 마세요.
 과거 사실을 금주로 바꿨거나 원문 수치를 잘못 결합하면 supported=false와 issues에 이유를 적으세요.

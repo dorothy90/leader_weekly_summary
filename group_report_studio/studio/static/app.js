@@ -88,6 +88,9 @@
     $("createForm").addEventListener("submit", createReport); $("generateButton").addEventListener("click", generateDraft); $("finalizeButton").addEventListener("click", finalizeReport);
     $("downloadButton").addEventListener("click", downloadReport); $("chatForm").addEventListener("submit", editReport);
     $("saveCurrentTemplateButton").addEventListener("click", saveCurrentTemplate);
+    $("extractTemplateButton").addEventListener("click", extractWordTemplate);
+    $("saveDefaultTemplateButton").addEventListener("click", saveDefaultTemplate);
+    $("createDialog").addEventListener("cancel", (event) => { if (state.templateBusy) event.preventDefault(); });
     $("clearSelectionButton").addEventListener("click", () => selectSection(null));
     $("evidenceToggle").addEventListener("click", toggleEvidence);
     $("cancelJobButton").addEventListener("click", cancelJob); $("retryJobButton").addEventListener("click", retryJob);
@@ -106,9 +109,44 @@
   function isPriorWeek(referenceWeek, targetWeek) { const reference = isoWeekMonday(referenceWeek); const target = isoWeekMonday(targetWeek); if (!reference || !target) return false; const weeks = (target - reference) / 604800000; return weeks === 1 || weeks === 2; }
   function defaultTemplate() { return state.config?.default_template || { name: "기본 양식", sections: [] }; }
   function openCreateDialog() { resetCreateForm(); $("createDialog").showModal(); }
-  function resetCreateForm() { $("outlineSettings").open = false; $("templateSelect").value = ""; state.references = []; setDefaultTitle(); $("teamsInput").value = ""; $("saveTemplateInput").checked = false; $("templateNameField").hidden = true; renderSectionEditor(defaultTemplate().sections || []); renderReferences(); }
+  function resetCreateForm() { $("outlineSettings").open = false; $("templateSelect").value = ""; state.references = []; setDefaultTitle(); $("teamsInput").value = ""; $("saveTemplateInput").checked = false; $("templateNameField").hidden = true; $("templateWordFile").value = ""; $("templateExtractStatus").textContent = ""; applySelectedTemplate(); renderReferences(); }
   function renderTemplateOptions() { const select = $("templateSelect"); select.replaceChildren(el("option", { text: "기본 양식", attrs: { value: "" } })); state.templates.forEach((template) => select.append(el("option", { text: template.name, attrs: { value: template.id } }))); }
-  function applySelectedTemplate() { const template = state.templates.find((item) => String(item.id) === $("templateSelect").value) || defaultTemplate(); renderSectionEditor(template.sections || []); }
+  function applySelectedTemplate() { const template = state.templates.find((item) => String(item.id) === $("templateSelect").value) || defaultTemplate(); renderSectionEditor(template.sections || []); $("writingPromptInput").value = template.writing_prompt || ""; $("templateNameInput").value = template.name || ""; }
+  function collectTemplate() { return { name: $("templateNameInput").value.trim() || "기본 양식", sections: collectSections(), writing_prompt: $("writingPromptInput").value.trim() }; }
+  async function withTemplateBusy(action) {
+    if (state.templateBusy) return;
+    state.templateBusy = true;
+    const controls = [...$("createForm").querySelectorAll("input,textarea,select,button")].map((node) => [node, node.disabled]);
+    controls.forEach(([node]) => { node.disabled = true; });
+    try { await action(); }
+    catch (error) { $("templateExtractStatus").textContent = error.message; showToast(error.message, "error"); }
+    finally { controls.forEach(([node, disabled]) => { node.disabled = disabled; }); state.templateBusy = false; }
+  }
+  async function extractWordTemplate() {
+    const file = $("templateWordFile").files[0];
+    if (!file) { showToast("대표 Word 주보를 선택하세요.", "error"); return; }
+    await withTemplateBusy(async () => {
+      $("templateExtractStatus").textContent = "Word의 목차와 작성 규칙을 추출하고 있습니다…";
+      const content_base64 = await fileToBase64(file);
+      const template = await apiJson("/templates/from-word", { method: "POST", body: JSON.stringify({ name: file.name, content_base64 }) });
+      renderSectionEditor(template.sections);
+      $("writingPromptInput").value = template.writing_prompt;
+      $("templateNameInput").value = template.name;
+      $("templateSelect").value = "";
+      $("outlineSettings").open = true;
+      $("templateExtractStatus").textContent = "추출했습니다. 목차와 규칙을 확인·수정한 뒤 기본 양식으로 저장하세요. 아직 저장되지 않았습니다.";
+    });
+  }
+  async function saveDefaultTemplate() {
+    const template = collectTemplate();
+    if (!template.sections.length) { showToast("목차 항목을 하나 이상 입력하세요.", "error"); return; }
+    await withTemplateBusy(async () => {
+      const saved = await apiJson("/templates/default", { method: "POST", body: JSON.stringify(template) });
+      state.config = { ...(state.config || {}), default_template: saved };
+      $("templateExtractStatus").textContent = "기본 양식을 저장했습니다. 다음 새 주보부터 자동 적용됩니다.";
+      showToast("목차와 작성 규칙을 기본 양식으로 저장했습니다.");
+    });
+  }
   function renderSectionEditor(sections) { const editor = $("sectionEditor"); editor.replaceChildren(); sections.forEach(addSectionRow); if (!sections.length) addSectionRow(); }
   function addSectionRow(section = {}) {
     const row = el("div", { className: "section-row", attrs: { draggable: "true" } }); row.dataset.id = section.id || crypto.randomUUID();
@@ -142,10 +180,10 @@
   }
   function splitTeams(text) { return text.split(/[\n,]/).map((item) => item.trim()).filter(Boolean); }
   async function createReport(event) {
-    event.preventDefault(); const sections = collectSections(); if (!sections.length) { showToast("목차 항목을 하나 이상 입력하세요.", "error"); return; }
+    event.preventDefault(); if (state.templateBusy) return; const sections = collectSections(); if (!sections.length) { showToast("목차 항목을 하나 이상 입력하세요.", "error"); return; }
     const button = $("createSubmitButton"); setBusy(button, true, "만드는 중…");
     try {
-      const template = { name: $("templateNameInput").value.trim() || defaultTemplate().name || "기본 양식", sections };
+      const template = collectTemplate();
       if ($("saveTemplateInput").checked) { if (!$("templateNameInput").value.trim()) throw new Error("저장할 양식 이름을 입력하세요."); await apiJson("/templates", { method: "POST", body: JSON.stringify(template) }); }
       const targetWeekInput = $("weekInput").value; const references = state.references.filter((ref) => ref.text.trim());
       if (references.some((ref) => !ref.week)) throw new Error("각 이전 주보의 기준 주를 선택하세요.");
@@ -163,12 +201,27 @@
   async function openReport(id) { const loadToken = ++state.loadToken; window.clearTimeout(state.pollTimer); state.pollTimer = null; state.activeJob = null; renderJob(); try { const report = await apiJson(`/reports/${encodeURIComponent(id)}`); if (loadToken !== state.loadToken) return; state.report = report; state.selectedSectionId = null; state.activeJob = state.report.active_job || null; renderReport(); renderJob(); if (state.activeJob && ["queued", "running"].includes(state.activeJob.status)) state.pollTimer = window.setTimeout(pollJob, 900); } catch (error) { if (loadToken === state.loadToken) showToast(error.message, "error"); } }
   function showWelcome() { $("saveCurrentTemplateButton").hidden = true; state.loadToken += 1; window.clearTimeout(state.pollTimer); state.pollTimer = null; state.activeJob = null; renderJob(); state.report = null; state.selectedSectionId = null; $("paper").hidden = true; $("welcome").hidden = false; $("generateButton").hidden = true; $("finalizeButton").disabled = true; $("downloadButton").disabled = true; $("chatInput").disabled = true; $("sendButton").disabled = true; $("clearSelectionButton").disabled = true; $("selectionLabel").textContent = "전체 문서"; $("outline").replaceChildren(el("p", { className: "empty-note", text: "주보를 열면 목차가 표시됩니다." })); $("history").replaceChildren(el("p", { className: "empty-note", text: "변경 기록이 여기에 쌓입니다." })); renderReportList(); }
   function renderReport() {
+    renderFormatReview();
     const report = state.report; if (!report) return; $("welcome").hidden = true; $("paper").hidden = false; $("paperWeek").textContent = report.week || ""; $("paperTitle").textContent = report.title || "제목 없는 주보";
     $("saveCurrentTemplateButton").hidden = false;
     $("reportStatus").textContent = `${statusText(report.status)} · v${report.version}`; $("reportStatus").className = `status-badge ${report.status || ""}`; renderWarnings(); renderCoverage(); renderSections(); renderOutline(); renderHistory(); renderMessages(); renderEvidence(); renderReportList();
     const busy = Boolean(state.activeJob && ["queued", "running"].includes(state.activeJob.status)); const hasSections = (report.sections || []).length > 0; const ready = Boolean(state.config?.ready); $("generateButton").hidden = hasSections || report.status === "finalized"; $("generateButton").disabled = busy || !ready; $("generateButton").title = ready ? "저장된 자료를 바탕으로 빈 초안을 작성합니다." : "자료 연결 설정을 마치면 생성할 수 있습니다."; $("chatInput").disabled = busy || !hasSections || !ready; $("sendButton").disabled = busy || !hasSections || !ready; $("clearSelectionButton").disabled = busy || !hasSections; $("finalizeButton").disabled = busy || report.status === "finalized" || !hasSections; $("downloadButton").disabled = report.status !== "finalized";
   }
   function renderWarnings() { const warnings = state.report.warnings || []; const box = $("reportWarnings"); box.hidden = !warnings.length; box.replaceChildren(...warnings.map((warning) => el("div", { text: warning }))); }
+  function renderFormatReview() {
+    const review = state.report?.format_review;
+    const panel = $("formatReviewPanel"); panel.hidden = !review;
+    if (!review) return;
+    $("formatReviewSummary").textContent = `형식·분량 검토 · ${review.status === "passed" ? "통과" : "확인 필요"}`;
+    const details = $("formatReviewDetails"); details.replaceChildren();
+    details.append(el("p", { text: `현재 본문 ${review.characters}자 · ${review.reference_count ? `이전 ${review.reference_count}개 주보 평균 ${review.reference_average}자 · 허용 범위 ±${review.tolerance_percent}%` : "이전 주보 없음: 저장된 작성 규칙 기준"}` }));
+    const titles = new Map((review.sections || []).map((s) => [s.section_id, s.title]));
+    for (const issue of review.issues || []) details.append(el("p", { text: `${titles.get(issue.section_id) || "전체 문서"}: ${issue.message}` }));
+    for (const section of review.sections || []) details.append(el("div", { text: `${section.title}: ${section.characters}자, ${section.sentences}문장${section.reference_average ? ` / 이전 평균 ${section.reference_average}자` : " / 이전 항목 비교 없음"}` }));
+    if (review.repaired_sections?.length) details.append(el("p", { text: `보정 후 근거 재검증: ${review.repaired_sections.map((id) => titles.get(id) || id).join(", ")}` }));
+    for (const note of review.repair_notes || []) details.append(el("p", { text: note }));
+    details.append(el("p", { text: review.comparison_note || "" }));
+  }
   function renderCoverage() { const coverage = state.report.coverage; const box = $("coverage"); if (!coverage || !Object.keys(coverage).length) { box.hidden = true; return; } box.hidden = false; const entries = Object.entries(coverage).map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(", ") : String(value)}`); box.textContent = entries.join("  ·  "); }
   function renderSections() {
     const container = $("sections"); container.replaceChildren(); const sections = state.report.sections || [];

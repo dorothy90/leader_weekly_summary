@@ -18,6 +18,10 @@ class Settings:
     max_input_bytes: int = 40000
     source_chunk_bytes: int = 10000
     max_output_tokens: int = 6000
+    workers: int = 2
+    verify_batch_size: int = 4
+    format_tolerance_percent: int = 20
+    format_auto_repair: bool = True
     debug_enabled: bool = False
     debug_retention_days: int = 7
 
@@ -37,6 +41,10 @@ class Settings:
             max_input_bytes=int(os.getenv('GR_MAX_INPUT_BYTES', '40000')),
             source_chunk_bytes=int(os.getenv('GR_SOURCE_CHUNK_BYTES', '10000')),
             max_output_tokens=int(os.getenv('GR_MAX_OUTPUT_TOKENS', '6000')),
+            workers=max(1,min(4,int(os.getenv('GR_WORKERS','2')))),
+            verify_batch_size=max(1,min(5,int(os.getenv('GR_VERIFY_BATCH_SIZE','4')))),
+            format_tolerance_percent=max(0,min(100,int(os.getenv('GR_FORMAT_TOLERANCE_PERCENT','20')))),
+            format_auto_repair=os.getenv('GR_FORMAT_AUTO_REPAIR','true').lower()=='true',
             debug_enabled=os.getenv('GR_DEBUG_ENABLED','false').lower()=='true',
             debug_retention_days=int(os.getenv('GR_DEBUG_RETENTION_DAYS','7')),
         )

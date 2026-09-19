@@ -18,6 +18,7 @@ class SectionSpec(Model):
 class Template(Model):
     name: str = Field(min_length=1, max_length=100)
     sections: list[SectionSpec] = Field(min_length=1, max_length=60)
+    writing_prompt: str = Field(default='', max_length=6000)
 
     @model_validator(mode='after')
     def unique_ids(self):
@@ -156,6 +157,15 @@ class ReferenceStyle(Model):
         return values
 
 
+class PriorityTopic(Model):
+    title: str = Field(min_length=1,max_length=160)
+    evidence_ids: list[str] = Field(min_length=1,max_length=9)
+
+
+class PriorityTopics(Model):
+    topics: list[PriorityTopic] = Field(default_factory=list,max_length=3)
+
+
 def default_template():
     groups = [
         ('0. 가장 중요한 이벤트 3건', [('events', '핵심 이벤트 3건')]),
@@ -177,4 +187,5 @@ def default_template():
             if id_ == 'events':
                 rule = '영향과 긴급성, 금주 변화가 큰 서로 다른 이벤트 최대 3건. 근거가 부족하면 건수를 억지로 채우지 않는다.'
             sections.append(dict(id=id_, group=group, title=title, instructions=rule+' 모든 내용은 텍스트로 작성하며 표를 사용하지 않는다.'))
-    return dict(name='그룹 주보 기본 양식', sections=sections)
+    from .priority import normalize_priority
+    return normalize_priority(dict(name='그룹 주보 기본 양식', sections=sections))

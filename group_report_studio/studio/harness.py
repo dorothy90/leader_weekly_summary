@@ -1,5 +1,7 @@
 import hashlib
 import json
+import time
+from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
 
 from . import prompts
@@ -9,6 +11,8 @@ from .models import CandidateExtraction
 from .llm import LLMFormatError, LLMOutputLimitError, json_size
 from .models import EditPlan, EventSelection, Extraction, LineExtraction, ReferenceStyle, SectionContent, Verification
 from .source import audit_sources, split_source
+from .priority import normalize_priority, PRIORITY_ID, RULE
+from .models import PriorityTopics
 
 
 class Cancelled(Exception):
@@ -60,6 +64,13 @@ class Harness:
             if report['version'] != job['payload']['base_version']:
                 raise ValueError('기준 버전이 변경되었습니다. 최신 주보에서 다시 요청하세요.')
             changes = self.generate(job_id, report) if job['kind'] == 'generate' else self.edit(job_id, report, job['payload'])
+            if 'sections' in changes:
+                from .format_review import review_final
+                self.store.update_job(job_id,progress=96,message='최종 형식·분량 검토 중')
+                candidate=dict(report,**changes)
+                eligible=None if job['kind']=='generate' else {s['id'] for s in changes['sections'] if s not in report['sections']}
+                candidate=review_final(self,job_id,candidate,eligible,job['payload'].get('message',''))
+                changes.update(sections=candidate['sections'],format_review=candidate['format_review'])
             self.check_cancel(job_id)
             changes.update(status='draft',last_job_id=job_id)
             self.validate_report(dict(report,**changes))
@@ -94,10 +105,19 @@ class Harness:
             return cache[key]
         value = build()
         self.check_cancel(job_id)
-        cache = self.store.job(job_id)['cache']
-        cache[key] = value
-        self.store.update_job(job_id,cache=cache)
+        self.store.cache_value(job_id,key,value)
         return value
+
+    def parallel(self, function, items):
+        # Iteration order remains deterministic. Pending work is cancelled after a failure.
+        with ThreadPoolExecutor(max_workers=max(1,min(4,self.settings.workers))) as pool:
+            futures=[pool.submit(function,item) for item in items]
+            try:
+                for future in futures:
+                    yield future.result()
+            finally:
+                for future in futures:
+                    future.cancel()
 
     def call(self, job_id, stage, system, payload, schema, validate=None, depth=0):
         signature = dict(payload=payload,system=system,schema=schema.model_json_schema(),model=self.settings.llm_model)
@@ -109,7 +129,13 @@ class Harness:
             for attempt in range(attempts):
                 self.check_cancel(job_id)
                 try:
-                    result = schema.model_validate(self.llm.complete(stage,system,attempt_payload,schema)).model_dump()
+                    started=time.monotonic()
+                    failed=True
+                    try:
+                        result = schema.model_validate(self.llm.complete(stage,system,attempt_payload,schema)).model_dump()
+                        failed=False
+                    finally:
+                        self.store.record_call(job_id,stage,time.monotonic()-started,failed,attempt>0)
                 except LLMOutputLimitError:
                     return recover_limit()
                 except LLMFormatError:
@@ -246,10 +272,12 @@ section_ids는 template의 id만 사용하세요. 관련 항목이 없으면 빈
         facts = []
         valid_ids = {s['id'] for s in template['sections']}
         chunks = [chunk for source in sources for chunk in split_source(source,self.settings.source_chunk_bytes)]
-        for i, chunk in enumerate(chunks):
-            self.store.update_job(job_id,progress=10+int(45*i/max(1,len(chunks))),message=f'원문 검토 {i+1}/{len(chunks)}')
+        def review(chunk):
+            self.check_cancel(job_id)
             payload = dict(template=template,source=chunk)
-            result = Extraction.model_validate(self.extract_candidates(job_id,payload))
+            return chunk,Extraction.model_validate(self.extract_candidates(job_id,payload))
+        for i, (chunk,result) in enumerate(self.parallel(review,chunks)):
+            self.store.update_job(job_id,progress=10+int(45*(i+1)/max(1,len(chunks))),message=f'원문 검토 {i+1}/{len(chunks)}')
             for f in result.facts:
                 if f.quote not in chunk['text'] or not set(f.section_ids).issubset(valid_ids):
                     raise ValueError('추출된 인용문 또는 소주제 연결이 원문과 일치하지 않습니다. 다시 시도하세요.')
@@ -269,6 +297,7 @@ section_ids는 template의 id만 사용하세요. 관련 항목이 없으면 빈
             return dict(**spec, blocks=[dict(kind='paragraph',text='금주 관련 자료 미보고. 확인 필요.',headers=[],rows=[],evidence_ids=[])],
                         warnings=['해당 소주제의 근거를 찾지 못했습니다.'])
         base = dict(section=spec,week=report['week'],instruction=instruction,
+                    writing_prompt=report['template'].get('writing_prompt',''),
                     reference_style=report.get('reference_style',[]))
         # Leave room for prompts, schema, and verification. Never truncate the input silently.
         budget = max(2000,self.settings.max_input_bytes//3-json_size(base))
@@ -309,14 +338,35 @@ section_ids는 template의 id만 사용하세요. 관련 항목이 없으면 빈
 
     def verify(self, job_id, content, facts, previous_blocks=None):
         by_id = {f['id']:f for f in facts}
-        for block in content['blocks']:
-            related = [by_id[id_] for id_ in block['evidence_ids'] if id_ in by_id]
-            previous = [b for b in (previous_blocks or []) if set(b['evidence_ids']).intersection(block['evidence_ids'])]
-            payload = dict(blocks=[block],facts=related,previous_verified_blocks=previous)
+        def payload_for(blocks):
+            ids={id_ for block in blocks for id_ in block['evidence_ids']}
+            related = [fact for id_,fact in by_id.items() if id_ in ids]
+            previous = [b for b in (previous_blocks or []) if set(b['evidence_ids']).intersection(ids)]
+            return dict(blocks=blocks,facts=related,previous_verified_blocks=previous)
+        def check(blocks):
+            payload=payload_for(blocks)
+            if len(blocks)>1 and json_size(payload)>self.settings.max_input_bytes//2:
+                middle=len(blocks)//2
+                check(blocks[:middle]); check(blocks[middle:])
+                return
             # Cache negative verdicts too: an unchanged draft must be revised, not rejudged until it passes.
-            result = self.call(job_id,'verify',prompts.VERIFY,payload,Verification)
+            try:
+                result = self.call(job_id,'verify',prompts.VERIFY,payload,Verification)
+            except (LLMOutputLimitError,LLMFormatError):
+                if len(blocks)==1:
+                    raise
+                for block in blocks:
+                    check([block])
+                return
             if not result['supported']:
+                if len(blocks)>1:
+                    for block in blocks:
+                        check([block])
+                    return
                 raise EvidenceError('근거 검증 실패: '+'; '.join(result['issues'] or ['원문과 작성 내용이 일치하지 않습니다.']))
+        size=max(1,min(5,self.settings.verify_batch_size))
+        for i in range(0,len(content['blocks']),size):
+            check(content['blocks'][i:i+size])
 
     def select_events(self,job_id,sections):
         blocks = [b for part in sections for b in part['blocks']]
@@ -358,8 +408,59 @@ section_ids는 template의 id만 사용하세요. 관련 항목이 없으면 빈
                     return styles[:10]
         return styles
 
+    def priority_sections(self, job_id, template, facts):
+        slot = next((s for s in template['sections'] if s['id']==PRIORITY_ID),None)
+        if not slot:
+            return template, facts
+        candidates = [dict(id=f['id'],quote=f['quote'],team=f['team']) for f in facts if f['source_kind']=='current']
+        # Bounded tournament: every current fact is considered, including unmapped facts.
+        budget = max(2000,self.settings.max_input_bytes//2)
+        while len(candidates)>9 or json_size(candidates)>budget:
+            batches, batch = [], []
+            for fact in candidates:
+                if json_size([fact])>budget:
+                    raise ValueError('중점과제 근거 한 건이 입력 한도를 초과합니다. 원문 분할 크기를 줄이세요.')
+                if batch and json_size(batch+[fact])>budget:
+                    batches.append(batch); batch=[]
+                batch.append(fact)
+            if batch:
+                batches.append(batch)
+            selected=[]
+            for batch in batches:
+                def validate(value):
+                    indices=value['indices']
+                    if not indices or len(indices)>3 or len(set(indices))!=len(indices) or any(i<0 or i>=len(batch) for i in indices):
+                        raise ValueError('중점과제 후보 선택 번호가 올바르지 않습니다.')
+                value=self.call(job_id,'priority_candidates',prompts.BASE+RULE+'\n후속 검토할 중요한 근거 최대 3개를 indices에 입력 순서의 0부터 시작하는 번호로 반환하세요.',
+                                {'candidates':batch},EventSelection,validate)
+                selected.extend(batch[i] for i in value['indices'])
+            if len(selected)>=len(candidates):
+                raise ValueError('중점과제 후보를 입력 한도 내로 축약하지 못했습니다. 원문 분할 크기를 줄이세요.')
+            candidates=selected
+        if not candidates:
+            return template,[dict(f,section_ids=[s for s in f['section_ids'] if s!=PRIORITY_ID]) for f in facts]
+        allowed={f['id'] for f in candidates}
+        def validate_topics(value):
+            titles=[t['title'] for t in value['topics']]
+            if len(titles)!=len(set(titles)) or any(not set(t['evidence_ids']).issubset(allowed) for t in value['topics']):
+                raise ValueError('중점과제 제목 중복 또는 근거 연결 오류입니다.')
+        value=self.call(job_id,'priority_topics',prompts.BASE+RULE+'\n관련 근거를 과제별로 통합하여 topics를 반환하세요. 제목은 근거에 등장하는 과제명으로 짧게 쓰고 성과/완료 여부를 주장하지 마세요. 적합한 추진과제가 없으면 빈 목록을 반환하세요.',
+                        {'facts':candidates},PriorityTopics,validate_topics)
+        if not value['topics']:
+            # Do not turn arbitrary facts into a fabricated priority.
+            return template,[dict(f,section_ids=[s for s in f['section_ids'] if s!=PRIORITY_ID]) for f in facts]
+        specs=[]
+        facts=[dict(f,section_ids=[s for s in f['section_ids'] if s!=PRIORITY_ID]) for f in facts]
+        for i,topic in enumerate(value['topics']):
+            id_=PRIORITY_ID+'_'+str(i+1)
+            specs.append(dict(id=id_,group=slot['group'],title=topic['title'],instructions=RULE+' 선정된 이 과제만 1~2문장으로 작성. 표 금지.'))
+            for fact in facts:
+                if fact['id'] in topic['evidence_ids']:
+                    fact['section_ids'].append(id_)
+        return dict(template,sections=[item for s in template['sections'] for item in (specs if s['id']==PRIORITY_ID else [s])]),facts
+
     def generate(self, job_id, report, template=None, snapshot=None):
-        template = template or report['template']
+        template = normalize_priority(template or report['template'])
         sources = snapshot if snapshot is not None else self.checkpoint(job_id,'sources',lambda:self.source.fetch_week(report['week']))
         current_sources = [s for s in sources if s.get('source_kind','current')=='current']
         if not current_sources:
@@ -373,15 +474,23 @@ section_ids는 template의 id만 사용하세요. 관련 항목이 없으면 빈
                 sources.append(dict(id=f'reference_{i}',team='이전 그룹 주보',mail_id=ref['name'],part_index=0,total_parts=1,
                                     text=ref['text'],week=ref['week'],source_kind='prior'))
         facts = self.extract(job_id,sources,template)
+        template,facts = self.priority_sections(job_id,template,facts)
         style = self.reference_style(job_id,report.get('references',[]))
-        report = dict(report,reference_style=style)
+        report = dict(report,template=template,reference_style=style)
         sections_by_id = {}
         # Key events are generated last and include otherwise unclassified facts.
         specs = sorted(template['sections'],key=lambda s:s['id']=='events')
-        for i,spec in enumerate(specs):
-            self.store.update_job(job_id,progress=55+int(40*i/len(specs)),message=f'{spec["title"]} 작성·검증 중')
+        def write(spec):
+            self.check_cancel(job_id)
             related = [f for f in facts if spec['id'] in f['section_ids'] or spec['id']=='events']
-            sections_by_id[spec['id']] = self.write_section(job_id,spec,related,report)
+            return spec,self.write_section(job_id,spec,related,report)
+        regular=[s for s in specs if s['id']!='events']
+        for i,(spec,section) in enumerate(self.parallel(write,regular)):
+            self.store.update_job(job_id,progress=55+int(40*(i+1)/len(specs)),message=f'{spec["title"]} 작성·검증 완료')
+            sections_by_id[spec['id']] = section
+        for spec in specs:
+            if spec['id']=='events':
+                _,sections_by_id[spec['id']]=write(spec)
         unmapped = sum(1 for f in facts if not f['section_ids'] and f['source_kind']=='current')
         if unmapped:
             warnings.append(f'기본 소주제 밖의 사실 {unmapped}건을 핵심 이벤트 후보로 검토했습니다.')
@@ -410,6 +519,8 @@ section_ids는 template의 id만 사용하세요. 관련 항목이 없으면 빈
             if not plan.template:
                 raise ValueError('변경된 양식이 없습니다.')
             updated = plan.template.model_dump()
+            # General writing rules are edited explicitly in the template form.
+            updated['writing_prompt'] = report['template'].get('writing_prompt','')
             old_specs = {s['id']:s for s in report['template']['sections']}
             new_specs = {s['id']:s for s in updated['sections']}
             affected = {id_ for id_ in old_specs.keys()|new_specs.keys() if old_specs.get(id_)!=new_specs.get(id_)}
