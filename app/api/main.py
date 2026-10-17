@@ -1,16 +1,16 @@
 import uuid
+from pathlib import Path
 from time import perf_counter
 
 from fastapi import FastAPI, Request
 from fastapi.exception_handlers import http_exception_handler
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.routes.chat import router as chat_router
 from app.api.routes.content import router as content_router
 from app.api.routes.health import router as health_router
-from app.api.routes.research import router as research_router
 from app.domain.errors import AppError, ErrorCode
 from app.config.settings import Settings
 from app.observability.tracing import TraceEvent, emit_trace, hash_trace_value
@@ -73,6 +73,14 @@ def create_app(container) -> FastAPI:
         ),
     )
     app.state.container = container
+
+    @app.get("/test-ui", include_in_schema=False)
+    async def test_ui():
+        return FileResponse(
+            Path(__file__).parent / "static" / "quick-chat.html",
+            media_type="text/html",
+            headers={"Cache-Control": "no-store"},
+        )
 
     @app.middleware("http")
     async def trace_requests(request: Request, call_next):
@@ -148,21 +156,16 @@ def create_app(container) -> FastAPI:
 
     app.include_router(chat_router)
     app.include_router(content_router)
-    app.include_router(research_router)
     app.include_router(health_router)
     return app
 
 
 def build_configured_app() -> FastAPI:
-    from app.api.dependencies import build_container, build_demo_container
+    from app.api.dependencies import build_container
 
     settings = Settings.from_env()
-    container = (
-        build_demo_container(settings)
-        if settings.multi_source_demo
-        else build_container(settings)
-    )
+    container = build_container(settings)
     return create_app(container)
 
 
-app = build_configured_app() if Settings.from_env().multi_source_demo else None
+app = None  # Serve with the build_configured_app factory.

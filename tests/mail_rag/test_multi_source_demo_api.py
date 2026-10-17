@@ -362,12 +362,11 @@ def test_demo_readiness_is_ready():
     assert set(response.json()["dependencies"].values()) == {"ready"}
 
 
-def test_asgi_export_requires_explicit_demo_flag_and_builds_demo_app():
+def test_legacy_demo_flag_does_not_implicitly_boot_iterative_app():
     code = """
 from app.api import main
-from app.persistence.conversations import InMemoryConversationStore
-assert main.app is not None
-assert isinstance(main.app.state.container.conversations, InMemoryConversationStore)
+assert main.app is None
+assert callable(main.build_configured_app)
 """
     environment = {
         **os.environ,

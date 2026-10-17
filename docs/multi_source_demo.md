@@ -1,3 +1,5 @@
+> 현재 서비스는 [빠른 RAG 실행 안내](quick-rag.md)를 따릅니다. 아래 반복형 fixture 데모는 과거 흐름 검증용입니다.
+
 # Multi-Source Agentic RAG Demo
 
 ## Requirements

@@ -1,0 +1,8 @@
+# Bounded detailed RAG implementation
+Goal: add /v1/chat/detailed and fast/detailed UI selection while keeping /v1/chat unchanged.
+1. Domain DetailedPlan extends QuickPlan with max3 content-only subqueries. One interpretation call, same history.
+2. Per-request adapters delegate to QuickRAGWorkflow so ACL/filter resolution/date/identity/citations/memory remain authoritative. For answer intent only: parallel max3 retrieval tasks using exactly the normalized base filters. Deduplicate source+original ID, max24 candidates. LLM rerank+coverage one call with known candidate IDs; untrusted content. On invalid ranker, deterministic fallback with disclosure. One optional supplemental content query using identical filters/scope/prior IDs; none on identity clarification or source outages. Final<=8 docs. No loops.
+3. Detailed deadline45s; reranker<=8s. Existing vector provenance config reused, never enable from dimension alone. Partial initial source timeout is disclosed; preserve successful evidence.
+4. Add optional detailed workflow to container; shared chat handler selects endpoint, same identity/memory ownership boundary. Execution metadata exposes mode, retrieval rounds/task counts, additional search count.
+5. UI defaultfast, detailed toggle, mode-specific timeout and stage timing; same conversation may switch modes.
+6. Tests cover bounded calls, same ACL/filter/prior IDs, rerank validation, source errors, optionalsearchonce, no expansion forlists/general, API owner isolation, defaultfast unchanged. Full backend regression, JS syntax/UI inspect, local server restart; no live private-document transmission required for verification.

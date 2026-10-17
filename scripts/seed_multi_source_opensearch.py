@@ -25,6 +25,7 @@ METADATA_FIELDS = {
     "end_at_utc",
     "organizer_email",
     "sender_email",
+    "sender_name",
     "start_at_utc",
     "timezone",
 }
@@ -70,6 +71,7 @@ def build_index_definition(dimension: int) -> dict:
             "is_active": {"type": "boolean"},
             "is_cancelled": {"type": "boolean"},
             "chunk_index": {"type": "integer"},
+            "sender_name": {"type": "text", "fields": {"keyword": {"type": "keyword"}}},
             "subject": {"type": "text"},
             "title": {"type": "text"},
             "location": {"type": "text"},
@@ -105,9 +107,7 @@ def build_index_definition(dimension: int) -> dict:
 
 def build_index_document(document: dict, embedding: list[float]) -> dict:
     indexed = {
-        key: document[key]
-        for key in SOURCE_FIELDS
-        if document.get(key) is not None
+        key: document[key] for key in SOURCE_FIELDS if document.get(key) is not None
     }
     metadata = document.get("metadata")
     if isinstance(metadata, dict):

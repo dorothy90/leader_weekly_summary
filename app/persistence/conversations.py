@@ -4,6 +4,7 @@ from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.domain.quick_rag import QuickMemory
 from app.domain.agentic import AgentMemoryUpdate, EventReference
 from app.domain.chat import ExecutionMetadata, QualityStatus
 from app.domain.evidence import Evidence, RetrievalFilters
@@ -24,6 +25,11 @@ def _validate_conversation_id(conversation_id: str) -> str:
 def _validate_memory_owner(
     memory: "ConversationMemory", policy: PolicyContext
 ) -> "ConversationMemory":
+    if (
+        memory.quick_memory is not None
+        and memory.quick_memory.user_id != policy.user_id
+    ):
+        raise AppError(ErrorCode.UNAUTHORIZED_RESOURCE, _OWNER_ERROR)
     evidence = [*memory.cited_evidence]
     for turn in memory.turns:
         evidence.extend(turn.cited_evidence)
@@ -101,7 +107,7 @@ def _sanitize_memory(
                     "cited_evidence": [
                         sanitize_evidence_for_memory(item, policy)
                         for item in turn.cited_evidence
-                    ][:8],
+                    ][:10],
                 }
             )
         )
@@ -142,6 +148,7 @@ def _sanitize_memory(
         ],
     }
     return ConversationMemory(
+        quick_memory=validated.quick_memory,
         revision=validated.revision,
         messages=messages,
         turns=turns,
@@ -163,7 +170,7 @@ class TurnRecord(BaseModel):
     trace_id: str | None = Field(default=None, max_length=128)
     quality: QualityStatus | None = None
     disclosures: list[str] = Field(default_factory=list, max_length=4)
-    cited_evidence: list[Evidence] = Field(default_factory=list, max_length=8)
+    cited_evidence: list[Evidence] = Field(default_factory=list, max_length=10)
 
 
 class ConversationMemory(BaseModel):
@@ -173,7 +180,8 @@ class ConversationMemory(BaseModel):
     messages: list[dict[str, str]] = Field(default_factory=list, max_length=20)
     turns: list[TurnRecord] = Field(default_factory=list, max_length=20)
     filters: RetrievalFilters = Field(default_factory=RetrievalFilters)
-    cited_evidence: list[Evidence] = Field(default_factory=list, max_length=8)
+    cited_evidence: list[Evidence] = Field(default_factory=list, max_length=10)
+    quick_memory: QuickMemory | None = None
     entities: dict[str, str] = Field(default_factory=dict)
     current_topic: str | None = Field(default=None, max_length=500)
     search_history: list[str] = Field(default_factory=list, max_length=16)
@@ -268,9 +276,7 @@ class InMemoryConversationStore:
                     "대화가 동시에 갱신되었습니다.",
                     retryable=True,
                 )
-            validated = validated.model_copy(
-                update={"revision": current_revision + 1}
-            )
+            validated = validated.model_copy(update={"revision": current_revision + 1})
         self.records[conversation_id] = (
             policy.user_id,
             validated.model_copy(deep=True),
@@ -322,9 +328,7 @@ class MongoConversationStore:
                     retryable=True,
                 )
             revision_filter = (
-                current_revision
-                if "revision" in existing
-                else {"$exists": False}
+                current_revision if "revision" in existing else {"$exists": False}
             )
             update_filter = {
                 "_id": conversation_id,

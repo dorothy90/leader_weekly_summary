@@ -7,7 +7,15 @@ import httpx
 import pytest
 
 from app.api.dependencies import ServiceContainer
-from app.api.main import create_app
+from app.api.main import create_app as create_chat_app
+from app.api.routes.research import router as legacy_research_router
+
+
+def create_app(container):
+    """Explicit legacy router harness; not exposed by the production app."""
+    app = create_chat_app(container)
+    app.include_router(legacy_research_router)
+    return app
 from app.domain.chat import BM25_FALLBACK_DISCLOSURE
 from app.domain.errors import AppError
 from app.domain.evidence import Evidence

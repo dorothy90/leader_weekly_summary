@@ -2,6 +2,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.domain.quick_rag import QuickMemory
 from app.domain.agentic import AgentMemoryUpdate, AgentTrace
 from app.domain.evidence import Evidence, RetrievalFilters
 from app.observability.node_runs import NodeRun
@@ -55,20 +56,30 @@ class ChatRequest(BaseModel):
 class ExecutionMetadata(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
+    mode: Literal["fast", "detailed"] = "fast"
+    retrieval_task_count: int = Field(default=0, ge=0, le=4)
+    vector_sources: list[str] = Field(default_factory=list, max_length=4)
+    search_queries: list[str] = Field(default_factory=list, max_length=12)
+    investigation_stop_reason: str = ""
+    selected_passage_count: int = Field(default=0, ge=0, le=12)
+    additional_search_count: int = Field(default=0, ge=0, le=3)
     status: Literal["succeeded", "limited", "failed"]
-    failure_stage: Literal[
-        "contextualization",
-        "planning",
-        "embedding",
-        "retrieval",
-        "grading",
-        "generation",
-        "citation_validation",
-        "support_validation",
-    ] | None = None
+    failure_stage: (
+        Literal[
+            "contextualization",
+            "planning",
+            "embedding",
+            "retrieval",
+            "grading",
+            "generation",
+            "citation_validation",
+            "support_validation",
+        ]
+        | None
+    ) = None
     error_code: str | None = Field(default=None, max_length=128)
     retryable: bool = False
-    search_count: int = Field(default=0, ge=0, le=24)
+    search_count: int = Field(default=0, ge=0, le=48)
     evidence_count: int = Field(default=0, ge=0, le=32)
     duration_ms: int = Field(default=0, ge=0)
     include_in_llm_history: bool = True
@@ -76,6 +87,9 @@ class ExecutionMetadata(BaseModel):
 
 
 class QualityStatus(BaseModel):
+    evidence_status: Literal["sufficient", "partial", "none", "not_assessed"] = (
+        "not_assessed"
+    )
     citation_valid: bool | None
     limited_answer: bool = False
     retrieval_mode: Literal[
@@ -89,6 +103,7 @@ class FastRAGResult(BaseModel):
     quality: QualityStatus
     disclosures: list[str] = Field(default_factory=list)
     execution: ExecutionMetadata | None = None
+    quick_memory: QuickMemory | None = None
     agent_memory: AgentMemoryUpdate | None = None
     agent_trace: AgentTrace | None = None
 
@@ -99,9 +114,7 @@ class ChatReference(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     evidence_id: str = Field(min_length=1, max_length=32)
-    source_type: Literal[
-        "mail", "wiki", "statistic", "domain_knowledge", "calendar"
-    ]
+    source_type: Literal["mail", "wiki", "statistic", "domain_knowledge", "calendar"]
     document_id: str = Field(min_length=1, max_length=256)
     title: str = Field(default="", max_length=500)
     excerpt: str = Field(min_length=1, max_length=8000)

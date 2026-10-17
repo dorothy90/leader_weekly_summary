@@ -1,7 +1,8 @@
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
-from pydantic import SecretStr
+from pydantic import Field, SecretStr
 from pydantic_settings import SettingsConfigDict
 
 from app.config.ai import AISettings
@@ -18,7 +19,17 @@ class Settings(AISettings):
     opensearch_verify_certs: bool = True
     mail_child_index: str = "weekly_mail"
     mail_parent_index: str = "weekly_mail_parent_read"
-    wiki_index: str = "wiki_summaries_v2"
+    wiki_index: str = "wiki_summaries"
+    quick_openrouter_free_model: str = "nvidia/nemotron-3-super-120b-a12b:free"
+    detailed_deadline_seconds: float = Field(default=45, ge=10, le=90)
+    detailed_rerank_timeout_seconds: float = Field(default=8, ge=1, le=20)
+    quick_shared_sources: bool = True
+    quick_vector_sources: list[
+        Literal["weekly_mail", "ews_mail", "ews_calendar", "wiki_summary"]
+    ] = Field(default_factory=list)
+    quick_agent_model: str | None = None
+    quick_deadline_seconds: float = Field(default=20, ge=1, le=60)
+    quick_source_timeout_seconds: float = Field(default=4, ge=0.1, le=15)
     multi_source_demo: bool = False
     domain_knowledge_index: str = "syld_gpt"
     mail_index_alias: str = "ews-mail-active"
@@ -31,6 +42,7 @@ class Settings(AISettings):
     @classmethod
     def from_env(cls) -> "Settings":
         return cls()
+
 
 @lru_cache
 def get_settings() -> Settings:

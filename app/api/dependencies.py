@@ -10,6 +10,7 @@ class ServiceContainer:
     mail_content: Any = None
     traces: Any = None
     readiness: Any = None
+    detailed: Any = None
 
 
 class DependencyReadiness:
@@ -35,7 +36,7 @@ class DependencyReadiness:
         try:
             for alias in self.aliases:
                 exists = await asyncio.to_thread(
-                    self.opensearch_client.indices.exists_alias, name=alias
+                    self.opensearch_client.indices.exists, index=alias
                 )
                 if not exists:
                     raise RuntimeError("alias unavailable")
@@ -76,6 +77,7 @@ def build_opensearch_client(settings=None):
         use_ssl=current.opensearch_use_ssl,
         verify_certs=current.opensearch_verify_certs,
         ssl_show_warn=current.opensearch_verify_certs,
+        timeout=current.quick_source_timeout_seconds,
     )
 
 
@@ -141,9 +143,7 @@ def build_llm_gateway(settings, stage=None):
 
 
 def build_stage_llm_gateways(settings):
-    endpoints = {
-        stage: settings.resolve_llm_endpoint(stage) for stage in LLM_STAGES
-    }
+    endpoints = {stage: settings.resolve_llm_endpoint(stage) for stage in LLM_STAGES}
     first = endpoints["routing"]
     api_key = _validated_llm_api_key(first)
     for endpoint in endpoints.values():
@@ -164,14 +164,24 @@ def build_embedding_gateway(settings):
     api_key = endpoint.api_key.get_secret_value().strip()
     if not api_key:
         raise RuntimeError("OPENROUTER_API_KEY is required")
+    import httpx
+
     embedding_client = AsyncOpenAI(
         api_key=api_key,
         base_url=endpoint.base_url,
-        timeout=endpoint.timeout_seconds,
+        timeout=httpx.Timeout(4.0, connect=2.0),
+        max_retries=0,
+        http_client=httpx.AsyncClient(
+            limits=httpx.Limits(
+                max_connections=20, max_keepalive_connections=10, keepalive_expiry=60
+            )
+        ),
     )
     return OpenAIEmbeddingGateway(
         embedding_client,
         endpoint.model,
+        providers=settings.openrouter_embedding_providers,
+        hedge_delay_seconds=settings.openrouter_embedding_hedge_delay_seconds,
     )
 
 
@@ -179,57 +189,126 @@ def build_ai_gateways(settings):
     return build_llm_gateway(settings), build_embedding_gateway(settings)
 
 
-def build_container(settings=None, trace_sink=None) -> ServiceContainer:
-    """Build the direct multi-source chat service and shared persistence."""
-    from motor.motor_asyncio import AsyncIOMotorClient
+def build_quick_llm_gateways(settings):
+    """Only interpretation and generation; no SDK retries in the fast path."""
+    from openai import AsyncOpenAI
+    from app.llm.gateway import OpenAILLMGateway
 
+    gateways = []
+    for stage, tokens in (("routing", 1200), ("answer", 700)):
+        endpoint = settings.resolve_llm_endpoint(stage)
+        key = _validated_llm_api_key(endpoint)
+        if endpoint.provider == "manus":
+            gateways.append(build_llm_gateway(settings, stage))
+            continue
+        model = endpoint.model
+        if endpoint.provider == "openrouter" and model == "openrouter/free":
+            model = settings.quick_openrouter_free_model
+        disable_reasoning = (
+            endpoint.provider == "openrouter"
+            and model == settings.quick_openrouter_free_model
+        )
+        client = AsyncOpenAI(
+            api_key=key,
+            base_url=endpoint.base_url,
+            timeout=settings.quick_deadline_seconds,
+            max_retries=0,
+        )
+        gateways.append(
+            OpenAILLMGateway(
+                client,
+                model,
+                native_structured_output=endpoint.provider == "openrouter",
+                output_token_limit=tokens,
+                reasoning_enabled=False if disable_reasoning else None,
+            )
+        )
+    return tuple(gateways)
+
+
+def build_container(settings=None, trace_sink=None) -> ServiceContainer:
+    """Build speed-first four-source chat with no research/statistics route."""
+    from motor.motor_asyncio import AsyncIOMotorClient
     from app.config.settings import get_settings
     from app.content.mail import MailContentStore
-    from app.graphs.multi_source import MultiSourceAgenticWorkflow
-    from app.llm.agentic import StructuredAgentModel
+    from app.graphs.quick_rag import QuickRAGWorkflow
+    from app.graphs.fast_agent import FastEvidenceAgent
+    from app.graphs.detailed_rag import DetailedRAGWorkflow
     from app.observability.tracing import NoOpTraceSink
     from app.persistence.conversations import MongoConversationStore
     from app.persistence.research_jobs import MongoResearchJobStore
     from app.retrieval.opensearch import AsyncOpenSearchGateway
-    from app.retrieval.multi_source_opensearch import OpenSearchMultiSourceSearch
-    from app.retrieval.source_registry import SourceRegistry
+    from app.retrieval.quick_rag import QuickRetrieval
 
     current = settings or get_settings()
-    traces = trace_sink if trace_sink is not None else NoOpTraceSink()
-    stage_llms = build_stage_llm_gateways(current)
-    embeddings = build_embedding_gateway(current)
-    llm_endpoint = current.resolve_llm_endpoint("routing")
-    opensearch_client = build_opensearch_client(current)
-    search = AsyncOpenSearchGateway(opensearch_client)
-    registry = SourceRegistry.from_settings(current)
-    agentic = MultiSourceAgenticWorkflow(
-        OpenSearchMultiSourceSearch(search, embeddings, registry),
-        StructuredAgentModel(
-            stage_llms["routing"],
-            planner_llm=stage_llms["planner"],
-            judge_llm=stage_llms["judge"],
-            answer_llm=stage_llms["answer"],
-            timeout_seconds=llm_endpoint.completion_timeout_seconds,
-            attempts=1 if llm_endpoint.provider == "manus" else 2,
-        ),
-        timezone_name=current.default_user_timezone,
-    )
-    mongo_client = AsyncIOMotorClient(current.mongo_uri)
-    database = mongo_client[current.mongo_db]
-    jobs = MongoResearchJobStore(database.research_jobs)
+    interpreter, generator = build_quick_llm_gateways(current)
+    agent_gateway = interpreter
+    if current.quick_agent_model:
+        from app.llm.gateway import OpenAILLMGateway
 
+        agent_gateway = OpenAILLMGateway(
+            interpreter.client,
+            current.quick_agent_model,
+            native_structured_output=True,
+            output_token_limit=1500,
+            reasoning_enabled=False,
+        )
+    embeddings = (
+        build_embedding_gateway(current) if current.quick_vector_sources else None
+    )
+    # The outer workflow owns the deadline; SDK retry loops must not extend it.
+    if embeddings is not None and hasattr(embeddings.client, "with_options"):
+        embeddings.client = embeddings.client.with_options(max_retries=0)
+    client = build_opensearch_client(current)
+    client.transport.max_retries = 0
+    retrieval = QuickRetrieval(
+        AsyncOpenSearchGateway(client),
+        embeddings,
+        weekly_index=current.mail_child_index,
+        mail_index=current.mail_index_alias,
+        calendar_index=current.calendar_index_alias,
+        wiki_index=current.wiki_index,
+        shared_sources=current.quick_shared_sources,
+        source_timeout_seconds=current.quick_source_timeout_seconds,
+        compatible_sources=current.quick_vector_sources,
+        require_vector=True,
+    )
+    database = AsyncIOMotorClient(
+        current.mongo_uri,
+        serverSelectionTimeoutMS=1000,
+        connectTimeoutMS=1000,
+        socketTimeoutMS=1000,
+    )[current.mongo_db]
     return ServiceContainer(
-        agentic=agentic,
+        agentic=QuickRAGWorkflow(
+            retrieval,
+            interpreter,
+            generator,
+            timezone_name=current.default_user_timezone,
+            deadline_seconds=current.quick_deadline_seconds,
+            evidence_agent=FastEvidenceAgent(agent_gateway),
+        ),
+        detailed=DetailedRAGWorkflow(
+            retrieval,
+            interpreter,
+            generator,
+            generator,
+            timezone_name=current.default_user_timezone,
+            deadline_seconds=current.detailed_deadline_seconds,
+            rerank_timeout_seconds=current.detailed_rerank_timeout_seconds,
+        ),
         conversations=MongoConversationStore(database.conversations),
-        jobs=jobs,
+        jobs=MongoResearchJobStore(database.research_jobs),
         mail_content=MailContentStore(current.mail_content_root),
-        traces=traces,
+        traces=trace_sink if trace_sink is not None else NoOpTraceSink(),
         readiness=DependencyReadiness(
-            opensearch_client,
-            mongo_client,
+            client,
+            database.client,
             [
+                current.mail_child_index,
                 current.mail_index_alias,
                 current.calendar_index_alias,
+                current.wiki_index,
             ],
         ),
     )
@@ -279,9 +358,7 @@ def build_demo_container(
             model = UnavailableAnalyzer()
     else:
         model = agent_model
-    model_status = (
-        "unavailable" if isinstance(model, UnavailableAnalyzer) else "ready"
-    )
+    model_status = "unavailable" if isinstance(model, UnavailableAnalyzer) else "ready"
     agentic = MultiSourceAgenticWorkflow(
         search,
         model,

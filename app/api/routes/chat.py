@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 
 from fastapi import APIRouter, Request
@@ -73,7 +74,7 @@ def _safe_agent_result(result, policy: PolicyContext):
             owned_by_id = {item.evidence_id: item for item in owned}
             safe_evidence = [
                 sanitize_evidence_for_memory(owned_by_id[evidence_id], policy)
-                for evidence_id in validation.cited_ids[:8]
+                for evidence_id in validation.cited_ids[:10]
             ]
             references = [_safe_reference(item) for item in safe_evidence]
         else:
@@ -88,9 +89,7 @@ def _safe_agent_result(result, policy: PolicyContext):
         if safe and safe not in disclosures:
             disclosures.append(safe)
     if BM25_FALLBACK_DISCLOSURE in result.disclosures:
-        disclosures = [
-            item for item in disclosures if item != BM25_FALLBACK_DISCLOSURE
-        ]
+        disclosures = [item for item in disclosures if item != BM25_FALLBACK_DISCLOSURE]
         disclosures.insert(0, BM25_FALLBACK_DISCLOSURE)
 
     quality = result.quality.model_copy(
@@ -114,7 +113,9 @@ async def _load_memory(services, conversation_id, policy, supplied):
             )
         return None, []
     try:
-        memory = await services.conversations.load(conversation_id, policy)
+        memory = await asyncio.wait_for(
+            services.conversations.load(conversation_id, policy), timeout=1.0
+        )
     except AppError:
         raise
     except Exception:
@@ -153,6 +154,7 @@ async def _save_turn(
     trace_id=None,
     quality=None,
     agent_memory=None,
+    quick_memory=None,
 ):
     if services.conversations is None:
         return True
@@ -163,6 +165,7 @@ async def _save_turn(
             agent_memory,
             policy,
         )
+    current_memory = current_memory.model_copy(update={"quick_memory": quick_memory})
     safe_user = sanitize_text(payload.message) or "[REDACTED]"
     safe_answer = sanitize_text(answer) if answer is not None else None
     prior = list(current_memory.messages)
@@ -182,19 +185,22 @@ async def _save_turn(
         )
     )
     try:
-        await services.conversations.save(
-            conversation_id,
-            policy,
-            current_memory.model_copy(
-                update={
-                    "messages": prior[-20:],
-                    "turns": turns[-20:],
-                    "filters": sanitize_filters_for_memory(payload.filters),
-                    "cited_evidence": (
-                        cited_evidence if cited_evidence is not None else []
-                    )[:8],
-                }
+        await asyncio.wait_for(
+            services.conversations.save(
+                conversation_id,
+                policy,
+                current_memory.model_copy(
+                    update={
+                        "messages": prior[-20:],
+                        "turns": turns[-20:],
+                        "filters": sanitize_filters_for_memory(payload.filters),
+                        "cited_evidence": (
+                            cited_evidence if cited_evidence is not None else []
+                        )[:10],
+                    }
+                ),
             ),
+            timeout=1.0,
         )
     except AppError:
         raise
@@ -213,6 +219,15 @@ async def _save_turn(
     ),
 )
 async def chat(payload: ChatRequest, request: Request):
+    return await _chat(payload, request)
+
+
+@router.post("/v1/chat/detailed", response_model=ChatResponse)
+async def detailed_chat(payload: ChatRequest, request: Request):
+    return await _chat(payload, request, detailed=True)
+
+
+async def _chat(payload: ChatRequest, request: Request, *, detailed=False):
     services = request.app.state.container
     trace_id = request.state.trace_id
     supplied_id = payload.conversation_id is not None
@@ -225,7 +240,12 @@ async def chat(payload: ChatRequest, request: Request):
         supplied=supplied_id,
     )
 
-    result = await services.agentic.invoke(payload, policy, memory)
+    workflow = getattr(services, "detailed", None) if detailed else services.agentic
+    if workflow is None:
+        raise AppError(
+            ErrorCode.DEPENDENCY_UNAVAILABLE, "자세히 검색을 사용할 수 없습니다."
+        )
+    result = await workflow.invoke(payload, policy, memory)
     answer, references, quality, disclosures, owned = _safe_agent_result(
         result,
         policy,
@@ -244,9 +264,12 @@ async def chat(payload: ChatRequest, request: Request):
         owned,
         trace_id=trace_id,
         quality=quality,
-        agent_memory=(
-            result.agent_memory if execution.status != "failed" else None
+        quick_memory=(
+            result.quick_memory
+            if result.quick_memory is not None
+            else getattr(memory, "quick_memory", None)
         ),
+        agent_memory=(result.agent_memory if execution.status != "failed" else None),
     )
     if not saved and CONTEXT_UNAVAILABLE_DISCLOSURE not in context_disclosures:
         context_disclosures.append(CONTEXT_UNAVAILABLE_DISCLOSURE)

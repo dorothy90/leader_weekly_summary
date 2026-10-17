@@ -40,18 +40,18 @@ def test_ai_gateways_use_openrouter_free_for_llm_and_embeddings(
     assert llm.model == "openrouter/free"
     assert llm.native_structured_output is True
     assert isinstance(embeddings, OpenAIEmbeddingGateway)
-    assert [client.kwargs for client in clients] == [
-        {
-            "api_key": "openrouter-secret",
-            "base_url": "https://openrouter.ai/api/v1",
-            "timeout": 150.0,
-        },
-        {
-            "api_key": "openrouter-secret",
-            "base_url": "https://openrouter.ai/api/v1",
-            "timeout": 150.0,
-        },
-    ]
+    assert clients[0].kwargs == {
+        "api_key": "openrouter-secret",
+        "base_url": "https://openrouter.ai/api/v1",
+        "timeout": 150.0,
+    }
+    config = clients[1].kwargs
+    assert config["api_key"] == "openrouter-secret"
+    assert config["base_url"] == "https://openrouter.ai/api/v1"
+    assert config["timeout"].connect == 2.0
+    assert config["timeout"].read == 4.0
+    assert config["max_retries"] == 0
+    assert config["http_client"] is not None
     assert embeddings.client is clients[1]
     assert embeddings.model == "qwen/qwen3-embedding-8b"
 
@@ -195,15 +195,11 @@ def test_static_intent_analyzer_consumes_decisions_by_call_order_not_question():
         (
             IntentDecision(
                 intent="first",
-                source_requests=[
-                    SourceRequest(source="calendar", query="일정")
-                ],
+                source_requests=[SourceRequest(source="calendar", query="일정")],
             ),
             IntentDecision(
                 intent="second",
-                source_requests=[
-                    SourceRequest(source="mail", query="수율")
-                ],
+                source_requests=[SourceRequest(source="mail", query="수율")],
             ),
         ),
         now=datetime(2026, 8, 17, 0, tzinfo=UTC),

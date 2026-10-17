@@ -66,6 +66,8 @@ class AISettings(BaseSettings):
     openrouter_judge_model: str = ""
     openrouter_answer_model: str = ""
     openrouter_embedding_model: str = "qwen/qwen3-embedding-8b"
+    openrouter_embedding_providers: list[str] = []
+    openrouter_embedding_hedge_delay_seconds: float = Field(default=1.5, ge=0.1, le=5)
     openrouter_request_timeout_seconds: int = Field(
         default=150,
         ge=1,
@@ -112,15 +114,9 @@ class AISettings(BaseSettings):
                 api_key=self.manus_api_key,
                 base_url=self.manus_base_url,
                 model=self.manus_agent_profile,
-                request_timeout_seconds=float(
-                    self.manus_request_timeout_seconds
-                ),
-                completion_timeout_seconds=float(
-                    self.manus_task_timeout_seconds
-                ),
-                poll_interval_seconds=float(
-                    self.manus_poll_interval_seconds
-                ),
+                request_timeout_seconds=float(self.manus_request_timeout_seconds),
+                completion_timeout_seconds=float(self.manus_task_timeout_seconds),
+                poll_interval_seconds=float(self.manus_poll_interval_seconds),
             )
         return LLMEndpointConfig(
             provider="openai_compatible",
@@ -136,9 +132,7 @@ class AISettings(BaseSettings):
                     "answer": self.openai_compatible_answer_model,
                 },
             ),
-            request_timeout_seconds=float(
-                self.openai_compatible_llm_timeout_seconds
-            ),
+            request_timeout_seconds=float(self.openai_compatible_llm_timeout_seconds),
             completion_timeout_seconds=float(
                 self.openai_compatible_llm_timeout_seconds
             ),
